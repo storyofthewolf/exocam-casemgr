@@ -1,0 +1,132 @@
+# ExoCAM config registry
+# Edit paths for your machine before use.
+# This is the single authoritative source for:
+#   - machine paths
+#   - IC file -> (config_type, pressure, levels) mapping
+#   - CESM create_newcase parameters per config type
+#
+# pressure keys must exactly match substrings in IC filenames (e.g. "1bar", "0.1bar")
+# level keys are integers matching the L<N> in IC filenames and -nlev in CAM_CONFIG_OPTS
+
+machine: discover
+
+paths:
+  cesm_scripts: /discover/nobackup/etwolf/cesm1_2_1/scripts
+  caseroot:     /discover/nobackup/etwolf/cesm_scratch/cases
+  exocam_root:  /discover/nobackup/etwolf/models/ExoCAM
+  exort_root:   /discover/nobackup/etwolf/models/ExoRT
+
+# exort_pkg -> substring that must appear in the solar filename basename
+solar_file_stems:
+  n68equiv:   n68
+  n84equiv:   n84
+  n28archean: n28
+  n42h2o:     n42
+
+# CESM create_newcase parameters per config type
+cesm_config:
+  cam_aqua_fv:
+    res:      f45_f45
+    compset:  E2000C4AQI
+    phys:     cam4
+  cam_land_fv:
+    res:      f45_f45
+    compset:  I2000
+    phys:     cam4
+  cam_mixed_fv:
+    res:      f45_g37
+    compset:  E2000C4
+    phys:     cam4
+  cam_aqua_se_ne5:
+    res:      ne5np4_ne5np4
+    compset:  E2000C4AQI
+    phys:     cam4
+  cam_aqua_se_ne16:
+    res:      ne16np4_ne16np4
+    compset:  E2000C4AQI
+    phys:     cam4
+
+# IC file table.
+# These are the files present in cesm1.2.1/initial_files/<config_type>/
+# Filename only — prepend {paths.exocam_root}/cesm1.2.1/initial_files/<config_type>/
+# Add entries as you add IC files to the repo.
+
+ic_files:
+  cam_aqua_fv:
+    "0.0065bar":
+      40: ic_0.0065bar_L40_dry_ic.nc
+    "0.01bar":
+      40: ic_0.01bar_L40_ic.nc
+      46: ic_0.01bar_L46_300Kiso_dry_ic.nc
+    "0.1bar":
+      40: ic_0.1bar_L40_dry_ic.nc
+      46: ic_0.1bar_L46_300Kiso_dry_ic.nc
+    "0.25bar":
+      40: ic_0.25bar_L40_ic.nc
+      51: ic_0.25bar_L51_eyeball_ic.nc
+    "0.5bar":
+      40: ic_0.5bar_L40_ic.nc
+      51: ic_0.5bar_L51_zmean_ic.nc
+    "1bar":
+      40: ic_1bar_L40_zmean_ic.nc
+      46: ic_1bar_L46_300Kiso_dry_ic.nc
+      51: ic_1bar_L51_zmean_ic.nc
+    "1.1bar":
+      40: ic_1.1bar_L40_ic.nc
+      51: ic_1.1bar_L51_zmean_ic.nc
+    "1.2bar":
+      40: ic_1.2bar_L40_ic.nc
+      51: ic_1.2bar_L51_zmean_ic.nc
+    "1.4bar":
+      40: ic_1.4bar_L40_ic.nc
+    "1.5bar":
+      51: ic_1.5bar_L51_dry_ic.nc
+    "1.6bar":
+      40: ic_1.6bar_L40_ic.nc
+    "2bar":
+      40: ic_2bar_L40_ic.nc
+      51: ic_2bar_L51_zmean_ic.nc
+    "2.3bar":
+      40: ic_2.3bar_L40_300Kiso_ic.nc
+    "4bar":
+      40: ic_4bar_L40_ic.nc
+      51: ic_4bar_L51_eyeball_ic.nc
+    "4.1bar":
+      40: ic_4.1bar_L40_ic.nc
+    "5bar":
+      40: ic_5bar_L40_ic.nc
+    "6bar":
+      40: ic_6bar_L40_dry_ic.nc
+    "8bar":
+      40: ic_8bar_L40_dry_ic.nc
+    "10bar":
+      40: ic_10bar_L40_ic.nc
+      51: ic_10bar_L51_zmean_ic.nc
+    "10.2bar":
+      40: ic_10.2bar_L40_ic.nc
+    "100bar":
+      51: ic_100bar_L51_iso300_ic.nc
+
+  cam_land_fv:
+    "1bar":
+      40: control_L40_dry.cam.i.nc
+      51: ic_1bar_L51_zmean_dry_ic.nc
+    "4bar":
+      51: ic_4bar_L51_eyeball_dry_ic.nc
+    "10bar":
+      51: ic_10bar_L51_zmean_dry_ic.nc
+
+  cam_mixed_fv:
+    # mixed config uses cam_aqua_fv ICs for atmosphere; add here if different
+    "1bar":
+      51: control_L51.cam.i.nc
+
+  cam_aqua_se_ne5:
+    "1bar":
+      30: cami_0000-01-01_ne5np4_L30_ape_c101201_aquaplanet.nc
+
+  cam_aqua_se_ne16:
+    "1bar":
+      26: cami_0000-01-01_ne16np4_L26_c120525_aquaplanet.nc
+      40: cami_0000-01-01_ne16np4_L40_c120525_aquaplanet.nc
+      48: cami_0000-01-01_ne16np4_L48_c120525_aquaplanet.nc

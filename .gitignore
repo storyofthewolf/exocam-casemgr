@@ -1,0 +1,7 @@
+# python
+__pycache__
+
+
+# editor/OS debris
+*.~
+.DS_Store

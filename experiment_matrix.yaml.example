@@ -1,0 +1,116 @@
+# ExoCAM experiment matrix — annotated example
+# Copy this file, rename it (e.g. my_co2_sweep.yaml), fill in values, then:
+#   python exo_build.py my_co2_sweep.yaml --outdir scripts/
+#
+# The tool generates one shell script per case, plus a staged exoplanet_mod.F90.
+# Review scripts before running. Submission (.run) is always manual.
+
+meta:
+  description: CO2 partial pressure sweep, aquaplanet FV, n68equiv RT
+  author: E.T. Wolf
+  created: 2026-05-02
+
+# Path to the config_registry.yaml for this machine
+config_registry: /path/to/ExoCAM/tools/case_mgmt/config_registry.yaml
+
+# Optional: override machine paths from config_registry.yaml
+# paths:
+#   caseroot: /my/scratch/cases
+#   cesm_scripts: /my/cesm/scripts
+
+base:
+  # --- CESM config ---
+  config_type:  cam_aqua_fv       # cam_aqua_fv | cam_land_fv | cam_mixed_fv | cam_aqua_se_ne5 | cam_aqua_se_ne16
+  exort_pkg:    n68equiv           # n68equiv | n84equiv | n28archean | n42h2o
+  cloud_scheme: rk                 # rk (CAM4 default) | mg (CAM5 Morrison-Gettelman; also set in CAM_CONFIG_OPTS)
+  nlev:         40                 # must match L<N> in IC filename and -nlev in CAM_CONFIG_OPTS
+  mach:         discover           # CESM machine name
+
+  # --- exoplanet_mod.F90 parameters ---
+  # All bar values in bar (float). N2 is computed as 1 - sum(others) for
+  # 1-bar atmospheres. Set exo_n2bar_explicit for other total pressures.
+  exo_co2bar:          0.0004
+  exo_ch4bar:          1.7e-6
+  exo_c2h6bar:         0.0
+  exo_nh3bar:          0.0
+  exo_cobar:           0.0
+  exo_h2bar:           0.0
+  exo_o2bar:           0.2095
+  # exo_n2bar_explicit: 0.79  # uncomment to set N2 directly (required for non-1-bar atmospheres)
+
+  exo_surface_gravity: 9.81        # m/s^2
+  exo_planet_radius:   6.37122e6   # m
+  exo_ndays:           1.0         # scaler to Earth days (diurnal period)
+  exo_porb:            365.0       # orbital period (Earth days)
+  exo_sday:            86164.0     # sidereal period (sec); Earth = 86164.0
+                                   # synchronous: 86400 * exo_ndays
+                                   # async slow rotator: 86400 * ndays / (1 + ndays/porb)
+  exo_scon:            1360.0      # stellar constant (W/m^2)
+  exo_eccen:           0.0
+  exo_obliq:           0.0
+  do_exo_synchronous:  false
+  exo_convect_plim:    4.0e3       # min convection pressure (Pa); use 5 without ozone, 4e3 with
+  exo_rad_step:        3           # radiation calc frequency (timesteps)
+
+  # --- Run length (xmlchange) ---
+  stop_option:  nyears
+  stop_n:       20
+  rest_n:       5
+
+  # --- Processor counts ---
+  ntasks_atm:   256
+
+  # --- ExoRT solar file ---
+  # Path on HPC. Must match exort_pkg. Tool validates stem matches.
+  # Default constructed from registry: {exort_root}/ExoRT/data/solar/G2V_SUN_n68.nc
+  # Override here only if using a non-standard stellar SED:
+  # exo_solar_file: /discover/nobackup/etwolf/models/ExoRT/data/solar/BT_Settl_3400K_n68.nc
+
+cases:
+  # Minimal case — inherits all base values
+  - name: co2_modern
+    exo_co2bar: 0.0004
+
+  - name: co2_1x
+    exo_co2bar: 0.001
+
+  - name: co2_10x
+    exo_co2bar: 0.004
+
+  - name: co2_100x
+    exo_co2bar: 0.04
+
+  # High-pressure 10-bar N2/CO2 atmosphere — must use matching IC file
+  - name: co2_10bar_n2
+    exo_co2bar:         1.0
+    exo_o2bar:          0.0
+    exo_n2bar_explicit: 9.0        # N2 = 9 bar; total = 10 bar
+    nlev:               51         # must match IC file for 10bar/L51
+    ntasks_atm:         512
+
+  # H2-dominated world, synchronous rotator
+  - name: h2_sync_1360
+    exo_h2bar:          0.9
+    exo_co2bar:         0.001
+    exo_o2bar:          0.0
+    exo_ch4bar:         0.0
+    exo_n2bar_explicit: 0.099      # total = 1.0 bar
+    exo_scon:           900.0
+    do_exo_synchronous: true
+    exo_ndays:          10.0
+    exo_sday:           864000.0   # = 86400 * exo_ndays (synchronous)
+    exo_porb:           10.0       # tidally locked: porb = ndays
+    exo_convect_plim:   5.0        # no ozone, so use 5 Pa
+
+  # M-dwarf target, different stellar SED (n68equiv but cooler star)
+  - name: k2_18b_analog
+    exo_scon:           1000.0
+    exo_surface_gravity: 12.4
+    exo_planet_radius:   1.448e7   # 2.27 Earth radii
+    exo_solar_file: /discover/nobackup/etwolf/models/ExoRT/data/solar/K2V_n68.nc
+    exo_co2bar:     0.01
+    exo_h2bar:      0.8
+    exo_n2bar_explicit: 0.19
+    exo_o2bar:      0.0
+    nlev:           51
+    ncdata_override: ic_1bar_L51_zmean_ic.nc   # explicit IC, bypasses auto-lookup
