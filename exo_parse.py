@@ -44,8 +44,8 @@ def _try_eval_expr(rhs, known_params):
         return None
 
 
-# user_nl_cam key=value patterns (string and bare numeric/logical)
-_RE_NL_STR = re.compile(r"(\w+)\s*=\s*'([^']+)'")
+# user_nl_* key=value patterns — single or double quoted strings, and bare values
+_RE_NL_STR = re.compile(r'(\w+)\s*=\s*["\']([^"\']+)["\']')
 _RE_NL_VAL = re.compile(r"(\w+)\s*=\s*([^,'\s!][^,!\n]*)")
 
 # IC filename pressure/level pattern
@@ -136,6 +136,48 @@ def parse_user_nl_cam(path):
         result['ncdata_pressure_str'] = None
         result['ncdata_levels'] = None
 
+    return result
+
+
+def parse_docn_som(path):
+    """
+    Parse user_docn.streams.txt.som (an XML fragment, no root element).
+    Returns dict with som_pop_frc_file: the full path to the pop_frc* file
+    found in the fieldInfo block, or None if not present.
+    """
+    # Wrap in a synthetic root so ElementTree can parse the fragment
+    try:
+        with open(path) as f:
+            content = f.read()
+        tree = ET.fromstring(f'<root>{content}</root>')
+    except ET.ParseError:
+        return {}
+
+    for field_info in tree.iter('fieldInfo'):
+        file_path = (field_info.findtext('filePath') or '').strip()
+        file_names_el = field_info.find('fileNames')
+        if file_names_el is None:
+            continue
+        for name in file_names_el.text.split():
+            if name.startswith('pop_frc'):
+                return {'som_pop_frc_file': os.path.join(file_path, name)}
+    return {}
+
+
+def parse_user_nl_clm(path):
+    """
+    Parse user_nl_clm, return dict with finidat and fsurdat paths.
+    Only called for cam_land_fv and cam_mixed_fv config types.
+    """
+    result = {}
+    keys = {'finidat', 'fsurdat'}
+    with open(path) as f:
+        for line in f:
+            if line.lstrip().startswith('!'):
+                continue
+            for m in _RE_NL_STR.finditer(line):
+                if m.group(1) in keys:
+                    result[m.group(1)] = m.group(2)
     return result
 
 

@@ -35,7 +35,8 @@ EXO_PARAMS = {
     'exo_convect_plim', 'exo_rad_step',
     'exo_albdif', 'exo_albdir',
     'do_exo_synchronous', 'do_exo_rt', 'do_exo_atmconst',
-    'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_gw', 'do_carma_exort',
+    'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
+    'do_exo_gw', 'do_exo_simplevolc', 'do_carma_exort',
     'Tmax', 'swFluxLimit', 'lwFluxLimit',
 }
 
@@ -235,6 +236,93 @@ def render_exoplanet_mod(template_path, spec):
     return ''.join(lines_out)
 
 
+def _build_nl_append_block(spec):
+    """
+    Return shell lines to append carma_params and/or volc_params to user_nl_cam.
+    Returns an empty list if neither is present in the spec.
+    """
+    lines = []
+    for group_key in ('carma_params', 'volc_params'):
+        params = spec.get(group_key)
+        if params:
+            lines.append(f"")
+            lines.append(f"# Append {group_key} to user_nl_cam")
+            lines.extend(_nl_append_lines(params))
+    return lines
+
+
+def _nl_append_lines(param_dict):
+    """
+    Return a list of shell lines that append key = value entries to user_nl_cam.
+    - Values already wrapped in single or double quotes are written as-is,
+      with any inner double quotes escaped for the surrounding shell echo "...".
+    - Bare numeric/logical values are single-quoted in the namelist.
+    - Python floats are formatted in %g notation to preserve scientific form.
+    """
+    lines = []
+    for key, val in param_dict.items():
+        if isinstance(val, float):
+            s = f'{val:g}'
+        else:
+            s = str(val)
+        already_quoted = (s.startswith("'") and s.endswith("'")) or \
+                         (s.startswith('"') and s.endswith('"'))
+        if already_quoted:
+            # escape any inner double quotes so the outer echo "..." stays valid
+            escaped = s.replace('"', '\\"')
+            lines.append(f'echo "{key} = {escaped}" >> user_nl_cam')
+        else:
+            lines.append(f"echo \"{key} = '{s}'\" >> user_nl_cam")
+    return lines
+
+
+def _build_clm_update_block(spec, paths):
+    """
+    For land/mixed configs, return sed lines to update finidat and fsurdat
+    in user_nl_clm if those keys are present in the spec.
+    """
+    if spec.get('config_type') not in ('cam_land_fv', 'cam_mixed_fv'):
+        return []
+    lines = []
+    exocam = paths.get('exocam_root', '$EXOCAM')
+    land_ic_base = f"{exocam}/cesm1.2.1/initial_files/cam_land_fv"
+    for key in ('finidat', 'fsurdat'):
+        val = spec.get(key)
+        if val:
+            # allow absolute paths through unchanged; prefix relative names
+            path_val = val if val.startswith('/') else f"{land_ic_base}/{val}"
+            if not lines:
+                lines.append("")
+                lines.append("# Update CLM initial and surface data file paths in user_nl_clm")
+            lines.append(
+                f'sed -i \'s|{key} = ".*"|{key} = "{path_val}"|\' user_nl_clm'
+            )
+    return lines
+
+
+def _build_docn_update_block(spec):
+    """
+    For aqua/mixed configs, return a sed line to update the pop_frc* filename
+    in user_docn.streams.txt.som if som_pop_frc_file is present in the spec.
+    """
+    if spec.get('config_type') not in ('cam_aqua_fv', 'cam_aqua_se_ne5',
+                                        'cam_aqua_se_ne16', 'cam_mixed_fv'):
+        return []
+    val = spec.get('som_pop_frc_file')
+    if not val:
+        return []
+    dirname  = os.path.dirname(val)
+    basename = os.path.basename(val)
+    return [
+        "",
+        "# Update SOM ocean forcing file in user_docn.streams.txt.som",
+        f"sed -i 's|<filePath>.*</filePath>|<filePath>\\n            {dirname}\\n         </filePath>|2' "
+        "user_docn.streams.txt.som",
+        f"sed -i 's|<fileNames>.*pop_frc.*</fileNames>|<fileNames>\\n            {basename}\\n         </fileNames>|' "
+        "user_docn.streams.txt.som",
+    ]
+
+
 def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_dir):
     """Write <outdir>/<case_name>_build.sh. Return the script path."""
     paths = dict(registry.get('paths', {}))
@@ -308,6 +396,9 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         "",
         "# Update ncdata path in user_nl_cam",
         f"sed -i \"s|ncdata = '.*'|ncdata = '{ic_path}'|\" user_nl_cam",
+        *_build_nl_append_block(spec),
+        *_build_clm_update_block(spec, paths),
+        *_build_docn_update_block(spec),
         "",
         "# Update solar file path in exoplanet_mod.F90",
         f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{solar_file}'|\" "

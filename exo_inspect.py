@@ -18,8 +18,8 @@ import yaml
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
 from exo_parse import (
-    parse_exoplanet_mod, parse_user_nl_cam, parse_cam_config_opts,
-    compute_pstd_bar, pressure_str_to_bar
+    parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_docn_som,
+    parse_cam_config_opts, compute_pstd_bar, pressure_str_to_bar
 )
 
 SOLAR_STEM_MAP = {
@@ -29,19 +29,39 @@ SOLAR_STEM_MAP = {
     'n42h2o':     'n42',
 }
 
-REGISTRY_FIELDS = [
-    'case_name', 'casedir', 'inspect_date',
-    'config_type', 'exort_pkg', 'cloud_scheme', 'nlev',
-    'ncdata', 'ncdata_pressure_str', 'ncdata_levels',
-    'exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',
-    'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar', 'exo_n2bar',
-    'exo_n2bar_expr', 'exo_pstd_computed_bar',
-    'exo_scon', 'exo_solar_file', 'do_exo_synchronous',
-    'exo_ndays', 'exo_porb', 'exo_sday', 'exo_sday_expr',
-    'exo_surface_gravity', 'exo_planet_radius', 'exo_eccen', 'exo_obliq',
-    'carma_params', 'volc_params',
-    'warnings',
+_REGISTRY_GROUPS = [
+    ('meta', [
+        'case_name', 'casedir', 'inspect_date',
+        'config_type', 'exort_pkg', 'cloud_scheme', 'nlev',
+        'ncdata', 'ncdata_pressure_str', 'ncdata_levels',
+        'clm_finidat', 'clm_fsurdat',
+        'som_pop_frc_file',
+    ]),
+    ('atmosphere', [
+        'exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',
+        'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar', 'exo_n2bar',
+        'exo_n2bar_expr', 'exo_pstd_computed_bar',
+        'exo_scon', 'exo_solar_file',
+    ]),
+    ('geophysical', [
+        'exo_ndays', 'exo_porb', 'exo_sday', 'exo_sday_expr',
+        'exo_surface_gravity', 'exo_planet_radius', 'exo_eccen', 'exo_obliq',
+    ]),
+    ('model_options', [
+        'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
+        'do_exo_gw', 'do_exo_simplevolc', 'exo_convect_plim',
+        'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
+    ]),
+    ('special', [
+        'carma_params', 'volc_params',
+    ]),
+    ('diagnostics', [
+        'warnings',
+    ]),
 ]
+
+# Flat list of all fields — used by inspect_case and update-merge logic
+REGISTRY_FIELDS = [f for _, fields in _REGISTRY_GROUPS for f in fields]
 
 
 def find_case_dirs(path):
@@ -73,9 +93,12 @@ def inspect_case(casedir):
 
     for key in ['exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',
                 'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar', 'exo_n2bar',
-                'exo_scon', 'exo_solar_file', 'do_exo_synchronous',
+                'exo_scon', 'exo_solar_file',
                 'exo_ndays', 'exo_porb', 'exo_surface_gravity',
-                'exo_planet_radius', 'exo_eccen', 'exo_obliq']:
+                'exo_planet_radius', 'exo_eccen', 'exo_obliq',
+                'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
+                'do_exo_gw', 'do_exo_simplevolc', 'exo_convect_plim',
+                'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma']:
         row[key] = exo.get(key)
 
     row['exo_n2bar_expr'] = exo.get('exo_n2bar_expr')
@@ -101,6 +124,22 @@ def inspect_case(casedir):
     row['ncdata_levels'] = nl.get('ncdata_levels')
     row['carma_params'] = nl.get('carma_params') or None
     row['volc_params'] = nl.get('volc_params') or None
+
+    # user_nl_clm (land and mixed configs only)
+    clm = {}
+    if row['config_type'] in ('cam_land_fv', 'cam_mixed_fv'):
+        clm_path = os.path.join(casedir, 'user_nl_clm')
+        if os.path.exists(clm_path):
+            clm = parse_user_nl_clm(clm_path)
+    row['clm_finidat'] = clm.get('finidat')
+    row['clm_fsurdat'] = clm.get('fsurdat')
+
+    # user_docn.streams.txt.som (aqua and mixed configs only)
+    row['som_pop_frc_file'] = None
+    if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se', 'cam_mixed_fv'):
+        docn_path = os.path.join(casedir, 'user_docn.streams.txt.som')
+        if os.path.exists(docn_path):
+            row['som_pop_frc_file'] = parse_docn_som(docn_path).get('som_pop_frc_file')
 
     # env_build.xml (may not exist pre-cesm_setup)
     xml_path = os.path.join(casedir, 'env_build.xml')
@@ -177,18 +216,32 @@ def load_registry(path):
         return []
     with open(path) as f:
         data = yaml.safe_load(f)
-    return data.get('cases', []) if data else []
+    # Flatten grouped structure back to plain dicts for internal use
+    flat = []
+    for entry in (data.get('cases', []) if data else []):
+        row = {}
+        for key, val in entry.items():
+            if isinstance(val, dict):
+                # group block — merge its fields into the flat row
+                row.update(val)
+            else:
+                row[key] = val
+        flat.append(row)
+    return flat
 
 
 def write_registry(rows, path):
-    # Build ordered dicts so YAML output follows REGISTRY_FIELDS order
     ordered = []
     for row in rows:
         entry = {}
-        for field in REGISTRY_FIELDS:
-            val = row.get(field)
-            if val is not None:
-                entry[field] = val
+        for group, fields in _REGISTRY_GROUPS:
+            block = {}
+            for field in fields:
+                val = row.get(field)
+                if val is not None:
+                    block[field] = val
+            if block:
+                entry[group] = block
         ordered.append(entry)
 
     with open(path, 'w') as f:
