@@ -42,6 +42,8 @@ EXO_PARAMS = {
 
 REQUIRED_FIELDS = ['config_type', 'exort_pkg', 'nlev', 'mach',
                    'stop_option', 'stop_n', 'rest_n', 'ntasks_atm']
+# Fields required for clone mode (config/compset/mach are inherited from the source case)
+REQUIRED_FIELDS_CLONE = ['clone_of', 'stop_option', 'stop_n', 'rest_n', 'ntasks_atm']
 
 SOLAR_FILE_STEMS = {
     'n68equiv':   'n68',
@@ -132,16 +134,27 @@ def validate_case(spec, registry):
     """Return list of error strings. Empty list = valid."""
     errors = []
 
-    for field in REQUIRED_FIELDS:
-        if field not in spec:
-            errors.append(f"missing required field: {field}")
+    if spec.get('clone_of'):
+        for field in REQUIRED_FIELDS_CLONE:
+            if field not in spec:
+                errors.append(f"missing required field: {field}")
+        # IC file lookup still runs if enough info is present (nlev + config_type inherited)
+        # but is optional for clone mode — skip if config_type or nlev are absent
+        if spec.get('config_type') and spec.get('nlev'):
+            try:
+                find_ic_file(spec, registry)
+            except ValueError as e:
+                errors.append(str(e))
+    else:
+        for field in REQUIRED_FIELDS:
+            if field not in spec:
+                errors.append(f"missing required field: {field}")
 
-    # IC file lookup
-    try:
-        ic_file, pressure_str = find_ic_file(spec, registry)
-    except ValueError as e:
-        errors.append(str(e))
-        ic_file, pressure_str = None, None
+        # IC file lookup
+        try:
+            find_ic_file(spec, registry)
+        except ValueError as e:
+            errors.append(str(e))
 
     # solar file / exort package consistency
     solar = spec.get('exo_solar_file', '')
@@ -448,6 +461,149 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
     return script_path
 
 
+def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_dir):
+    """
+    Write <outdir>/<case_name>_build.sh using create_clone instead of create_newcase.
+    Steps 3-8 are identical to generate_shell_script; Steps 1-2 are replaced by
+    create_clone + cd into the new case (SourceMods and namelists are inherited).
+    """
+    paths = dict(registry.get('paths', {}))
+    for k in ['cesm_scripts', 'caseroot', 'exocam_root', 'exort_root']:
+        if k in spec.get('_paths_override', {}):
+            paths[k] = spec['_paths_override'][k]
+
+    clone_of    = spec['clone_of']
+    config_type = spec.get('config_type', '')
+    exort_pkg   = spec.get('exort_pkg', '')
+    nlev        = spec.get('nlev', '?')
+    phys        = registry.get('cesm_config', {}).get(config_type, {}).get('phys', 'cam4')
+    cloud_opts  = '-chem none -microphys mg1' if spec.get('cloud_scheme') == 'mg' else ''
+    pstd        = compute_pstd_from_spec(spec) if config_type else None
+
+    solar_file = spec.get('exo_solar_file', '')
+    if not solar_file and exort_pkg:
+        stem = SOLAR_FILE_STEMS.get(exort_pkg, exort_pkg)
+        solar_file = f"{paths.get('exort_root','$EXORT')}/data/solar/G2V_SUN_{stem}.nc"
+
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    script_path = os.path.join(outdir, f"{case_name}_build.sh")
+
+    pstd_label = f"{pstd:.4g}bar" if pstd else "inherited"
+    ic_label   = ic_file if ic_file else "inherited"
+
+    lines = [
+        "#!/bin/bash",
+        f"# ExoCAM clone build script: {case_name}",
+        f"# Cloned from: {clone_of}",
+        f"# Generated: {now} by exo_build.py",
+        f"# VALIDATION: pstd={pstd_label} | ncdata={ic_label} | nlev={nlev} | exort={exort_pkg}",
+        "#",
+        "# Review this script before running.",
+        "# To run:  bash " + os.path.basename(script_path),
+        "# To check syntax only:  bash -n " + os.path.basename(script_path),
+        "",
+        "set -e   # exit on first error",
+        "set -x   # print every command before executing (the log)",
+        "",
+        f"CASE={case_name}",
+        f"CLONE_OF={clone_of}",
+        f"CESM_SCRIPTS={paths.get('cesm_scripts', 'EDIT_ME')}",
+        f"CASEROOT={paths.get('caseroot', 'EDIT_ME')}",
+        f"EXOCAM={paths.get('exocam_root', 'EDIT_ME')}",
+        f"EXORT={paths.get('exort_root', 'EDIT_ME')}",
+        f"STAGING={os.path.abspath(staging_dir)}",
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 1: create clone",
+        "# -----------------------------------------------------------",
+        "cd ${CESM_SCRIPTS}",
+        "./create_clone -clone ${CASEROOT}/${CLONE_OF} -case ${CASEROOT}/${CASE}",
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 2: install modified exoplanet_mod.F90 and update paths",
+        "# -----------------------------------------------------------",
+        "cd ${CASEROOT}/${CASE}",
+        "cp ${STAGING}/exoplanet_mod.F90 SourceMods/src.share/exoplanet_mod.F90",
+    ]
+
+    if ic_file:
+        ic_path = (f"{paths.get('exocam_root','$EXOCAM')}/cesm1.2.1/initial_files"
+                   f"/{config_type}/{ic_file}")
+        lines += [
+            "",
+            "# Update ncdata path in user_nl_cam",
+            f"sed -i \"s|ncdata = '.*'|ncdata = '{ic_path}'|\" user_nl_cam",
+        ]
+
+    lines += [
+        *_build_nl_append_block(spec),
+        *_build_clm_update_block(spec, paths),
+        *_build_docn_update_block(spec),
+    ]
+
+    if solar_file:
+        lines += [
+            "",
+            "# Update solar file path in exoplanet_mod.F90",
+            f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{solar_file}'|\" "
+            "SourceMods/src.share/exoplanet_mod.F90",
+        ]
+
+    lines += [
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 3: processor counts",
+        "# -----------------------------------------------------------",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ATM -val {spec['ntasks_atm']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ICE -val {spec['ntasks_atm']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_LND -val {spec['ntasks_atm']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_OCN -val {spec['ntasks_atm']}",
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 4: run length and CAM configuration",
+        "# -----------------------------------------------------------",
+        f"./xmlchange STOP_OPTION={spec['stop_option']}",
+        f"./xmlchange STOP_N={spec['stop_n']}",
+        f"./xmlchange REST_N={spec['rest_n']}",
+    ]
+
+    if exort_pkg and nlev != '?':
+        lines += [
+            (f"./xmlchange CAM_CONFIG_OPTS="
+             f"\"-nlev {nlev} -phys {phys}"
+             + (f" {cloud_opts}" if cloud_opts else "")
+             + f" -usr_src ${{EXORT}}/ExoRT/3dmodels/src.cam.{exort_pkg}\""),
+        ]
+    else:
+        lines += ["# CAM_CONFIG_OPTS inherited from clone source — update if needed"]
+
+    lines += [
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 5: cesm_setup",
+        "# -----------------------------------------------------------",
+        "./cesm_setup",
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 6: branch restart files (uncomment if needed)",
+        "# -----------------------------------------------------------",
+        "# cp /path/to/restart/files ${CASEROOT}/${CASE}/run/",
+        "",
+        "# -----------------------------------------------------------",
+        "# STEP 7: build  (submission is always manual)",
+        "# -----------------------------------------------------------",
+        "./${CASE}.build",
+        "",
+        "echo \"Build complete: ${CASE}\"",
+        "echo \"To submit: cd ${CASEROOT}/${CASE} && ./${CASE}.run\"",
+    ]
+
+    with open(script_path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    os.chmod(script_path, 0o755)
+    return script_path
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate ExoCAM build shell scripts from experiment matrix')
     parser.add_argument('matrix', help='experiment_matrix.yaml')
@@ -498,17 +654,26 @@ def main():
             errors_total += 1
             continue
 
-        ic_file, _ = find_ic_file(spec, registry)
+        is_clone = bool(spec.get('clone_of'))
+
+        # IC file: required for newcase; optional for clone (only if config_type+nlev present)
+        ic_file = None
+        if not is_clone:
+            ic_file, _ = find_ic_file(spec, registry)
+        elif spec.get('config_type') and spec.get('nlev'):
+            try:
+                ic_file, _ = find_ic_file(spec, registry)
+            except ValueError:
+                pass  # clone without IC override — ncdata sed step skipped
 
         # staging dir for this case's exoplanet_mod.F90
         staging_dir = os.path.join(args.outdir, 'staging', case_name)
         os.makedirs(staging_dir, exist_ok=True)
 
-        # find template exoplanet_mod.F90 for this config
-        config_type = spec['config_type']
-        # strip _ne5/_ne16 suffix for se configs — they use the same source dir
+        # find and render exoplanet_mod.F90 template
+        config_type = spec.get('config_type', '')
         src_config = config_type.replace('_ne5', '').replace('_ne16', '')
-        if template_base:
+        if template_base and src_config:
             template_path = os.path.join(
                 template_base, src_config,
                 'SourceMods', 'src.share', 'exoplanet_mod.F90'
@@ -522,12 +687,17 @@ def main():
             with open(staged_path, 'w') as f:
                 f.write(content)
         else:
-            print(f"  WARNING: template exoplanet_mod.F90 not found for {config_type}; "
+            print(f"  WARNING: template exoplanet_mod.F90 not found for {config_type or 'unknown'}; "
                   f"staging dir will be empty — edit manually")
 
-        script_path = generate_shell_script(
-            case_name, spec, registry, ic_file, args.outdir, staging_dir
-        )
+        if is_clone:
+            script_path = generate_clone_script(
+                case_name, spec, registry, ic_file, args.outdir, staging_dir
+            )
+        else:
+            script_path = generate_shell_script(
+                case_name, spec, registry, ic_file, args.outdir, staging_dir
+            )
         generated.append((case_name, script_path))
         print(f"Generated: {script_path}")
 

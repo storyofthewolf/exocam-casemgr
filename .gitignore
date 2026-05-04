@@ -11,3 +11,9 @@ staging/
 *.yaml
 
 cases.csv
+cases.yaml
+
+.claude/
+
+# for now commit config_registry
+!config_registry.yaml

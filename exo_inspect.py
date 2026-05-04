@@ -3,10 +3,10 @@ ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
 writes a queryable YAML registry.
 
 Usage:
-  python exo_inspect.py PATH [PATH ...] [--registry cases.yaml] [--update]
+  python exo_inspect.py CASE_NAME [CASE_NAME ...] [--registry cases.yaml] [--update]
 
-Each PATH is either a CASE dir (contains SourceMods/) or a parent dir
-(its children are scanned for CASE dirs).
+Each argument is a bare case name, an absolute path, or a parent dir.
+Bare names are resolved relative to caseroot in config_registry.yaml.
 """
 
 import argparse
@@ -250,20 +250,51 @@ def write_registry(rows, path):
     print(f"Registry written: {path}  ({len(rows)} cases)")
 
 
+def _load_caseroot(config_registry_path):
+    """Return caseroot from config_registry.yaml, or None if unavailable."""
+    if not config_registry_path or not os.path.exists(config_registry_path):
+        return None
+    with open(config_registry_path) as f:
+        data = yaml.safe_load(f)
+    return (data or {}).get('paths', {}).get('caseroot')
+
+
+def _resolve_path(p, caseroot):
+    """
+    If p is already an absolute path or a relative path that exists as-is,
+    return it unchanged. Otherwise prepend caseroot (if set).
+    """
+    if os.path.isabs(p) or os.path.exists(p):
+        return p
+    if caseroot:
+        return os.path.join(caseroot, p)
+    return p
+
+
 def main():
+    # locate config_registry.yaml next to this script by default
+    default_registry = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    'config_registry.yaml')
+
     parser = argparse.ArgumentParser(description='Inspect ExoCAM CASE directories and write YAML registry')
-    parser.add_argument('paths', nargs='+', help='CASE dir(s) or parent dir(s) to scan')
+    parser.add_argument('paths', nargs='+', help='CASE name(s), dir(s), or parent dir(s) to scan')
     parser.add_argument('--registry', default='cases.yaml', help='Output YAML path (default: cases.yaml)')
     parser.add_argument('--update', action='store_true',
                         help='Merge with existing registry instead of overwriting')
+    parser.add_argument('--config-registry', default=default_registry,
+                        dest='config_registry',
+                        help='Path to config_registry.yaml (default: config_registry.yaml next to this script)')
     args = parser.parse_args()
+
+    caseroot = _load_caseroot(args.config_registry)
 
     # collect all case dirs
     all_case_dirs = []
     for p in args.paths:
-        found = find_case_dirs(p)
+        resolved = _resolve_path(p, caseroot)
+        found = find_case_dirs(resolved)
         if not found:
-            print(f"WARNING: no CASE dirs found under {p}", file=sys.stderr)
+            print(f"WARNING: no CASE dirs found under {resolved}", file=sys.stderr)
         all_case_dirs.extend(found)
 
     if not all_case_dirs:

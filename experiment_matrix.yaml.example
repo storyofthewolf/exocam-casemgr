@@ -137,6 +137,14 @@ cases:
   - name: co2_modern
     exo_co2bar: 0.0004
 
+  # Clone example — create_clone copies SourceMods/namelists from an existing case.
+  # Use when only a few parameters differ from a completed run.
+  # config_type, exort_pkg, nlev are optional (inherited from clone source);
+  # supply them only if you want the IC file lookup and CAM_CONFIG_OPTS update.
+  - name: co2_modern_2x_scon
+    clone_of:   co2_modern
+    exo_scon:   2720.0
+
   - name: co2_1x
     exo_co2bar: 0.001
 
