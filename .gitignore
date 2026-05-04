@@ -17,3 +17,6 @@ cases.yaml
 
 # for now commit config_registry
 !config_registry.yaml
+
+# keep run_builds.sh to loop over build files
+!run_builds.sh
