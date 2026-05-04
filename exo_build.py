@@ -216,11 +216,10 @@ def render_exoplanet_mod(template_path, spec):
     for k, v in spec.items():
         if k in EXO_PARAMS:
             substitutions[k] = v
-    if n2bar is not None:
-        # we don't rewrite the n2bar expression line; leave it as-is since
-        # it's derived from the other gas values we set. The Fortran compiler
-        # recalculates it at compile time.
-        pass
+    # Only patch exo_n2bar when explicitly set (high-pressure atmospheres).
+    # For <=1 bar cases the Fortran expression line is correct as-is.
+    if 'exo_n2bar_explicit' in spec and n2bar is not None:
+        substitutions['exo_n2bar'] = n2bar
 
     lines_out = []
     with open(template_path) as f:
