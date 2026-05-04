@@ -11,10 +11,10 @@
 machine: discover
 
 paths:
-  cesm_scripts: /discover/nobackup/etwolf/cesm1_2_1/scripts
-  caseroot:     /discover/nobackup/etwolf/cesm_scratch/cases
-  exocam_root:  /discover/nobackup/etwolf/models/ExoCAM
-  exort_root:   /discover/nobackup/etwolf/models/ExoRT
+  cesm_scripts: /gpfsm/dnb33/etwolf/models/cesm1_2_1/scripts
+  caseroot:     /gpfsm/dnb33/etwolf/cesm_scratch/cases
+  exocam_root:  /gpfsm/dnb33/etwolf/models/ExoCAM
+  exort_root:   /gpfsm/dnb33/etwolf/models/ExoRT
 
 # exort_pkg -> substring that must appear in the solar filename basename
 solar_file_stems:
@@ -31,7 +31,7 @@ cesm_config:
     phys:     cam4
   cam_land_fv:
     res:      f45_f45
-    compset:  I2000
+    compset:  L2000
     phys:     cam4
   cam_mixed_fv:
     res:      f45_g37
