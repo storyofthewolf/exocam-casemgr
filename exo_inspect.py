@@ -342,13 +342,13 @@ def main():
     write_registry(rows, args.registry)
 
     # print summary table
-    print(f"\n{'CASE':<30} {'CONFIG':<16} {'PSTD':>8} {'NLEV':>5}  WARNINGS")
-    print('-' * 75)
+    print(f"\n{'CASE':<45} {'CONFIG':<16} {'PSTD':>8} {'NLEV':>5}  WARNINGS")
+    print('-' * 90)
     for r in rows:
         pstd = r.get('exo_pstd_computed_bar')
         pstd_s = f"{float(pstd):.3f}" if pstd else '?'
         warn_s = '; '.join(r['warnings']) if r.get('warnings') else ''
-        print(f"{r['case_name']:<30} {str(r.get('config_type','')):<16} "
+        print(f"{r['case_name']:<45} {str(r.get('config_type','')):<16} "
               f"{pstd_s:>8} {str(r.get('nlev','?')):>5}  {warn_s[:40]}")
 
 
