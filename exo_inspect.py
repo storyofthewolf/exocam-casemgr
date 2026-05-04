@@ -125,6 +125,9 @@ def inspect_case(casedir):
     row['carma_params'] = nl.get('carma_params') or None
     row['volc_params'] = nl.get('volc_params') or None
 
+    # infer config_type from SourceMods structure (needed before config-conditional blocks)
+    row['config_type'] = _infer_config_type(casedir)
+
     # user_nl_clm (land and mixed configs only)
     clm = {}
     if row['config_type'] in ('cam_land_fv', 'cam_mixed_fv'):
@@ -149,9 +152,6 @@ def inspect_case(casedir):
     row['nlev'] = cam.get('nlev')
     row['exort_pkg'] = cam.get('exort_pkg')
     row['cloud_scheme'] = cam.get('cloud_scheme')
-
-    # infer config_type from SourceMods structure
-    row['config_type'] = _infer_config_type(casedir)
 
     warnings = check_consistency(row)
     row['warnings'] = warnings or None
