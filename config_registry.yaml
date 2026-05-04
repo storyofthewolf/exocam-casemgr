@@ -13,6 +13,9 @@ machine: discover
 paths:
   cesm_scripts: /gpfsm/dnb33/etwolf/models/cesm1_2_1/scripts
   caseroot:     /gpfsm/dnb33/etwolf/cesm_scratch/cases
+  rundir:       /gpfsm/dnb33/etwolf/cesm_scratch/rundir
+  archive:      /gpfsm/dnb33/etwolf/cesm_scratch/archive
+  long_term:    /gpfsm/dnb07/projects/p54/users/etwolf
   exocam_root:  /gpfsm/dnb33/etwolf/models/ExoCAM
   exort_root:   /gpfsm/dnb33/etwolf/models/ExoRT
 
