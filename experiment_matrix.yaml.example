@@ -38,6 +38,9 @@ base:
   # Processor counts
   ntasks:   126            # Milan chips on discover
 
+  # HPC batch options (written to ${CASE}.run after cesm_setup)
+  account:  s2427          # SLURM charge account (#SBATCH --account)
+
   # -----------------------------------------------------------------------
   # Atmospheric composition  (all in bar)
   # N2 is computed as 1 - sum(others) for 1-bar atmospheres.
@@ -134,8 +137,10 @@ base:
 
 cases:
   # Minimal case — inherits all base values
+  # job_name sets #SBATCH -J (short queue label); omit to skip that line
   - name: co2_modern
     exo_co2bar: 0.0004
+    job_name:   co2mod
 
   # Clone example — create_clone copies SourceMods/namelists from an existing case.
   # Use when only a few parameters differ from a completed run.

@@ -312,6 +312,38 @@ def _build_clm_update_block(spec, paths):
     return lines
 
 
+def _build_run_script_block(spec):
+    """
+    Return sed lines to patch SBATCH directives into ${CASE}.run after cesm_setup.
+    account: replaces existing #SBATCH --account line (present in all CESM .run files).
+    job_name (-J): inserted after the account line (not always present by default).
+    Both are skipped if absent from the spec.
+    """
+    lines = []
+    account  = spec.get('account')
+    job_name = spec.get('job_name')
+    if not account and not job_name:
+        return lines
+    lines += [
+        "",
+        "# -----------------------------------------------------------",
+        "# Patch SBATCH directives in ${CASE}.run",
+        "# -----------------------------------------------------------",
+    ]
+    if account:
+        lines.append(
+            f"sed -i 's|^#SBATCH --account=.*|#SBATCH --account={account}|' ${{CASE}}.run"
+        )
+    if job_name:
+        # Insert -J line after the --account line; use a no-op if account line absent
+        lines.append(
+            f"grep -q '^#SBATCH -J ' ${{CASE}}.run "
+            f"&& sed -i 's|^#SBATCH -J .*|#SBATCH -J {job_name}|' ${{CASE}}.run "
+            f"|| sed -i '/^#SBATCH --account=/a #SBATCH -J {job_name}' ${{CASE}}.run"
+        )
+    return lines
+
+
 def _build_docn_update_block(spec):
     """
     For aqua/mixed configs, return a sed line to update the pop_frc* filename
@@ -442,6 +474,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         "# STEP 6: cesm_setup",
         "# -----------------------------------------------------------",
         "./cesm_setup",
+        *_build_run_script_block(spec),
         "",
         "# -----------------------------------------------------------",
         "# STEP 7: branch restart files (uncomment if needed)",
@@ -588,6 +621,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         "# STEP 5: cesm_setup",
         "# -----------------------------------------------------------",
         "./cesm_setup",
+        *_build_run_script_block(spec),
         "",
         "# -----------------------------------------------------------",
         "# STEP 6: branch restart files (uncomment if needed)",
