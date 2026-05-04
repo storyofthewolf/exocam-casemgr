@@ -44,8 +44,9 @@ def _try_eval_expr(rhs, known_params):
         return None
 
 
-# user_nl_cam key=value pattern
+# user_nl_cam key=value patterns (string and bare numeric/logical)
 _RE_NL_STR = re.compile(r"(\w+)\s*=\s*'([^']+)'")
+_RE_NL_VAL = re.compile(r"(\w+)\s*=\s*([^,'\s!][^,!\n]*)")
 
 # IC filename pressure/level pattern
 _RE_IC = re.compile(r'ic_([0-9.e+\-]+bar)_L(\d+)')
@@ -94,17 +95,36 @@ def parse_exoplanet_mod(path):
 def parse_user_nl_cam(path):
     """
     Parse user_nl_cam, return dict with ncdata, bnd_topo, gw_drag_file,
-    and ncdata_pressure_str / ncdata_levels extracted from IC filename.
+    ncdata_pressure_str / ncdata_levels extracted from IC filename, and
+    carma_params / volc_params dicts for any carma_* / volc_* keys found.
     """
     result = {}
     keys = {'ncdata', 'bnd_topo', 'gw_drag_file'}
+    carma = {}
+    volc = {}
     with open(path) as f:
         for line in f:
             if line.lstrip().startswith('!'):
                 continue
             for m in _RE_NL_STR.finditer(line):
-                if m.group(1) in keys:
-                    result[m.group(1)] = m.group(2)
+                k, v = m.group(1), m.group(2)
+                if k in keys:
+                    result[k] = v
+                elif k.startswith('carma_'):
+                    carma[k] = v
+                elif k.startswith('volc_'):
+                    volc[k] = v
+            # bare (non-string) values for carma_*/volc_* keys
+            for m in _RE_NL_VAL.finditer(line):
+                k, v = m.group(1), m.group(2).strip().rstrip(',')
+                if k.startswith('carma_') and k not in carma:
+                    carma[k] = v
+                elif k.startswith('volc_') and k not in volc:
+                    volc[k] = v
+    if carma:
+        result['carma_params'] = carma
+    if volc:
+        result['volc_params'] = volc
 
     ncdata = result.get('ncdata', '')
     basename = os.path.basename(ncdata)

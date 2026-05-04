@@ -23,7 +23,7 @@ except ImportError:
     sys.exit("pyyaml is required: pip install pyyaml")
 
 sys.path.insert(0, os.path.dirname(__file__))
-from exo_parse import compute_pstd_bar, _RE_KIND, _RE_PURE_NUM
+from exo_parse import compute_pstd_bar
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {

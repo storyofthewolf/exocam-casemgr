@@ -34,11 +34,12 @@ REGISTRY_FIELDS = [
     'config_type', 'exort_pkg', 'cloud_scheme', 'nlev',
     'ncdata', 'ncdata_pressure_str', 'ncdata_levels',
     'exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',
-    'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar',
+    'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar', 'exo_n2bar',
     'exo_n2bar_expr', 'exo_pstd_computed_bar',
     'exo_scon', 'exo_solar_file', 'do_exo_synchronous',
     'exo_ndays', 'exo_porb', 'exo_sday', 'exo_sday_expr',
     'exo_surface_gravity', 'exo_planet_radius', 'exo_eccen', 'exo_obliq',
+    'carma_params', 'volc_params',
     'warnings',
 ]
 
@@ -71,7 +72,7 @@ def inspect_case(casedir):
         exo = parse_exoplanet_mod(exo_path)
 
     for key in ['exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',
-                'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar',
+                'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar', 'exo_n2bar',
                 'exo_scon', 'exo_solar_file', 'do_exo_synchronous',
                 'exo_ndays', 'exo_porb', 'exo_surface_gravity',
                 'exo_planet_radius', 'exo_eccen', 'exo_obliq']:
@@ -98,6 +99,8 @@ def inspect_case(casedir):
     row['ncdata'] = nl.get('ncdata')
     row['ncdata_pressure_str'] = nl.get('ncdata_pressure_str')
     row['ncdata_levels'] = nl.get('ncdata_levels')
+    row['carma_params'] = nl.get('carma_params') or None
+    row['volc_params'] = nl.get('volc_params') or None
 
     # env_build.xml (may not exist pre-cesm_setup)
     xml_path = os.path.join(casedir, 'env_build.xml')
