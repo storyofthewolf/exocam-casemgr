@@ -1,19 +1,19 @@
 """
 ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
-writes a queryable CSV registry.
+writes a queryable YAML registry.
 
 Usage:
-  python exo_inspect.py PATH [PATH ...] [--registry cases.csv] [--update]
+  python exo_inspect.py PATH [PATH ...] [--registry cases.yaml] [--update]
 
 Each PATH is either a CASE dir (contains SourceMods/) or a parent dir
 (its children are scanned for CASE dirs).
 """
 
 import argparse
-import csv
 import datetime
 import os
 import sys
+import yaml
 
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
@@ -112,7 +112,7 @@ def inspect_case(casedir):
     row['config_type'] = _infer_config_type(casedir)
 
     warnings = check_consistency(row)
-    row['warnings'] = '; '.join(warnings)
+    row['warnings'] = warnings or None
 
     return row
 
@@ -172,22 +172,32 @@ def check_consistency(meta):
 def load_registry(path):
     if not os.path.exists(path):
         return []
-    with open(path, newline='') as f:
-        return list(csv.DictReader(f))
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return data.get('cases', []) if data else []
 
 
 def write_registry(rows, path):
-    with open(path, 'w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=REGISTRY_FIELDS, extrasaction='ignore')
-        w.writeheader()
-        w.writerows(rows)
+    # Build ordered dicts so YAML output follows REGISTRY_FIELDS order
+    ordered = []
+    for row in rows:
+        entry = {}
+        for field in REGISTRY_FIELDS:
+            val = row.get(field)
+            if val is not None:
+                entry[field] = val
+        ordered.append(entry)
+
+    with open(path, 'w') as f:
+        yaml.dump({'cases': ordered}, f,
+                  default_flow_style=False, allow_unicode=True, sort_keys=False)
     print(f"Registry written: {path}  ({len(rows)} cases)")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Inspect ExoCAM CASE directories and write CSV registry')
+    parser = argparse.ArgumentParser(description='Inspect ExoCAM CASE directories and write YAML registry')
     parser.add_argument('paths', nargs='+', help='CASE dir(s) or parent dir(s) to scan')
-    parser.add_argument('--registry', default='cases.csv', help='Output CSV path (default: cases.csv)')
+    parser.add_argument('--registry', default='cases.yaml', help='Output YAML path (default: cases.yaml)')
     parser.add_argument('--update', action='store_true',
                         help='Merge with existing registry instead of overwriting')
     args = parser.parse_args()
@@ -211,7 +221,8 @@ def main():
             row = inspect_case(casedir)
             rows.append(row)
             if row['warnings']:
-                print(f"  WARNINGS: {row['warnings']}")
+                for w in row['warnings']:
+                    print(f"  WARNING: {w}")
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
 
@@ -230,8 +241,9 @@ def main():
     for r in rows:
         pstd = r.get('exo_pstd_computed_bar')
         pstd_s = f"{float(pstd):.3f}" if pstd else '?'
+        warn_s = '; '.join(r['warnings']) if r.get('warnings') else ''
         print(f"{r['case_name']:<30} {str(r.get('config_type','')):<16} "
-              f"{pstd_s:>8} {str(r.get('nlev','?')):>5}  {r.get('warnings','')[:40]}")
+              f"{pstd_s:>8} {str(r.get('nlev','?')):>5}  {warn_s[:40]}")
 
 
 if __name__ == '__main__':

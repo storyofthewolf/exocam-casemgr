@@ -17,11 +17,11 @@ python exo_build.py experiment_matrix.yaml --outdir scripts/
 # Generate AND execute builds
 python exo_build.py experiment_matrix.yaml --outdir scripts/ --execute
 
-# Inspect existing CASE directories, write CSV registry
-python exo_inspect.py /path/to/cases/ --registry cases.csv
+# Inspect existing CASE directories, write YAML registry
+python exo_inspect.py /path/to/cases/ --registry cases.yaml
 
 # Update (merge) instead of overwriting registry
-python exo_inspect.py /path/to/cases/ --registry cases.csv --update
+python exo_inspect.py /path/to/cases/ --registry cases.yaml --update
 ```
 
 Dependency: `pip install pyyaml`

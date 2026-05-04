@@ -20,7 +20,29 @@ _RE_STRING = re.compile(
     r"^\s+character[^:]*parameter\s*::\s*(\w+)\s*=\s*'([^']+)'"
 )
 _RE_KIND = re.compile(r'_[rR]8\b')
-_RE_PURE_NUM = re.compile(r'^[0-9eE.+\-]+$')
+# Matches expressions that are safe to eval: digits, operators, parens, dots, sci notation
+_RE_SAFE_EXPR = re.compile(r'^[0-9eE.+\-*/() ]+$')
+
+
+def _try_eval_expr(rhs, known_params):
+    """
+    Try to evaluate a Fortran parameter RHS as a Python float.
+    Substitutes previously resolved numeric params by name, then evals.
+    Returns float on success, None on failure (unknown symbol, bad syntax, etc.).
+    """
+    expr = rhs
+    # Substitute known numeric symbols longest-name-first to avoid partial matches
+    for sym, val in sorted(known_params.items(), key=lambda kv: -len(kv[0])):
+        if isinstance(val, float) and sym in expr:
+            expr = re.sub(r'\b' + re.escape(sym) + r'\b', repr(val), expr)
+    # Only eval if the result is a safe arithmetic expression
+    if not _RE_SAFE_EXPR.match(expr):
+        return None
+    try:
+        return float(eval(expr, {"__builtins__": {}}))  # noqa: S307
+    except Exception:
+        return None
+
 
 # user_nl_cam key=value pattern
 _RE_NL_STR = re.compile(r"(\w+)\s*=\s*'([^']+)'")
@@ -58,13 +80,12 @@ def parse_exoplanet_mod(path):
             m = _RE_REAL.match(line)
             if m:
                 name = m.group(1)
-                rhs = _RE_KIND.sub('', m.group(2)).strip()
-                # strip trailing whitespace that was before inline comment
-                rhs = rhs.rstrip()
-                if _RE_PURE_NUM.match(rhs):
-                    params[name] = float(rhs)
+                rhs = _RE_KIND.sub('', m.group(2)).strip().rstrip()
+                val = _try_eval_expr(rhs, params)
+                if val is not None:
+                    params[name] = val
                 else:
-                    # expression (exo_n2bar, exo_pstd, exo_sday formula, etc.)
+                    # unevaluable expression — keep raw for caller inspection
                     params[name] = None
                     params[name + '_expr'] = rhs
     return params
