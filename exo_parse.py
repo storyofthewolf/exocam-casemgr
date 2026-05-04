@@ -7,6 +7,12 @@ import os
 import re
 import xml.etree.ElementTree as ET
 
+try:
+    import netCDF4 as _nc4
+    _HAVE_NC4 = True
+except ImportError:
+    _HAVE_NC4 = False
+
 # Fortran parameter regexes
 _RE_REAL = re.compile(
     r'^\s+(?:real\(r8\)|integer),\s*public,\s*parameter\s*::\s*(\w+)\s*=\s*([^!\n]+)',
@@ -266,3 +272,20 @@ def pressure_str_to_bar(s):
         return float(s.replace('bar', '').strip())
     except ValueError:
         return None
+
+
+def read_solar_nw(path):
+    """
+    Return the 'nw' dimension size from a NetCDF solar file, or None if
+    the file doesn't exist, isn't readable, or has no 'nw' dimension.
+    Requires netCDF4; returns None gracefully if the library is absent.
+    """
+    if not _HAVE_NC4 or not os.path.exists(path):
+        return None
+    try:
+        with _nc4.Dataset(path, 'r') as ds:
+            if 'nw' in ds.dimensions:
+                return len(ds.dimensions['nw'])
+    except Exception:
+        pass
+    return None

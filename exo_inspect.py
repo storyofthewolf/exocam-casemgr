@@ -19,7 +19,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(__file__))
 from exo_parse import (
     parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_docn_som,
-    parse_cam_config_opts, compute_pstd_bar, pressure_str_to_bar
+    parse_cam_config_opts, compute_pstd_bar, pressure_str_to_bar, read_solar_nw
 )
 
 SOLAR_STEM_MAP = {
@@ -27,6 +27,14 @@ SOLAR_STEM_MAP = {
     'n84equiv':   'n84',
     'n28archean': 'n28',
     'n42h2o':     'n42',
+}
+
+# Expected nw dimension in the solar NetCDF file for each exort_pkg
+SOLAR_NW_MAP = {
+    'n68equiv':   68,
+    'n84equiv':   84,
+    'n28archean': 28,
+    'n42h2o':     42,
 }
 
 _REGISTRY_GROUPS = [
@@ -200,13 +208,24 @@ def check_consistency(meta):
     # solar file / exort package
     solar = meta.get('exo_solar_file') or ''
     exort_pkg = meta.get('exort_pkg')
-    if solar and exort_pkg and exort_pkg in SOLAR_STEM_MAP:
-        stem = SOLAR_STEM_MAP[exort_pkg]
-        if stem not in os.path.basename(solar):
-            warnings.append(
-                f"solar file mismatch: exort_pkg={exort_pkg} expects stem '{stem}' "
-                f"but solar file is {os.path.basename(solar)}"
-            )
+    if solar and exort_pkg and exort_pkg in SOLAR_NW_MAP:
+        expected_nw = SOLAR_NW_MAP[exort_pkg]
+        actual_nw = read_solar_nw(solar)
+        if actual_nw is not None:
+            # preferred check: read nw dimension directly from the file
+            if actual_nw != expected_nw:
+                warnings.append(
+                    f"solar file mismatch: exort_pkg={exort_pkg} expects nw={expected_nw} "
+                    f"but {os.path.basename(solar)} has nw={actual_nw}"
+                )
+        else:
+            # file not accessible (remote path, missing) — fall back to stem check
+            stem = SOLAR_STEM_MAP[exort_pkg]
+            if stem not in os.path.basename(solar):
+                warnings.append(
+                    f"solar file mismatch: exort_pkg={exort_pkg} expects stem '{stem}' "
+                    f"but solar file is {os.path.basename(solar)} (nw unreadable)"
+                )
 
     return warnings
 
