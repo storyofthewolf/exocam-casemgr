@@ -10,6 +10,13 @@ Paths are read from config_registry.yaml (paths.caseroot, paths.rundir,
 paths.archive, paths.long_term). Override any path with --caseroot,
 --rundir, --archive, or --long-term.
 
+Cases are discovered by scanning those directories on disk — no separate
+registry file is required.
+
+ALL DESTRUCTIVE SUBCOMMANDS ARE NON-DESTRUCTIVE BY DEFAULT.
+Add --execute to actually perform deletions or moves. Without --execute,
+every command only reports what it would do.
+
 SUBCOMMANDS
 -----------
   report              Show disk usage per case across all three areas (default)
@@ -160,10 +167,10 @@ def restart_sets(case, paths):
 # Confirmation helper
 # ---------------------------------------------------------------------------
 
-def confirm(prompt, dry_run):
+def confirm(prompt, execute):
     """Return True if the action should proceed."""
-    if dry_run:
-        print(f"  [dry-run] would: {prompt}")
+    if not execute:
+        print(f"  [preview] would: {prompt}")
         return False
     answer = input(f"  Confirm: {prompt} [yes/N]: ").strip().lower()
     return answer == 'yes'
@@ -247,13 +254,13 @@ def cmd_purge_bld(args, paths):
                         obj_files.append(os.path.join(dirpath, f))
             obj_size = sum(os.path.getsize(f) for f in obj_files)
             action = f"delete {len(obj_files)} object files ({fmt_size(obj_size)}) from {bld}"
-            if confirm(action, args.dry_run):
+            if confirm(action, args.execute):
                 for f in obj_files:
                     os.remove(f)
                 print(f"  {case}: removed {len(obj_files)} object files ({fmt_size(obj_size)} freed)")
         else:
             action = f"delete entire bld/ directory ({fmt_size(size)}) for {case}"
-            if confirm(action, args.dry_run):
+            if confirm(action, args.execute):
                 shutil.rmtree(bld)
                 print(f"  {case}: bld/ deleted ({fmt_size(size)} freed)")
 
@@ -302,7 +309,7 @@ def cmd_purge_restarts(args, paths):
               f"purging {len(to_delete)} ({fmt_size(delete_size)}): {delete_names}")
 
         action = f"delete {len(to_delete)} restart set(s) ({fmt_size(delete_size)}) for {case}"
-        if confirm(action, args.dry_run):
+        if confirm(action, args.execute):
             for _, path in to_delete:
                 shutil.rmtree(path)
             print(f"    deleted {len(to_delete)} sets ({fmt_size(delete_size)} freed)")
@@ -320,8 +327,8 @@ def cmd_purge_hist(args, paths):
     to specific components (e.g. --models atm lnd). The rest/ directory is
     never touched by this command.
 
-    WARNING: history files are not recoverable once deleted. Use --dry-run
-    to review what would be removed before committing.
+    WARNING: history files are not recoverable once deleted. Without --execute
+    this command only previews what would be removed.
     """
     archive = paths.get('archive', '')
     if not archive:
@@ -354,7 +361,7 @@ def cmd_purge_hist(args, paths):
             print(f"    {hist}  ({fmt_size(size)})")
 
         action = f"DELETE {fmt_size(case_total)} of history files for {case}"
-        if confirm(action, args.dry_run):
+        if confirm(action, args.execute):
             for hist, _ in targets:
                 shutil.rmtree(hist)
                 os.makedirs(hist)  # recreate empty dir so archive structure stays intact
@@ -404,7 +411,7 @@ def cmd_move_hist(args, paths):
             print(f"  {case}/{model}/hist: {len(files)} file(s), {fmt_size(total)}")
             print(f"    -> {dst}")
             action = f"move {len(files)} file(s) ({fmt_size(total)}) to {dst}"
-            if confirm(action, args.dry_run):
+            if confirm(action, args.execute):
                 os.makedirs(dst, exist_ok=True)
                 for f in files:
                     shutil.move(os.path.join(src, f), os.path.join(dst, f))
@@ -464,7 +471,7 @@ def cmd_move_case(args, paths):
             print(f"    {src}  ->  {dst}  ({fmt_size(size)})")
 
         action = f"move {fmt_size(total)} for case '{case}' to long-term storage"
-        if confirm(action, args.dry_run):
+        if confirm(action, args.execute):
             for src, dst, _ in moves:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.move(src, dst)
@@ -530,8 +537,8 @@ def build_parser():
                        help='Case name(s) to purge bld/ for (default: all)')
     p_bld.add_argument('--logs-only', action='store_true',
                        help='Remove only .o/.mod binary files, keep log files')
-    p_bld.add_argument('--dry-run', action='store_true',
-                       help='Show what would be deleted without deleting anything')
+    p_bld.add_argument('--execute', action='store_true',
+                       help='Actually perform deletions (default is preview only)')
 
     # ---- purge-restarts ----
     p_rest = sub.add_parser(
@@ -544,8 +551,8 @@ def build_parser():
                         help='Case name(s) to trim restart sets for (default: all)')
     p_rest.add_argument('--keep', type=int, default=1, metavar='N',
                         help='Number of most-recent restart sets to keep (default: 1)')
-    p_rest.add_argument('--dry-run', action='store_true',
-                        help='Show what would be deleted without deleting anything')
+    p_rest.add_argument('--execute', action='store_true',
+                        help='Actually perform deletions (default is preview only)')
 
     # ---- purge-hist ----
     p_hist = sub.add_parser(
@@ -560,8 +567,8 @@ def build_parser():
                         choices=ARCHIVE_MODELS,
                         help=f'Restrict to these model components '
                              f'(choices: {", ".join(ARCHIVE_MODELS)})')
-    p_hist.add_argument('--dry-run', action='store_true',
-                        help='Show what would be deleted without deleting anything')
+    p_hist.add_argument('--execute', action='store_true',
+                        help='Actually perform deletions (default is preview only)')
 
     # ---- move-hist ----
     p_mvhist = sub.add_parser(
@@ -576,8 +583,8 @@ def build_parser():
                           choices=ARCHIVE_MODELS,
                           help=f'Restrict to these model components '
                                f'(choices: {", ".join(ARCHIVE_MODELS)})')
-    p_mvhist.add_argument('--dry-run', action='store_true',
-                          help='Show what would be moved without moving anything')
+    p_mvhist.add_argument('--execute', action='store_true',
+                          help='Actually perform moves (default is preview only)')
 
     # ---- move-case ----
     p_mvcase = sub.add_parser(
@@ -594,8 +601,8 @@ def build_parser():
                           help='Skip moving rundir/<case>')
     p_mvcase.add_argument('--no-archive', action='store_true',
                           help='Skip moving archive/<case>')
-    p_mvcase.add_argument('--dry-run', action='store_true',
-                          help='Show what would be moved without moving anything')
+    p_mvcase.add_argument('--execute', action='store_true',
+                          help='Actually perform moves (default is preview only)')
 
     return parser
 
