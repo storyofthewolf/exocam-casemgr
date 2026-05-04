@@ -192,8 +192,9 @@ def cmd_report(args, paths):
         return
 
     col_w = max(len(c) for c in cases) + 2
-    header = (f"{'CASE':<{col_w}} {'CASEDIR':>9} {'BLD':>9} {'RUN':>9} "
-              f"{'HIST':>9} {'LOGS':>7} {'REST':>9} {'TOTAL':>9}")
+    cw = 11  # data column width
+    header = (f"{'CASE':<{col_w}}  {'CASEDIR':>{cw}}  {'BLD':>{cw}}  {'RUN':>{cw}}  "
+              f"{'HIST':>{cw}}  {'LOGS':>{cw}}  {'REST':>{cw}}  {'TOTAL':>{cw}}")
     print(header)
     print('-' * len(header))
 
@@ -203,17 +204,17 @@ def cmd_report(args, paths):
         total = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
         for k in grand:
             grand[k] += sz[k]
-        print(f"{case:<{col_w}} {fmt_size(sz['casedir']):>9} {fmt_size(sz['bld']):>9} "
-              f"{fmt_size(sz['run']):>9} {fmt_size(sz['hist']):>9} "
-              f"{fmt_size(sz['logs']):>7} {fmt_size(sz['rest']):>9} "
-              f"{fmt_size(total):>9}")
+        print(f"{case:<{col_w}}  {fmt_size(sz['casedir']):>{cw}}  {fmt_size(sz['bld']):>{cw}}  "
+              f"{fmt_size(sz['run']):>{cw}}  {fmt_size(sz['hist']):>{cw}}  "
+              f"{fmt_size(sz['logs']):>{cw}}  {fmt_size(sz['rest']):>{cw}}  "
+              f"{fmt_size(total):>{cw}}")
 
     grand_total = sum(grand.values())
     print('-' * len(header))
-    print(f"{'TOTAL':<{col_w}} {fmt_size(grand['casedir']):>9} {fmt_size(grand['bld']):>9} "
-          f"{fmt_size(grand['run']):>9} {fmt_size(grand['hist']):>9} "
-          f"{fmt_size(grand['logs']):>7} {fmt_size(grand['rest']):>9} "
-          f"{fmt_size(grand_total):>9}")
+    print(f"{'TOTAL':<{col_w}}  {fmt_size(grand['casedir']):>{cw}}  {fmt_size(grand['bld']):>{cw}}  "
+          f"{fmt_size(grand['run']):>{cw}}  {fmt_size(grand['hist']):>{cw}}  "
+          f"{fmt_size(grand['logs']):>{cw}}  {fmt_size(grand['rest']):>{cw}}  "
+          f"{fmt_size(grand_total):>{cw}}")
 
 
 # ---------------------------------------------------------------------------
