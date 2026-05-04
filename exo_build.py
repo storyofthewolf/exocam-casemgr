@@ -434,7 +434,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         (f"./xmlchange CAM_CONFIG_OPTS="
          f"\"-nlev {nlev} -phys {phys}"
          + (f" {cloud_opts}" if cloud_opts else "")
-         + f" -usr_src ${{EXORT}}/ExoRT/3dmodels/src.cam.{exort_pkg}\""),
+         + f" -usr_src ${{EXORT}}/3dmodels/src.cam.{exort_pkg}\""),
         "",
         "# -----------------------------------------------------------",
         "# STEP 6: cesm_setup",
@@ -572,7 +572,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
             (f"./xmlchange CAM_CONFIG_OPTS="
              f"\"-nlev {nlev} -phys {phys}"
              + (f" {cloud_opts}" if cloud_opts else "")
-             + f" -usr_src ${{EXORT}}/ExoRT/3dmodels/src.cam.{exort_pkg}\""),
+             + f" -usr_src ${{EXORT}}/3dmodels/src.cam.{exort_pkg}\""),
         ]
     else:
         lines += ["# CAM_CONFIG_OPTS inherited from clone source — update if needed"]
