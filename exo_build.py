@@ -41,9 +41,9 @@ EXO_PARAMS = {
 }
 
 REQUIRED_FIELDS = ['config_type', 'exort_pkg', 'nlev', 'mach',
-                   'stop_option', 'stop_n', 'rest_n', 'ntasks_atm']
+                   'stop_option', 'stop_n', 'rest_n', 'ntasks']
 # Fields required for clone mode (config/compset/mach are inherited from the source case)
-REQUIRED_FIELDS_CLONE = ['clone_of', 'stop_option', 'stop_n', 'rest_n', 'ntasks_atm']
+REQUIRED_FIELDS_CLONE = ['clone_of', 'stop_option', 'stop_n', 'rest_n', 'ntasks']
 
 SOLAR_FILE_STEMS = {
     'n68equiv':   'n68',
@@ -419,10 +419,13 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         "# -----------------------------------------------------------",
         "# STEP 4: processor counts",
         "# -----------------------------------------------------------",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ATM -val {spec['ntasks_atm']}",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ICE -val {spec['ntasks_atm']}",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_LND -val {spec['ntasks_atm']}",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_OCN -val {spec['ntasks_atm']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ATM -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_LND -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ICE -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_OCN -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_GLC -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ROF -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_WAV -val {spec['ntasks']}",
         "",
         "# -----------------------------------------------------------",
         "# STEP 5: run length and CAM configuration",
@@ -553,10 +556,13 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         "# -----------------------------------------------------------",
         "# STEP 3: processor counts",
         "# -----------------------------------------------------------",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ATM -val {spec['ntasks_atm']}",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ICE -val {spec['ntasks_atm']}",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_LND -val {spec['ntasks_atm']}",
-        f"./xmlchange -file env_mach_pes.xml -id NTASKS_OCN -val {spec['ntasks_atm']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ATM -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_LND -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ICE -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_OCN -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_GLC -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_ROF -val {spec['ntasks']}",
+        f"./xmlchange -file env_mach_pes.xml -id NTASKS_WAV -val {spec['ntasks']}",
         "",
         "# -----------------------------------------------------------",
         "# STEP 4: run length and CAM configuration",

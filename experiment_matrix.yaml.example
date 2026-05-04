@@ -36,7 +36,7 @@ base:
   rest_n:       5
 
   # Processor counts
-  ntasks_atm:   126            # Milan chips on discover
+  ntasks:   126            # Milan chips on discover
 
   # -----------------------------------------------------------------------
   # Atmospheric composition  (all in bar)
@@ -160,7 +160,7 @@ cases:
     exo_o2bar:           0.0
     exo_n2bar_explicit:  9.0          # N2 = 9 bar; total = 10 bar
     nlev:                51           # must match IC file for 10bar/L51
-    # ntasks_atm:          512
+    # ntasks:          512
 
   # H2-dominated world, synchronous rotator
   - name: h2_sync_1360
