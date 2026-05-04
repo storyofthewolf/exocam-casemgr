@@ -249,7 +249,8 @@ def load_registry(path):
     return flat
 
 
-def write_registry(rows, path):
+def _rows_to_ordered(rows):
+    """Convert flat row dicts to the grouped structure used in YAML output."""
     ordered = []
     for row in rows:
         entry = {}
@@ -262,9 +263,12 @@ def write_registry(rows, path):
             if block:
                 entry[group] = block
         ordered.append(entry)
+    return {'cases': ordered}
 
+
+def write_registry(rows, path):
     with open(path, 'w') as f:
-        yaml.dump({'cases': ordered}, f,
+        yaml.dump(_rows_to_ordered(rows), f,
                   default_flow_style=False, allow_unicode=True, sort_keys=False)
     print(f"Registry written: {path}  ({len(rows)} cases)")
 
@@ -300,6 +304,8 @@ def main():
     parser.add_argument('--registry', default='cases.yaml', help='Output YAML path (default: cases.yaml)')
     parser.add_argument('--update', action='store_true',
                         help='Merge with existing registry instead of overwriting')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Print inspection results to screen without writing the registry')
     parser.add_argument('--config-registry', default=default_registry,
                         dest='config_registry',
                         help='Path to config_registry.yaml (default: config_registry.yaml next to this script)')
@@ -332,14 +338,20 @@ def main():
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
 
-    if args.update:
-        existing = load_registry(args.registry)
-        existing_by_name = {r['case_name']: r for r in existing}
-        for row in rows:
-            existing_by_name[row['case_name']] = row
-        rows = list(existing_by_name.values())
+    if args.dry_run:
+        # print full YAML to stdout, no file written
+        print(yaml.dump(_rows_to_ordered(rows),
+                        default_flow_style=False, allow_unicode=True, sort_keys=False),
+              end='')
+    else:
+        if args.update:
+            existing = load_registry(args.registry)
+            existing_by_name = {r['case_name']: r for r in existing}
+            for row in rows:
+                existing_by_name[row['case_name']] = row
+            rows = list(existing_by_name.values())
 
-    write_registry(rows, args.registry)
+        write_registry(rows, args.registry)
 
     # print summary table
     print(f"\n{'CASE':<45} {'CONFIG':<16} {'PSTD':>8} {'NLEV':>5}  WARNINGS")
