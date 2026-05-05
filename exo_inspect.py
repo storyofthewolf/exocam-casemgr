@@ -29,6 +29,16 @@ SOLAR_STEM_MAP = {
     'n42h2o':     'n42',
 }
 
+# Solar filename stem -> inferred exort_pkg (used when exort_pkg absent from env_build.xml,
+# i.e. RT source was copied into SourceMods directly). '_n68' maps to n68equiv* — n68h2o
+# is legacy and never used in recent runs, so the ambiguity is intentionally ignored.
+_SOLAR_STEM_TO_PKG = {
+    'n68':   'n68equiv',
+    'n84':   'n84equiv',
+    'n28':   'n28archean',
+    'n42':   'n42h2o',
+}
+
 # Expected nw dimension in the solar NetCDF file for each exort_pkg
 SOLAR_NW_MAP = {
     'n68equiv':   68,
@@ -159,6 +169,19 @@ def inspect_case(casedir):
     cam = parse_cam_config_opts(xml_path)
     row['nlev'] = cam.get('nlev')
     row['exort_pkg'] = cam.get('exort_pkg')
+
+    # If exort_pkg is absent (RT copied into SourceMods), infer from solar filename stem.
+    # Append '*' to signal custom SourceMods RT — user must verify file-by-file.
+    if not row['exort_pkg']:
+        solar = row.get('exo_solar_file') or ''
+        stem = os.path.splitext(os.path.basename(solar))[0]  # e.g. 'bt-settl_2600_..._n68'
+        for s, pkg in _SOLAR_STEM_TO_PKG.items():
+            if stem.endswith(f'_{s}') or f'_{s}.' in solar:
+                row['exort_pkg'] = pkg + '*'
+                break
+        if not row['exort_pkg']:
+            row['exort_pkg'] = 'custom_src'
+
     row['cloud_scheme'] = cam.get('cloud_scheme')
 
     warnings = check_consistency(row)

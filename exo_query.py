@@ -50,6 +50,13 @@ def load_registry(path):
     return rows
 
 
+def load_registry_raw(path):
+    """Load cases.yaml and return list of raw grouped entry dicts (preserves group structure)."""
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    return data.get('cases', [])
+
+
 # ---------------------------------------------------------------------------
 # Search helpers
 # ---------------------------------------------------------------------------
@@ -99,13 +106,13 @@ def cmd_search(args, rows):
 # Subcommand: show
 # ---------------------------------------------------------------------------
 
-def cmd_show(args, rows):
+def cmd_show(args, raw_entries):
     target = args.case_name
-    matches = [r for r in rows if r.get('case_name') == target]
+    matches = [e for e in raw_entries if (e.get('meta') or {}).get('case_name') == target]
     if not matches:
         sys.exit(f"ERROR: case '{target}' not found in registry.")
-    row = matches[0]
-    print(yaml.dump({target: row}, default_flow_style=False, sort_keys=False).rstrip())
+    print(yaml.dump({'cases': [matches[0]]}, Dumper=_NoAliasDumper,
+                    default_flow_style=False, sort_keys=False).rstrip())
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +339,7 @@ def main():
     if args.command == 'search':
         cmd_search(args, rows)
     elif args.command == 'show':
-        cmd_show(args, rows)
+        cmd_show(args, load_registry_raw(args.registry))
     elif args.command == 'export':
         cmd_export(args, rows, args.config_registry)
 
