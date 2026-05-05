@@ -32,6 +32,7 @@ Run any subcommand with --help for full options, e.g.:
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import yaml
@@ -320,6 +321,15 @@ def cmd_purge_restarts(args, paths):
 # Subcommand: purge-hist
 # ---------------------------------------------------------------------------
 
+_RE_HIST_YEAR = re.compile(r'\.(\d{4})-\d{2}')
+
+
+def _hist_year(filename):
+    """Extract model year from a hist filename, e.g. '0050' from case.cam.h0.0050-01.nc."""
+    m = _RE_HIST_YEAR.search(filename)
+    return m.group(1) if m else None
+
+
 def cmd_purge_hist(args, paths):
     """
     Delete history NetCDF files from archive/<case>/<model>/hist/.
@@ -327,6 +337,10 @@ def cmd_purge_hist(args, paths):
     By default all model components are targeted. Use --models to restrict
     to specific components (e.g. --models atm lnd). The rest/ directory is
     never touched by this command.
+
+    Use --keep-years N to retain files from the N most recent model years
+    (cutoff determined across all targeted components jointly). Files whose
+    year cannot be parsed from the filename are always kept.
 
     WARNING: history files are not recoverable once deleted. Without --execute
     this command only previews what would be removed.
@@ -342,30 +356,71 @@ def cmd_purge_hist(args, paths):
         return
 
     for case in cases:
-        case_total = 0
-        targets = []
+        # Collect all files across targeted components
+        hist_files = {}  # model -> list of filenames
         for model in models:
             hist = os.path.join(archive, case, model, 'hist')
             if not os.path.isdir(hist):
                 continue
-            size = dir_size_bytes(hist)
-            if size > 0:
-                targets.append((hist, size))
-                case_total += size
+            hist_files[model] = [f for f in os.listdir(hist)
+                                  if os.path.isfile(os.path.join(hist, f))]
 
-        if not targets:
+        if not hist_files:
             print(f"  {case}: no hist/ directories found, skipping")
             continue
 
-        print(f"  {case}: {len(targets)} hist/ director(ies), {fmt_size(case_total)} total")
-        for hist, size in targets:
-            print(f"    {hist}  ({fmt_size(size)})")
+        # Determine per-file keep/delete when --keep-years is set
+        if args.keep_years is not None:
+            all_years = set()
+            for files in hist_files.values():
+                for f in files:
+                    y = _hist_year(f)
+                    if y:
+                        all_years.add(y)
+            if all_years:
+                cutoff_year = sorted(all_years)[-args.keep_years] if args.keep_years < len(all_years) else min(all_years)
+                keep_years  = sorted(all_years)[-args.keep_years:]
+            else:
+                cutoff_year = None
+                keep_years  = []
+            print(f"  {case}: keeping years {keep_years if keep_years else '(none parsed)'}, "
+                  f"deleting everything before year {cutoff_year}")
+
+        case_total = 0
+        targets = []  # list of (hist_dir, [files_to_delete], delete_size)
+        for model, files in hist_files.items():
+            hist = os.path.join(archive, case, model, 'hist')
+            if args.keep_years is not None:
+                to_delete = []
+                for f in files:
+                    y = _hist_year(f)
+                    if y is None:
+                        continue  # unparseable — always keep
+                    if y not in keep_years:
+                        to_delete.append(f)
+            else:
+                to_delete = list(files)
+
+            if not to_delete:
+                continue
+            size = sum(os.path.getsize(os.path.join(hist, f)) for f in to_delete)
+            targets.append((hist, to_delete, size))
+            case_total += size
+
+        if not targets:
+            print(f"  {case}: nothing to delete, skipping")
+            continue
+
+        print(f"  {case}: {sum(len(t[1]) for t in targets)} file(s) to delete, "
+              f"{fmt_size(case_total)} total")
+        for hist, files, size in targets:
+            print(f"    {hist}  ({len(files)} file(s), {fmt_size(size)})")
 
         action = f"DELETE {fmt_size(case_total)} of history files for {case}"
         if confirm(action, args.execute):
-            for hist, _ in targets:
-                shutil.rmtree(hist)
-                os.makedirs(hist)  # recreate empty dir so archive structure stays intact
+            for hist, files, _ in targets:
+                for f in files:
+                    os.remove(os.path.join(hist, f))
             print(f"    deleted ({fmt_size(case_total)} freed)")
 
 
@@ -568,6 +623,10 @@ def build_parser():
                         choices=ARCHIVE_MODELS,
                         help=f'Restrict to these model components '
                              f'(choices: {", ".join(ARCHIVE_MODELS)})')
+    p_hist.add_argument('--keep-years', type=int, default=None, metavar='N',
+                        dest='keep_years',
+                        help='Keep files from the N most recent model years; '
+                             'cutoff is shared across all targeted components')
     p_hist.add_argument('--execute', action='store_true',
                         help='Actually perform deletions (default is preview only)')
 
