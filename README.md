@@ -23,6 +23,7 @@ Python 3.8+.
 | `exo_inspect.py` | CASE directory scanner → YAML registry |
 | `exo_parse.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `exo_data.py` | Data management — disk usage reporting, purging, and moving data |
+| `exo_query.py` | Registry search and experiment matrix export |
 | `run_builds.sh` | Batch runner for all `*_build.sh` scripts in a directory |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
 | `experiment_matrix.yaml.example` | Annotated template for writing experiment matrices |
@@ -58,7 +59,7 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 
 | Group | Keys |
 |---|---|
-| CESM config | `config_type`, `exort_pkg`, `cloud_scheme`, `nlev`, `mach`, `stop_*`, `rest_n`, `ntasks` |
+| CESM config | `config_type`, `exort_pkg`, `cloud_scheme`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks` |
 | HPC batch | `account` (SLURM charge account), `job_name` (short queue label, per-case) |
 | Atmospheric composition | `exo_co2bar`, `exo_ch4bar`, `exo_h2bar`, `exo_o2bar`, `exo_c2h6bar`, `exo_nh3bar`, `exo_cobar`, `exo_n2bar_explicit` |
 | Stellar forcing | `exo_scon`, `exo_solar_file` |
@@ -110,18 +111,71 @@ bash run_builds.sh scripts/
 
 #### Clone mode
 
-When only a few parameters differ from an existing case, use `clone_of` instead of `create_newcase`:
+When branching from a completed case, put `clone` in `base` so all cases share the same source:
 
 ```yaml
+base:
+  clone: my_completed_base_case
+  stop_option: nyears
+  stop_n: 20
+  rest_n: 5
+  resubmit: 4
+  ntasks: 126
+
 cases:
-  - name: co2_modern_2x_scon
-    clone_of:  co2_modern     # source case name
-    exo_scon:  2720.0
+  - name: my_case_2x_co2
+    exo_co2bar: 0.0008
+  - name: my_case_4x_co2
+    exo_co2bar: 0.0016
 ```
 
-The generated script uses `create_clone`, skipping the SourceMods/namelist copy step since those are inherited from the source. `config_type`, `exort_pkg`, and `nlev` are optional for clone cases — if supplied, the IC file lookup and `CAM_CONFIG_OPTS` update are included; otherwise they are inherited from the source.
+The generated script uses `create_clone`, inheriting SourceMods, namelists, and all CESM configuration from the source case. The `exoplanet_mod.F90` template is taken from the clone source's SourceMods rather than the repo default, so any custom parameter baselines are preserved. Only the parameters explicitly listed in the matrix are patched. `config_type`, `exort_pkg`, and `nlev` are optional — supply them to enable IC file lookup and `CAM_CONFIG_OPTS` update; omit them to inherit everything from the source.
 
-### 4. Inspect existing cases
+#### Generating a clone matrix with exo_query
+
+```bash
+# Bare export (default when --clone is used) — only run config in base, stubs in cases
+python exo_query.py export my_base_case -o sweep.yaml \
+    --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 \
+    --resubmit 4 --ntasks 126 --account s2427
+
+# Full export — all scientific parameters in base for reference
+python exo_query.py export my_base_case -o sweep.yaml \
+    --clone my_base_case --full --stop-option nyears --stop-n 20 --rest-n 5 \
+    --resubmit 4 --ntasks 126
+```
+
+Then add per-case entries with only the parameters that differ from the clone source.
+
+### 4. Search the registry and export experiment matrices
+
+```bash
+# List all cases
+python exo_query.py search
+
+# Filter by metadata
+python exo_query.py search --name thai
+python exo_query.py search --config-type cam_land_fv --nlev 51
+python exo_query.py search --exort-pkg n68equiv
+
+# Show all parameters for one case
+python exo_query.py show ExoCAM_thai_ben1_L51_n68equiv
+
+# Export a full matrix from one or more registry cases
+python exo_query.py export case_a case_b -o sweep.yaml \
+    --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126 --account s2427
+
+# Export a bare clone matrix (minimal base, stubs per case)
+python exo_query.py export my_base_case -o clone_sweep.yaml \
+    --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 \
+    --resubmit 4 --ntasks 126 --account s2427
+```
+
+`mach` and `resubmit` are read automatically from `config_registry.yaml` if not supplied on the command line. Any required fields left blank are written as empty strings and flagged with a `# FIXME` header at the top of the output file.
+
+For multi-case exports, shared parameters are automatically factored into `base`; only differing values appear per-case.
+
+### 6. Inspect existing cases
 
 ```bash
 # Bare case name — resolved relative to caseroot in config_registry.yaml
@@ -180,7 +234,7 @@ cases:
 
 Consistency warnings are generated for pressure mismatches, level mismatches, and solar file / exort package mismatches. When `netCDF4` is installed and the solar file is accessible, the `nw` spectral dimension is read directly from the file for a more reliable check; otherwise the tool falls back to a filename stem check.
 
-### 5. Manage disk space
+### 7. Manage disk space
 
 ```bash
 # Show disk usage across cases/, rundir/, and archive/ (default when called with no args)
@@ -209,7 +263,7 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 | `report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case |
 | `purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
-| `purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Use `--models` to target specific components. |
+| `purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Use `--models` to target specific components. Use `--keep-years N` to retain the N most recent model years (cutoff shared across all targeted components). |
 | `move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
 | `move-case` | Move an entire case tree (cases + rundir + archive) to long-term storage. Use `--no-casedir`, `--no-rundir`, or `--no-archive` to skip areas. |
 

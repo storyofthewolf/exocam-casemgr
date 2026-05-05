@@ -9,6 +9,7 @@
 # level keys are integers matching the L<N> in IC filenames and -nlev in CAM_CONFIG_OPTS
 
 machine: discover
+resubmit: 1
 
 paths:
   cesm_scripts: /gpfsm/dnb33/etwolf/models/cesm1_2_1/scripts

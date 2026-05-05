@@ -30,6 +30,11 @@ base:
   nlev:         40             # must match L<N> in IC filename and -nlev in CAM_CONFIG_OPTS
   mach:         discover       # CESM machine name
 
+  # Clone mode — uncomment to build all cases via create_clone from a single source.
+  # config_type, exort_pkg, nlev are optional; include them to enable IC file lookup
+  # and CAM_CONFIG_OPTS update; omit to inherit everything from the source case.
+  # clone: my_completed_base_case
+
   # Run length (xmlchange)
   stop_option:  nyears
   stop_n:       20
@@ -143,11 +148,12 @@ cases:
     job_name:   co2mod
 
   # Clone example — create_clone copies SourceMods/namelists from an existing case.
-  # Use when only a few parameters differ from a completed run.
+  # Typically clone belongs in base so all cases share the same source.
   # config_type, exort_pkg, nlev are optional (inherited from clone source);
   # supply them only if you want the IC file lookup and CAM_CONFIG_OPTS update.
+  # Per-case clone is supported but unusual — use it only when cases clone
+  # from different sources.
   - name: co2_modern_2x_scon
-    clone_of:   co2_modern
     exo_scon:   2720.0
 
   - name: co2_1x

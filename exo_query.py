@@ -143,6 +143,19 @@ _BASE_FIELD_ORDER = [
     'carma_params', 'volc_params',
 ]
 
+# Fields stripped from base in --bare mode (atmosphere, geophysical, model options, special)
+_BARE_STRIP_KEYS = {
+    'exo_co2bar', 'exo_ch4bar', 'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar',
+    'exo_h2bar', 'exo_o2bar', 'exo_scon', 'exo_solar_file',
+    'exo_surface_gravity', 'exo_planet_radius',
+    'exo_ndays', 'exo_porb', 'exo_sday', 'exo_eccen', 'exo_obliq',
+    'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
+    'do_exo_gw', 'do_exo_simplevolc', 'exo_convect_plim', 'exo_rad_step',
+    'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
+    'finidat', 'fsurdat', 'som_pop_frc_file', 'ncdata_override',
+    'carma_params', 'volc_params',
+}
+
 # Registry keys not forwarded to the matrix
 _SKIP_KEYS = {
     'case_name', 'casedir', 'inspect_date',
@@ -163,26 +176,43 @@ _KEY_RENAMES = {
 _KEY_RENAMES_REV = {v: k for k, v in _KEY_RENAMES.items()}
 
 
-def _row_to_base(row):
-    """Convert a flat registry row to a matrix base dict."""
+def _row_to_base(row, bare=False):
+    """Convert a flat registry row to a matrix base dict.
+
+    bare=True strips atmosphere, geophysical, model_options, and special fields,
+    leaving only CESM config and run/machine fields.
+    """
+    skip = _SKIP_KEYS | (_BARE_STRIP_KEYS if bare else set())
     base = {}
     # Build in _BASE_FIELD_ORDER first (controls key order in output)
     seen = set()
     for field in _BASE_FIELD_ORDER:
+        if bare and field in _BARE_STRIP_KEYS:
+            continue
         reg_key = _KEY_RENAMES_REV.get(field, field)
-        if reg_key in row and row[reg_key] is not None and reg_key not in _SKIP_KEYS:
+        if reg_key in row and row[reg_key] is not None and reg_key not in skip:
             base[field] = row[reg_key]
             seen.add(reg_key)
-        elif field in row and row[field] is not None and field not in _SKIP_KEYS:
+        elif field in row and row[field] is not None and field not in skip:
             base[field] = row[field]
             seen.add(field)
     # Append any remaining keys not in the ordered list
     for k, v in row.items():
-        if k in _SKIP_KEYS or k in seen or v is None:
+        if k in skip or k in seen or v is None:
             continue
         out_key = _KEY_RENAMES.get(k, k)
         base[out_key] = v
     return base
+
+
+def _load_registry_defaults(config_registry_path):
+    """Read machine name and resubmit default from config_registry.yaml."""
+    try:
+        with open(config_registry_path) as f:
+            data = yaml.safe_load(f) or {}
+        return data.get('machine'), data.get('resubmit')
+    except (OSError, yaml.YAMLError):
+        return None, None
 
 
 def cmd_export(args, rows, config_registry_path):
@@ -194,16 +224,21 @@ def cmd_export(args, rows, config_registry_path):
             sys.exit(f"ERROR: case '{name}' not found in registry.")
         matched[name] = hits[0]
 
+    # bare mode: default True when --clone is set, False otherwise; --full overrides
+    clone = getattr(args, 'clone', None)
+    full  = getattr(args, 'full',  False)
+    bare  = bool(clone) and not full
+
     if len(matched) == 1:
         # Single case: put everything in base, one stub entry in cases
         row  = next(iter(matched.values()))
         name = next(iter(matched.keys()))
-        base = _row_to_base(row)
+        base = _row_to_base(row, bare=bare)
         cases_list = [{'name': name}]
     else:
         # Multiple cases: compute common base, per-case overrides
         all_rows = list(matched.values())
-        all_bases = [_row_to_base(r) for r in all_rows]
+        all_bases = [_row_to_base(r, bare=bare) for r in all_rows]
 
         # Keys with identical values across all cases go in base
         all_keys = set(k for b in all_bases for k in b)
@@ -222,6 +257,38 @@ def cmd_export(args, rows, config_registry_path):
                     entry[k] = v
             cases_list.append(entry)
 
+    # --- inject clone source into base if provided ---
+    if clone:
+        base['clone'] = clone
+
+    # --- inject required run/machine fields into base ---
+    # mach and resubmit: from config_registry.yaml if not overridden on CLI
+    reg_mach, reg_resubmit = _load_registry_defaults(config_registry_path)
+    mach     = getattr(args, 'mach',     None) or reg_mach
+    resubmit = getattr(args, 'resubmit', None)
+    if resubmit is None:
+        resubmit = reg_resubmit
+    base['mach']        = mach        or ''
+    base['stop_option'] = getattr(args, 'stop_option', None) or ''
+    base['stop_n']      = getattr(args, 'stop_n',      None) or ''
+    base['rest_n']      = getattr(args, 'rest_n',      None) or ''
+    base['resubmit']    = resubmit    if resubmit is not None else ''
+    base['ntasks']      = getattr(args, 'ntasks',      None) or ''
+    account             = getattr(args, 'account',     None) or ''
+    if account:
+        base['account'] = account
+
+    # collect any fields left blank so we can warn the user
+    _REQUIRED_LABELS = {
+        'mach':        'mach          — CESM machine name (e.g. discover)',
+        'stop_option': 'stop_option   — run length unit (e.g. nyears)',
+        'stop_n':      'stop_n        — run length value (e.g. 20)',
+        'rest_n':      'rest_n        — restart interval (e.g. 5)',
+        'resubmit':    'resubmit      — number of automatic resubmissions (e.g. 1)',
+        'ntasks':      'ntasks        — processor count (e.g. 126)',
+    }
+    missing = [label for key, label in _REQUIRED_LABELS.items() if not base.get(key)]
+
     matrix = {
         'meta': {
             'description': '',
@@ -234,12 +301,29 @@ def cmd_export(args, rows, config_registry_path):
         'cases': cases_list,
     }
 
-    out_text = _dump_matrix(matrix)
+    yaml_text = _dump_matrix(matrix)
+
+    if missing:
+        warning = (
+            "# ============================================================\n"
+            "# FIXME: the following required fields are blank.\n"
+            "# Fill them in before running exo_build.py.\n"
+            "#\n"
+            + "".join(f"#   {label}\n" for label in missing)
+            + "# ============================================================\n\n"
+        )
+        out_text = warning + yaml_text
+    else:
+        out_text = yaml_text
 
     if args.output:
         with open(args.output, 'w') as f:
             f.write(out_text)
-        print(f"Wrote {args.output} ({len(cases_list)} case(s))")
+        if missing:
+            print(f"Wrote {args.output} ({len(cases_list)} case(s)) — "
+                  f"WARNING: {len(missing)} required field(s) need values (see FIXME header)")
+        else:
+            print(f"Wrote {args.output} ({len(cases_list)} case(s))")
     else:
         print(out_text)
 
@@ -312,10 +396,30 @@ def build_parser():
                           help='Exact case name(s) to export')
     p_export.add_argument('-o', '--output', metavar='PATH',
                           help='Output file path (default: print to stdout)')
+    p_export.add_argument('--clone', metavar='CASE_NAME',
+                          help='Source case to clone; written as clone: in base')
+    p_export.add_argument('--full', action='store_true',
+                          help='When used with --clone, include all scientific parameters in '
+                               'base instead of the default bare (clone-source-inherits) output')
     p_export.add_argument('--config-registry', dest='config_registry',
                           default=DEFAULT_CONFIG, metavar='PATH',
                           help='config_registry path written into the matrix '
                                f'(default: {DEFAULT_CONFIG})')
+    p_export.add_argument('--mach', metavar='NAME',
+                          help='CESM machine name (default: read from config_registry.yaml)')
+    p_export.add_argument('--stop-option', dest='stop_option', metavar='STR',
+                          help='Run length unit, e.g. nyears or ndays')
+    p_export.add_argument('--stop-n', dest='stop_n', type=int, metavar='N',
+                          help='Run length value')
+    p_export.add_argument('--rest-n', dest='rest_n', type=int, metavar='N',
+                          help='Restart write interval')
+    p_export.add_argument('--resubmit', type=int, metavar='N',
+                          help='Number of automatic resubmissions '
+                               '(default: read from config_registry.yaml)')
+    p_export.add_argument('--ntasks', type=int, metavar='N',
+                          help='Processor count')
+    p_export.add_argument('--account', metavar='STR',
+                          help='SLURM charge account (#SBATCH --account)')
 
     return parser
 

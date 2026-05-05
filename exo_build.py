@@ -41,9 +41,9 @@ EXO_PARAMS = {
 }
 
 REQUIRED_FIELDS = ['config_type', 'exort_pkg', 'nlev', 'mach',
-                   'stop_option', 'stop_n', 'rest_n', 'ntasks']
+                   'stop_option', 'stop_n', 'rest_n', 'resubmit', 'ntasks']
 # Fields required for clone mode (config/compset/mach are inherited from the source case)
-REQUIRED_FIELDS_CLONE = ['clone_of', 'stop_option', 'stop_n', 'rest_n', 'ntasks']
+REQUIRED_FIELDS_CLONE = ['clone', 'stop_option', 'stop_n', 'rest_n', 'resubmit', 'ntasks']
 
 SOLAR_FILE_STEMS = {
     'n68equiv':   'n68',
@@ -134,7 +134,7 @@ def validate_case(spec, registry):
     """Return list of error strings. Empty list = valid."""
     errors = []
 
-    if spec.get('clone_of'):
+    if spec.get('clone'):
         for field in REQUIRED_FIELDS_CLONE:
             if field not in spec:
                 errors.append(f"missing required field: {field}")
@@ -465,6 +465,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         f"./xmlchange STOP_OPTION={spec['stop_option']}",
         f"./xmlchange STOP_N={spec['stop_n']}",
         f"./xmlchange REST_N={spec['rest_n']}",
+        f"./xmlchange RESUBMIT={spec['resubmit']}",
         (f"./xmlchange CAM_CONFIG_OPTS="
          f"\"-nlev {nlev} -phys {phys}"
          + (f" {cloud_opts}" if cloud_opts else "")
@@ -507,7 +508,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         if k in spec.get('_paths_override', {}):
             paths[k] = spec['_paths_override'][k]
 
-    clone_of    = spec['clone_of']
+    clone_of    = spec['clone']
     config_type = spec.get('config_type', '')
     exort_pkg   = spec.get('exort_pkg', '')
     nlev        = spec.get('nlev', '?')
@@ -603,6 +604,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         f"./xmlchange STOP_OPTION={spec['stop_option']}",
         f"./xmlchange STOP_N={spec['stop_n']}",
         f"./xmlchange REST_N={spec['rest_n']}",
+        f"./xmlchange RESUBMIT={spec['resubmit']}",
     ]
 
     if exort_pkg and nlev != '?':
@@ -693,7 +695,7 @@ def main():
             errors_total += 1
             continue
 
-        is_clone = bool(spec.get('clone_of'))
+        is_clone = bool(spec.get('clone'))
 
         # IC file: required for newcase; optional for clone (only if config_type+nlev present)
         ic_file = None
@@ -712,7 +714,15 @@ def main():
         # find and render exoplanet_mod.F90 template
         config_type = spec.get('config_type', '')
         src_config = config_type.replace('_ne5', '').replace('_ne16', '')
-        if template_base and src_config:
+        if is_clone:
+            # use the source case's exoplanet_mod.F90 as the template so any
+            # custom parameter baselines in the clone source are preserved
+            caseroot  = paths_override.get('caseroot') or registry.get('paths', {}).get('caseroot', '')
+            clone_of  = spec.get('clone', '')
+            template_path = os.path.join(
+                caseroot, clone_of, 'SourceMods', 'src.share', 'exoplanet_mod.F90'
+            ) if caseroot and clone_of else None
+        elif template_base and src_config:
             template_path = os.path.join(
                 template_base, src_config,
                 'SourceMods', 'src.share', 'exoplanet_mod.F90'
@@ -726,7 +736,8 @@ def main():
             with open(staged_path, 'w') as f:
                 f.write(content)
         else:
-            print(f"  WARNING: template exoplanet_mod.F90 not found for {config_type or 'unknown'}; "
+            src_label = spec.get('clone') if is_clone else (config_type or 'unknown')
+            print(f"  WARNING: template exoplanet_mod.F90 not found for {src_label}; "
                   f"staging dir will be empty — edit manually")
 
         if is_clone:
