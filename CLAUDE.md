@@ -34,11 +34,18 @@ python exo_inspect.py my_case --registry cases.yaml --update
 
 # Disk usage report across all cases (default when called with no args)
 python exo_data.py
+python exo_data.py report                   # same; optional explicit subcommand
+python exo_data.py report my_case           # single case
 
 # Purge/move commands — preview by default, --execute to act
-python exo_data.py purge-bld --execute
-python exo_data.py purge-restarts --keep 1 --execute
-python exo_data.py move-hist --models atm --execute my_case
+# All destructive subcommands require explicit case name(s) — no --all flag.
+python exo_data.py purge-bld my_case --execute
+python exo_data.py purge-restarts my_case --keep 1 --execute
+python exo_data.py move-hist my_case --models atm --execute
+
+# Retire a case — must state intent explicitly with one of these flags:
+python exo_data.py archive-case my_case --purge-only --execute
+python exo_data.py archive-case my_case --keep-years 5 --keep-restarts --execute
 
 # Search and export from registry
 python exo_query.py search --config-type cam_land_fv --nlev 51
@@ -134,18 +141,25 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 
 ### `exo_data.py` — disk management tool
 
-Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on disk — no registry required. All destructive subcommands are **non-destructive by default**; `--execute` is required to make changes, and each case prompts `yes/N` before acting.
+Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on disk — no registry required. All destructive subcommands are **non-destructive by default**; `--execute` is required to make changes, and each case prompts `yes/no` before acting.
 
 - `discover_cases(paths)` — union of folder names across all three storage roots.
 - `case_sizes(case, paths)` — returns per-area byte counts: `casedir`, `bld`, `run`, `hist`, `logs`, `rest`.
 - `restart_sets(case, paths)` — returns sorted list of `(date_str, path)` for dated subdirs in `archive/<case>/rest/`.
-- `cmd_report` — prints aligned disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL.
+- `list_files_with_size(directory)` — returns `(filenames, total_bytes)` for files directly in a directory; used by hist/logs/move operations.
+- `_hist_keep_years_filter(archive_path, models, keep_n)` — partitions hist files into keep/delete lists based on the most-recent N model years; shared by `purge-hist` and `archive-case`.
+- `cmd_report` — prints aligned disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL. Read-only; bare invocation (no case names) reports all cases.
 - `cmd_purge_bld` — deletes `rundir/<case>/bld/`. `--logs-only` removes only `.o`/`.mod` files.
 - `cmd_purge_restarts` — trims old restart sets keeping the N most recent (`--keep N`, default 1).
-- `cmd_purge_hist` — deletes `archive/<case>/<model>/hist/` contents. `--models` restricts components.
+- `cmd_purge_hist` — deletes `archive/<case>/<model>/hist/` contents. `--models` restricts components. Requires `--keep-years N` or `--models` to prevent accidental total deletion.
+- `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty.
 - `cmd_move_case` — moves entire case tree to long-term storage. `--no-casedir/--no-rundir/--no-archive` skip areas.
+- `cmd_archive_case` — retires a case from cesm_scratch. Requires one of `--purge-only` (delete everything), `--keep-years N` (move recent hist to long-term first), or `--keep-restarts` (move most recent restart to long-term first). `--keep-years` and `--keep-restarts` may be combined; `--purge-only` is mutually exclusive with both. Uses `shutil.move` — no intermediate copy, so peak disk usage stays flat. Optional `--registry cases.yaml` warns if case not found in scientific registry.
+- `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in cases.yaml; used by `cmd_archive_case` for pre-flight warning only.
+- `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
+- `HIST_MODELS` — `ARCHIVE_MODELS` minus `'rest'`; the components with `hist/` and `logs/` subdirs.
 
 ### `config_registry.yaml` — machine-specific, must be edited per user
 

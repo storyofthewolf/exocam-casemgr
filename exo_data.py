@@ -19,12 +19,29 @@ every command only reports what it would do.
 
 SUBCOMMANDS
 -----------
-  report              Show disk usage per case across all three areas (default)
+  report              Show disk usage per case across all three areas (default;
+                      bare invocation reports on every discovered case)
   purge-bld           Delete build artifacts in rundir/<case>/bld/
   purge-restarts      Trim old restart sets in archive/<case>/rest/; keep last N
   purge-hist          Delete history NetCDF files in archive/<case>/<model>/hist/
+  purge-logs          Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
   move-hist           Move history files to long-term storage
   move-case           Move an entire case tree (cases + rundir + archive) to long-term storage
+  archive-case        Retire a case: optionally preserve hist/restarts to long-term, then delete all
+
+SAFETY
+------
+  All destructive subcommands require explicit case names. There is no --all
+  flag — bulk operations across all cases must be done by listing each case.
+  Bare invocation without case names will exit with an error.
+
+  purge-hist additionally requires --keep-years N or --models to prevent
+  accidental deletion of all history files.
+
+  archive-case requires one of --keep-years N, --keep-restarts, or
+  --purge-only to force stating intent explicitly.
+
+  report is read-only and safe to run bare — no case names means all cases.
 
 Run any subcommand with --help for full options, e.g.:
   python exo_data.py purge-bld --help
@@ -42,6 +59,7 @@ import yaml
 # ---------------------------------------------------------------------------
 
 ARCHIVE_MODELS = ['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']
+HIST_MODELS = [m for m in ARCHIVE_MODELS if m != 'rest']
 
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
@@ -57,9 +75,9 @@ def load_paths(args):
         paths = data.get('paths', {})
 
     overrides = {
-        'caseroot': getattr(args, 'caseroot', None),
-        'rundir':   getattr(args, 'rundir',   None),
-        'archive':  getattr(args, 'archive',  None),
+        'caseroot':  getattr(args, 'caseroot',  None),
+        'rundir':    getattr(args, 'rundir',    None),
+        'archive':   getattr(args, 'archive',   None),
         'long_term': getattr(args, 'long_term', None),
     }
     for k, v in overrides.items():
@@ -73,17 +91,25 @@ def load_paths(args):
 # ---------------------------------------------------------------------------
 
 def dir_size_bytes(path):
-    """Return total bytes under path, or 0 if path doesn't exist."""
+    """Return total bytes under path, or 0 if path doesn't exist.
+
+    Uses os.scandir so each entry's stat() is fetched once (one syscall).
+    """
     if not os.path.exists(path):
         return 0
     total = 0
-    for dirpath, dirnames, filenames in os.walk(path):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            try:
-                total += os.path.getsize(fp)
-            except OSError:
-                pass
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                    elif entry.is_dir(follow_symlinks=False):
+                        total += dir_size_bytes(entry.path)
+                except OSError:
+                    pass
+    except OSError:
+        return 0
     return total
 
 
@@ -94,6 +120,29 @@ def fmt_size(nbytes):
             return f"{nbytes:.1f} {unit}"
         nbytes /= 1024
     return f"{nbytes:.1f} PB"
+
+
+def list_files_with_size(directory):
+    """Return (filenames, total_bytes) for files directly inside directory.
+
+    Subdirectories are ignored. Returns ([], 0) if directory is missing.
+    """
+    if not os.path.isdir(directory):
+        return [], 0
+    files = []
+    total = 0
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        files.append(entry.name)
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    pass
+    except OSError:
+        return [], 0
+    return files, total
 
 
 def discover_cases(paths):
@@ -120,17 +169,14 @@ def case_sizes(case, paths):
     rundir   = paths.get('rundir', '')
     archive  = paths.get('archive', '')
 
-    casedir_path  = os.path.join(caseroot, case) if caseroot else ''
-    bld_path      = os.path.join(rundir, case, 'bld') if rundir else ''
-    run_path      = os.path.join(rundir, case, 'run') if rundir else ''
-    archive_path  = os.path.join(archive, case) if archive else ''
+    casedir_path = os.path.join(caseroot, case) if caseroot else ''
+    bld_path     = os.path.join(rundir, case, 'bld') if rundir else ''
+    run_path     = os.path.join(rundir, case, 'run') if rundir else ''
+    archive_path = os.path.join(archive, case) if archive else ''
 
-    # hist and logs across all model components
     hist_bytes = 0
     logs_bytes = 0
-    for model in ARCHIVE_MODELS:
-        if model == 'rest':
-            continue
+    for model in HIST_MODELS:
         hist_bytes += dir_size_bytes(os.path.join(archive_path, model, 'hist'))
         logs_bytes += dir_size_bytes(os.path.join(archive_path, model, 'logs'))
 
@@ -165,6 +211,60 @@ def restart_sets(case, paths):
 
 
 # ---------------------------------------------------------------------------
+# Hist year filtering (shared by purge-hist and archive-case)
+# ---------------------------------------------------------------------------
+
+_RE_HIST_YEAR = re.compile(r'\.(\d{4})-\d{2}')
+
+
+def _hist_year(filename):
+    """Extract model year string from hist filename, e.g. '0050' from case.cam.h0.0050-01.nc."""
+    m = _RE_HIST_YEAR.search(filename)
+    return m.group(1) if m else None
+
+
+def _hist_keep_years_filter(archive_path, models, keep_n):
+    """
+    Partition hist files across *models* under archive_path into keep/delete
+    based on retaining the *keep_n* most recent model years.
+
+    Returns (keep_years, per_model) where:
+      keep_years : sorted list of year strings to retain
+      per_model  : {model: {'dir': path, 'keep': [files], 'delete': [files]}}
+
+    Files whose year cannot be parsed are placed in 'keep' (never deleted).
+    """
+    all_years = set()
+    listings = {}
+    for model in models:
+        hist_dir = os.path.join(archive_path, model, 'hist')
+        files, _ = list_files_with_size(hist_dir)
+        if not files:
+            continue
+        listings[model] = (hist_dir, files)
+        for f in files:
+            y = _hist_year(f)
+            if y:
+                all_years.add(y)
+
+    keep_years = sorted(all_years)[-keep_n:] if all_years and keep_n > 0 else []
+    keep_set = set(keep_years)
+
+    per_model = {}
+    for model, (hist_dir, files) in listings.items():
+        keep_files, delete_files = [], []
+        for f in files:
+            y = _hist_year(f)
+            if y is None or y in keep_set:
+                keep_files.append(f)
+            else:
+                delete_files.append(f)
+        per_model[model] = {'dir': hist_dir, 'keep': keep_files, 'delete': delete_files}
+
+    return keep_years, per_model
+
+
+# ---------------------------------------------------------------------------
 # Confirmation helper
 # ---------------------------------------------------------------------------
 
@@ -173,8 +273,27 @@ def confirm(prompt, execute):
     if not execute:
         print(f"  [preview] would: {prompt}")
         return False
-    answer = input(f"  Confirm: {prompt} [yes/N]: ").strip().lower()
+    answer = input(f"  Confirm: {prompt} [yes/no]: ").strip().lower()
     return answer == 'yes'
+
+
+# ---------------------------------------------------------------------------
+# Case selection helper (destructive subcommands only)
+# ---------------------------------------------------------------------------
+
+def _require_cases(all_cases, args):
+    """Return cases from args.cases that exist on disk.
+
+    Exits with an error if no case names are provided. There is no --all flag.
+    """
+    requested = getattr(args, 'cases', None) or []
+    if not requested:
+        sys.exit("ERROR: specify case name(s). No --all flag is provided for "
+                 "destructive operations — list cases explicitly.")
+    missing = [c for c in requested if c not in all_cases]
+    if missing:
+        print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
+    return [c for c in requested if c in all_cases]
 
 
 # ---------------------------------------------------------------------------
@@ -185,15 +304,26 @@ def cmd_report(args, paths):
     """
     Show disk usage per case across cases/, rundir/, and archive/.
 
+    Read-only. With no case names, reports on every discovered case.
+
     Columns: CASE | CASEDIR | BLD | RUN | HIST | LOGS | REST | TOTAL
     """
-    cases = _filter_cases(discover_cases(paths), args)
+    all_cases = discover_cases(paths)
+    requested = getattr(args, 'cases', None) or []
+    if requested:
+        missing = [c for c in requested if c not in all_cases]
+        if missing:
+            print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
+        cases = [c for c in requested if c in all_cases]
+    else:
+        cases = all_cases
+
     if not cases:
         print("No cases found.")
         return
 
     col_w = max(len(c) for c in cases) + 2
-    cw = 11  # data column width
+    cw = 11
     header = (f"{'CASE':<{col_w}}  {'CASEDIR':>{cw}}  {'BLD':>{cw}}  {'RUN':>{cw}}  "
               f"{'HIST':>{cw}}  {'LOGS':>{cw}}  {'REST':>{cw}}  {'TOTAL':>{cw}}")
     print(header)
@@ -202,7 +332,7 @@ def cmd_report(args, paths):
     grand = {k: 0 for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest')}
     for case in cases:
         sz = case_sizes(case, paths)
-        total = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
+        total = sum(sz[k] for k in grand)
         for k in grand:
             grand[k] += sz[k]
         print(f"{case:<{col_w}}  {fmt_size(sz['casedir']):>{cw}}  {fmt_size(sz['bld']):>{cw}}  "
@@ -237,9 +367,8 @@ def cmd_purge_bld(args, paths):
     if not rundir:
         sys.exit("ERROR: rundir path not configured.")
 
-    cases = _filter_cases(discover_cases(paths), args)
+    cases = _require_cases(discover_cases(paths), args)
     if not cases:
-        print("No cases found.")
         return
 
     for case in cases:
@@ -285,9 +414,8 @@ def cmd_purge_restarts(args, paths):
     if not archive:
         sys.exit("ERROR: archive path not configured.")
 
-    cases = _filter_cases(discover_cases(paths), args)
+    cases = _require_cases(discover_cases(paths), args)
     if not cases:
-        print("No cases found.")
         return
 
     for case in cases:
@@ -321,15 +449,6 @@ def cmd_purge_restarts(args, paths):
 # Subcommand: purge-hist
 # ---------------------------------------------------------------------------
 
-_RE_HIST_YEAR = re.compile(r'\.(\d{4})-\d{2}')
-
-
-def _hist_year(filename):
-    """Extract model year from a hist filename, e.g. '0050' from case.cam.h0.0050-01.nc."""
-    m = _RE_HIST_YEAR.search(filename)
-    return m.group(1) if m else None
-
-
 def cmd_purge_hist(args, paths):
     """
     Delete history NetCDF files from archive/<case>/<model>/hist/.
@@ -349,63 +468,50 @@ def cmd_purge_hist(args, paths):
     if not archive:
         sys.exit("ERROR: archive path not configured.")
 
-    models = args.models if args.models else [m for m in ARCHIVE_MODELS if m != 'rest']
-    cases  = _filter_cases(discover_cases(paths), args)
+    if args.keep_years is None and not args.models:
+        sys.exit(
+            "ERROR: purge-hist requires --keep-years N or --models to prevent accidental\n"
+            "       deletion of all history files. To explicitly target all components,\n"
+            "       pass: --models " + " ".join(HIST_MODELS)
+        )
+
+    models = args.models if args.models else HIST_MODELS
+    cases  = _require_cases(discover_cases(paths), args)
     if not cases:
-        print("No cases found.")
         return
 
     for case in cases:
-        # Collect all files across targeted components
-        hist_files = {}  # model -> list of filenames
-        for model in models:
-            hist = os.path.join(archive, case, model, 'hist')
-            if not os.path.isdir(hist):
-                continue
-            hist_files[model] = [f for f in os.listdir(hist)
-                                  if os.path.isfile(os.path.join(hist, f))]
+        archive_path = os.path.join(archive, case)
 
-        if not hist_files:
-            print(f"  {case}: no hist/ directories found, skipping")
-            continue
-
-        # Determine per-file keep/delete when --keep-years is set
         if args.keep_years is not None:
-            all_years = set()
-            for files in hist_files.values():
-                for f in files:
-                    y = _hist_year(f)
-                    if y:
-                        all_years.add(y)
-            if all_years:
-                cutoff_year = sorted(all_years)[-args.keep_years] if args.keep_years < len(all_years) else min(all_years)
-                keep_years  = sorted(all_years)[-args.keep_years:]
-            else:
-                cutoff_year = None
-                keep_years  = []
-            print(f"  {case}: keeping years {keep_years if keep_years else '(none parsed)'}, "
-                  f"deleting everything before year {cutoff_year}")
-
-        case_total = 0
-        targets = []  # list of (hist_dir, [files_to_delete], delete_size)
-        for model, files in hist_files.items():
-            hist = os.path.join(archive, case, model, 'hist')
-            if args.keep_years is not None:
-                to_delete = []
-                for f in files:
-                    y = _hist_year(f)
-                    if y is None:
-                        continue  # unparseable — always keep
-                    if y not in keep_years:
-                        to_delete.append(f)
-            else:
-                to_delete = list(files)
-
-            if not to_delete:
+            keep_years, per_model = _hist_keep_years_filter(
+                archive_path, models, args.keep_years)
+            if not per_model:
+                print(f"  {case}: no hist/ directories found, skipping")
                 continue
-            size = sum(os.path.getsize(os.path.join(hist, f)) for f in to_delete)
-            targets.append((hist, to_delete, size))
-            case_total += size
+            print(f"  {case}: keeping years {keep_years if keep_years else '(none parsed)'}")
+            targets = []
+            case_total = 0
+            for model, info in per_model.items():
+                if not info['delete']:
+                    continue
+                size = sum(os.path.getsize(os.path.join(info['dir'], f))
+                           for f in info['delete'])
+                targets.append((info['dir'], info['delete'], size))
+                case_total += size
+        else:
+            targets = []
+            case_total = 0
+            for model in models:
+                hist_dir = os.path.join(archive_path, model, 'hist')
+                files, total = list_files_with_size(hist_dir)
+                if not files:
+                    continue
+                targets.append((hist_dir, files, total))
+                case_total += total
+            if not targets:
+                print(f"  {case}: no hist/ directories found, skipping")
+                continue
 
         if not targets:
             print(f"  {case}: nothing to delete, skipping")
@@ -421,6 +527,77 @@ def cmd_purge_hist(args, paths):
             for hist, files, _ in targets:
                 for f in files:
                     os.remove(os.path.join(hist, f))
+            print(f"    deleted ({fmt_size(case_total)} freed)")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: purge-logs
+# ---------------------------------------------------------------------------
+
+def cmd_purge_logs(args, paths):
+    """
+    Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/.
+
+    CESM writes logs to both locations. Both are safe to delete after a run
+    completes — logs are never needed for restarting or analysis.
+
+    By default both locations are targeted. Use --no-archive-logs to skip
+    archive logs, or --no-case-logs to skip the case-directory logs.
+    Use --models to restrict archive-side purging to specific components.
+
+    WARNING: Without --execute this command only previews what would be removed.
+    """
+    archive  = paths.get('archive',  '')
+    caseroot = paths.get('caseroot', '')
+
+    if args.no_archive_logs and args.no_case_logs:
+        sys.exit("ERROR: --no-archive-logs and --no-case-logs together leave "
+                 "nothing to do.")
+
+    models = args.models if args.models else HIST_MODELS
+    cases  = _require_cases(discover_cases(paths), args)
+    if not cases:
+        return
+
+    for case in cases:
+        case_total = 0
+        targets = []  # (label, path, [files], size)
+
+        if not args.no_archive_logs and archive:
+            for model in models:
+                logs_dir = os.path.join(archive, case, model, 'logs')
+                files, size = list_files_with_size(logs_dir)
+                if not files:
+                    continue
+                targets.append((f'archive/{model}/logs', logs_dir, files, size))
+                case_total += size
+
+        if not args.no_case_logs and caseroot:
+            case_logs = os.path.join(caseroot, case, 'logs')
+            if os.path.isdir(case_logs):
+                all_files = []
+                for dirpath, _, filenames in os.walk(case_logs):
+                    for f in filenames:
+                        all_files.append(os.path.join(dirpath, f))
+                if all_files:
+                    size = sum(os.path.getsize(f) for f in all_files)
+                    targets.append(('casedir/logs', case_logs, all_files, size))
+                    case_total += size
+
+        if not targets:
+            print(f"  {case}: no log files found, skipping")
+            continue
+
+        print(f"  {case}: {fmt_size(case_total)} across {len(targets)} log location(s)")
+        for label, path, files, size in targets:
+            print(f"    {label}  ({len(files)} file(s), {fmt_size(size)})")
+
+        action = f"DELETE {fmt_size(case_total)} of log files for {case}"
+        if confirm(action, args.execute):
+            for label, path, files, _ in targets:
+                for f in files:
+                    fp = f if os.path.isabs(f) else os.path.join(path, f)
+                    os.remove(fp)
             print(f"    deleted ({fmt_size(case_total)} freed)")
 
 
@@ -447,22 +624,17 @@ def cmd_move_hist(args, paths):
         sys.exit("ERROR: long_term path not configured. Set paths.long_term in "
                  "config_registry.yaml or use --long-term.")
 
-    models = args.models if args.models else [m for m in ARCHIVE_MODELS if m != 'rest']
-    cases  = _filter_cases(discover_cases(paths), args)
+    models = args.models if args.models else HIST_MODELS
+    cases  = _require_cases(discover_cases(paths), args)
     if not cases:
-        print("No cases found.")
         return
 
     for case in cases:
         for model in models:
             src = os.path.join(archive, case, model, 'hist')
-            if not os.path.isdir(src):
-                continue
-            files = [f for f in os.listdir(src)
-                     if os.path.isfile(os.path.join(src, f))]
+            files, total = list_files_with_size(src)
             if not files:
                 continue
-            total = sum(os.path.getsize(os.path.join(src, f)) for f in files)
             dst = os.path.join(long_term, case, model, 'hist')
             print(f"  {case}/{model}/hist: {len(files)} file(s), {fmt_size(total)}")
             print(f"    -> {dst}")
@@ -487,7 +659,7 @@ def cmd_move_case(args, paths):
       rundir/<case>/       -> <long_term>/rundir/<case>/
       archive/<case>/      -> <long_term>/archive/<case>/
 
-    Use --no-rundir or --no-archive to skip those areas.
+    Use --no-casedir, --no-rundir, or --no-archive to skip those areas.
     Intended for cases that are fully complete and no longer active.
     """
     long_term = paths.get('long_term', '')
@@ -495,9 +667,8 @@ def cmd_move_case(args, paths):
         sys.exit("ERROR: long_term path not configured. Set paths.long_term in "
                  "config_registry.yaml or use --long-term.")
 
-    cases = _filter_cases(discover_cases(paths), args)
+    cases = _require_cases(discover_cases(paths), args)
     if not cases:
-        print("No cases found.")
         return
 
     areas = []
@@ -535,18 +706,185 @@ def cmd_move_case(args, paths):
 
 
 # ---------------------------------------------------------------------------
-# Case filtering helper
+# Subcommand: archive-case
 # ---------------------------------------------------------------------------
 
-def _filter_cases(all_cases, args):
-    """Return the case list filtered by args.cases (if specified)."""
-    requested = getattr(args, 'cases', None)
-    if not requested:
-        return all_cases
-    missing = [c for c in requested if c not in all_cases]
+def _check_registry(case, registry_path):
+    """Return True if case is found in registry_path, False if not, None if registry unavailable."""
+    if not registry_path or not os.path.exists(registry_path):
+        return None
+    with open(registry_path) as f:
+        data = yaml.safe_load(f) or {}
+    for entry in data.get('cases', []):
+        if (entry.get('meta') or {}).get('case_name') == case:
+            return True
+    return False
+
+
+def cmd_archive_case(args, paths):
+    """
+    Retire one or more cases from cesm_scratch. Intent must be stated explicitly.
+
+    Required — one of:
+      --keep-years N     Move hist files from the N most recent model years
+                         to long-term storage before deleting.
+      --keep-restarts    Move the single most recent restart set to
+                         long-term storage before deleting.
+      --purge-only       Delete everything with no preservation.
+
+    --keep-years and --keep-restarts may be combined. --purge-only is
+    mutually exclusive with both.
+
+    After any preservation moves complete, caseroot/<case>, rundir/<case>,
+    and archive/<case> are all deleted from cesm_scratch.
+
+    Preservation uses shutil.move — no intermediate copy, so peak disk
+    usage stays flat.
+
+    SAFEGUARDS:
+      - --execute required; default is preview only.
+      - Explicit case names required; no --all flag.
+      - One of --keep-years, --keep-restarts, --purge-only required.
+      - If --registry is supplied, warns if the case is not found in cases.yaml.
+      - Each case requires individual yes/no confirmation.
+
+    WARNING: deletions are permanent. Ensure cases.yaml is current before running.
+    """
+    caseroot  = paths.get('caseroot', '')
+    rundir    = paths.get('rundir',   '')
+    archive   = paths.get('archive',  '')
+    long_term = paths.get('long_term', '')
+
+    if not any([caseroot, rundir, archive]):
+        sys.exit("ERROR: no storage paths configured.")
+
+    has_preserve = args.keep_years is not None or args.keep_restarts
+    if args.purge_only and has_preserve:
+        sys.exit("ERROR: --purge-only is mutually exclusive with "
+                 "--keep-years and --keep-restarts.")
+    if not args.purge_only and not has_preserve:
+        sys.exit("ERROR: archive-case requires one of --keep-years N, "
+                 "--keep-restarts, or --purge-only. State your intent explicitly.")
+
+    if has_preserve and not long_term:
+        sys.exit("ERROR: --keep-years and --keep-restarts require long_term path. "
+                 "Set paths.long_term in config_registry.yaml or use --long-term.")
+
+    cases_requested = args.cases
+    if not cases_requested:
+        sys.exit("ERROR: archive-case requires explicit case name(s).")
+
+    all_on_disk = discover_cases(paths)
+    missing = [c for c in cases_requested if c not in all_on_disk]
     if missing:
         print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
-    return [c for c in requested if c in all_cases]
+    cases = [c for c in cases_requested if c in all_on_disk]
+    if not cases:
+        print("No cases found on disk.")
+        return
+
+    for case in cases:
+        print(f"\n{'='*60}")
+        print(f"  CASE: {case}")
+        print(f"{'='*60}")
+
+        reg_status = _check_registry(case, getattr(args, 'registry', None))
+        if reg_status is False:
+            print(f"  WARNING: '{case}' not found in registry {args.registry}.")
+            print(f"           Run exo_inspect.py first to preserve case metadata.")
+        elif reg_status is True:
+            print(f"  Registry: found in {args.registry}")
+
+        casedir_path = os.path.join(caseroot, case) if caseroot else ''
+        rundir_path  = os.path.join(rundir,   case) if rundir   else ''
+        archive_path = os.path.join(archive,  case) if archive  else ''
+
+        sz = case_sizes(case, paths)
+        total_on_disk = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
+
+        preserve_hist    = []  # (src_file, dst_file)
+        preserve_restart = []  # (src_dir, dst_dir)
+
+        if args.keep_years is not None:
+            keep_years, per_model = _hist_keep_years_filter(
+                archive_path, HIST_MODELS, args.keep_years)
+            for model, info in per_model.items():
+                for f in info['keep']:
+                    y = _hist_year(f)
+                    if y and y in set(keep_years):
+                        src = os.path.join(info['dir'], f)
+                        dst = os.path.join(long_term, case, model, 'hist', f)
+                        preserve_hist.append((src, dst))
+
+        if args.keep_restarts:
+            sets = restart_sets(case, paths)
+            if sets:
+                date_str, rest_path = sets[-1]
+                preserve_restart.append((rest_path,
+                                         os.path.join(long_term, case, 'rest', date_str)))
+
+        print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
+        if preserve_hist:
+            hist_size = sum(os.path.getsize(s) for s, _ in preserve_hist)
+            print(f"  MOVE to long-term: {len(preserve_hist)} hist file(s) "
+                  f"from last {args.keep_years} year(s) ({fmt_size(hist_size)})")
+        if preserve_restart:
+            rest_size = sum(dir_size_bytes(s) for s, _ in preserve_restart)
+            print(f"  MOVE to long-term: most recent restart set ({fmt_size(rest_size)})")
+        if args.purge_only:
+            print(f"  Mode: --purge-only (no preservation)")
+        print(f"  DELETE from cesm_scratch:")
+        for path, label in [(casedir_path, 'caseroot'), (rundir_path, 'rundir'),
+                            (archive_path, 'archive')]:
+            if path and os.path.exists(path):
+                print(f"    {path}")
+
+        if not args.execute:
+            print(f"\n  [preview] add --execute to perform these actions")
+            continue
+
+        answer = input(f"\n  Confirm archive-case for '{case}'? [yes/no]: ").strip().lower()
+        if answer != 'yes':
+            print(f"  Skipped.")
+            continue
+
+        if preserve_hist:
+            print(f"  Moving {len(preserve_hist)} hist file(s) to long-term...")
+            for src, dst in preserve_hist:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+
+        if preserve_restart:
+            print(f"  Moving restart set to long-term...")
+            for src, dst in preserve_restart:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+
+        print(f"  Deleting from cesm_scratch...")
+        for path in [casedir_path, rundir_path, archive_path]:
+            if path and os.path.exists(path):
+                shutil.rmtree(path)
+                print(f"    deleted {path}")
+
+        print(f"  Done: {case}")
+
+
+# ---------------------------------------------------------------------------
+# Argparse helpers (shared across destructive subcommands)
+# ---------------------------------------------------------------------------
+
+def _add_destructive_args(p):
+    """Add cases positional and --execute. No --all flag."""
+    p.add_argument('cases', nargs='*',
+                   help='Case name(s) to act on (required; no --all flag)')
+    p.add_argument('--execute', action='store_true',
+                   help='Actually perform actions (default is preview only)')
+
+
+def _add_models_arg(p, help_prefix='Restrict to these model components'):
+    p.add_argument('--models', nargs='+', metavar='MODEL',
+                   choices=ARCHIVE_MODELS,
+                   help=f'{help_prefix} (choices: {", ".join(ARCHIVE_MODELS)})')
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +898,6 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Global options
     parser.add_argument('--config-registry', default=DEFAULT_CONFIG, dest='config_registry',
                         help='Path to config_registry.yaml (default: config_registry.yaml '
                              'next to this script)')
@@ -572,7 +909,7 @@ def build_parser():
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND')
 
-    # ---- report ----
+    # ---- report (read-only; no --execute; empty cases = all) ----
     p_report = sub.add_parser(
         'report',
         help='Show disk usage per case across cases/, rundir/, and archive/',
@@ -589,12 +926,9 @@ def build_parser():
         description=cmd_purge_bld.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_bld.add_argument('cases', nargs='*',
-                       help='Case name(s) to purge bld/ for (default: all)')
+    _add_destructive_args(p_bld)
     p_bld.add_argument('--logs-only', action='store_true',
                        help='Remove only .o/.mod binary files, keep log files')
-    p_bld.add_argument('--execute', action='store_true',
-                       help='Actually perform deletions (default is preview only)')
 
     # ---- purge-restarts ----
     p_rest = sub.add_parser(
@@ -603,12 +937,9 @@ def build_parser():
         description=cmd_purge_restarts.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_rest.add_argument('cases', nargs='*',
-                        help='Case name(s) to trim restart sets for (default: all)')
+    _add_destructive_args(p_rest)
     p_rest.add_argument('--keep', type=int, default=1, metavar='N',
                         help='Number of most-recent restart sets to keep (default: 1)')
-    p_rest.add_argument('--execute', action='store_true',
-                        help='Actually perform deletions (default is preview only)')
 
     # ---- purge-hist ----
     p_hist = sub.add_parser(
@@ -617,18 +948,26 @@ def build_parser():
         description=cmd_purge_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_hist.add_argument('cases', nargs='*',
-                        help='Case name(s) to purge hist/ for (default: all)')
-    p_hist.add_argument('--models', nargs='+', metavar='MODEL',
-                        choices=ARCHIVE_MODELS,
-                        help=f'Restrict to these model components '
-                             f'(choices: {", ".join(ARCHIVE_MODELS)})')
+    _add_destructive_args(p_hist)
+    _add_models_arg(p_hist)
     p_hist.add_argument('--keep-years', type=int, default=None, metavar='N',
                         dest='keep_years',
                         help='Keep files from the N most recent model years; '
                              'cutoff is shared across all targeted components')
-    p_hist.add_argument('--execute', action='store_true',
-                        help='Actually perform deletions (default is preview only)')
+
+    # ---- purge-logs ----
+    p_logs = sub.add_parser(
+        'purge-logs',
+        help='Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/',
+        description=cmd_purge_logs.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_destructive_args(p_logs)
+    _add_models_arg(p_logs, help_prefix='Restrict archive-side purging to these components')
+    p_logs.add_argument('--no-archive-logs', action='store_true', dest='no_archive_logs',
+                        help='Skip archive/<case>/<model>/logs/ (only purge casedir logs)')
+    p_logs.add_argument('--no-case-logs', action='store_true', dest='no_case_logs',
+                        help='Skip $CASE/logs/ (only purge archive logs)')
 
     # ---- move-hist ----
     p_mvhist = sub.add_parser(
@@ -637,14 +976,8 @@ def build_parser():
         description=cmd_move_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_mvhist.add_argument('cases', nargs='*',
-                          help='Case name(s) to move hist/ for (default: all)')
-    p_mvhist.add_argument('--models', nargs='+', metavar='MODEL',
-                          choices=ARCHIVE_MODELS,
-                          help=f'Restrict to these model components '
-                               f'(choices: {", ".join(ARCHIVE_MODELS)})')
-    p_mvhist.add_argument('--execute', action='store_true',
-                          help='Actually perform moves (default is preview only)')
+    _add_destructive_args(p_mvhist)
+    _add_models_arg(p_mvhist)
 
     # ---- move-case ----
     p_mvcase = sub.add_parser(
@@ -653,16 +986,31 @@ def build_parser():
         description=cmd_move_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_mvcase.add_argument('cases', nargs='*',
-                          help='Case name(s) to move (default: all — use with care)')
+    _add_destructive_args(p_mvcase)
     p_mvcase.add_argument('--no-casedir', action='store_true',
                           help='Skip moving cases/<case>')
     p_mvcase.add_argument('--no-rundir', action='store_true',
                           help='Skip moving rundir/<case>')
     p_mvcase.add_argument('--no-archive', action='store_true',
                           help='Skip moving archive/<case>')
-    p_mvcase.add_argument('--execute', action='store_true',
-                          help='Actually perform moves (default is preview only)')
+
+    # ---- archive-case ----
+    p_arc = sub.add_parser(
+        'archive-case',
+        help='Retire a case: optionally preserve data to long-term, then delete from cesm_scratch',
+        description=cmd_archive_case.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_destructive_args(p_arc)
+    p_arc.add_argument('--keep-years', type=int, metavar='N', default=None,
+                       help='Move hist files from the N most recent model years to long-term storage')
+    p_arc.add_argument('--keep-restarts', action='store_true',
+                       help='Move the most recent restart set to long-term storage before deleting')
+    p_arc.add_argument('--purge-only', action='store_true', dest='purge_only',
+                       help='Delete everything with no preservation (mutually exclusive '
+                            'with --keep-years / --keep-restarts)')
+    p_arc.add_argument('--registry', metavar='FILE', default=None,
+                       help='Path to cases.yaml — warns if case not found (does not require it)')
 
     return parser
 
@@ -676,8 +1024,10 @@ COMMANDS = {
     'purge-bld':       cmd_purge_bld,
     'purge-restarts':  cmd_purge_restarts,
     'purge-hist':      cmd_purge_hist,
+    'purge-logs':      cmd_purge_logs,
     'move-hist':       cmd_move_hist,
     'move-case':       cmd_move_case,
+    'archive-case':    cmd_archive_case,
 }
 
 
@@ -685,7 +1035,6 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # Default to report when called with no subcommand
     if args.command is None:
         args.command = 'report'
         args.cases = []
