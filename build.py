@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 ExoCAM build script generator. Reads an experiment matrix YAML and a config
 registry YAML, validates each case, writes one shell script per case plus a

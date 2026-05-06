@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
 writes a queryable YAML registry.

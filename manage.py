@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 manage.py — ExoCAM data management tool
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 query.py — search cases.yaml and generate experiment matrices
 
