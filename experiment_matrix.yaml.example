@@ -36,14 +36,17 @@ base:
   # clone: my_completed_base_case
 
   # Run length (xmlchange)
+  # Defaults: stop_option=nyears, stop_n=20, rest_n=5 (from config_registry.yaml defaults)
   stop_option:  nyears
   stop_n:       20
   rest_n:       5
 
   # Processor counts
+  # Default: ntasks=126 (from config_registry.yaml defaults)
   ntasks:   126            # Milan chips on discover
 
   # HPC batch options (written to ${CASE}.run after cesm_setup)
+  # Default: account=s2427 (from config_registry.yaml defaults)
   account:  s2427          # SLURM charge account (#SBATCH --account)
 
   # -----------------------------------------------------------------------

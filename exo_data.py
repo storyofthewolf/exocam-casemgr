@@ -38,8 +38,8 @@ SAFETY
   accidental deletion of all history files.
 
   retire-case requires one of --keep-years N, --keep-restarts, --keep-case,
-  or --purge-only to force stating intent explicitly. --keep-case moves the
-  entire case tree to long-term storage without deleting anything.
+  or --purge-only to force stating intent explicitly. --keep-case moves only
+  the caseroot directory to long-term storage without deleting anything.
 
   report is read-only and safe to run bare — no case names means all cases.
 
@@ -671,9 +671,10 @@ def cmd_retire_case(args, paths):
       --purge-only       Delete caseroot, rundir, and archive entirely.
                          Mutually exclusive with all other intent flags.
 
-      --keep-case        Move the complete case tree (caseroot + rundir + archive)
-                         to long-term storage intact. No deletions. Mutually
-                         exclusive with --purge-only.
+      --keep-case        Move caseroot/<case>/ to long-term storage (preserves
+                         SourceMods, namelists, and configuration). No deletions.
+                         Does not touch rundir or archive. Mutually exclusive
+                         with --purge-only.
 
       --keep-years N     Move hist files from the N most recent model years
                          to long-term storage, then delete everything else.
@@ -757,12 +758,10 @@ def cmd_retire_case(args, paths):
         keep_case_moves  = []  # (src_dir, dst_dir) for --keep-case whole-tree move
 
         if args.keep_case:
-            for path_key, lt_subdir in [('caseroot', 'cases'), ('rundir', 'rundir'),
-                                         ('archive', 'archive')]:
-                src = os.path.join(paths.get(path_key, ''), case)
-                if os.path.exists(src):
-                    dst = os.path.join(long_term, lt_subdir, case)
-                    keep_case_moves.append((src, dst, dir_size_bytes(src)))
+            src = os.path.join(paths.get('caseroot', ''), case)
+            if os.path.exists(src):
+                dst = os.path.join(long_term, 'cases', case)
+                keep_case_moves.append((src, dst, dir_size_bytes(src)))
 
         if args.keep_years is not None:
             keep_years, per_model = _hist_keep_years_filter(
@@ -964,8 +963,9 @@ def build_parser():
     )
     _add_destructive_args(p_arc)
     p_arc.add_argument('--keep-case', action='store_true', dest='keep_case',
-                       help='Move the entire case tree (caseroot + rundir + archive) to '
-                            'long-term storage intact; no deletions. Mutually exclusive '
+                       help='Move the caseroot directory to long-term storage (preserves '
+                            'SourceMods, namelists, and configuration). No deletions. '
+                            'Does not touch rundir or archive. Mutually exclusive '
                             'with --purge-only.')
     p_arc.add_argument('--keep-years', type=int, metavar='N', default=None,
                        help='Move hist files from the N most recent model years to long-term storage')

@@ -9,7 +9,16 @@
 # level keys are integers matching the L<N> in IC filenames and -nlev in CAM_CONFIG_OPTS
 
 machine: discover
-resubmit: 1
+
+# Default run parameters — applied to any experiment matrix field left unset.
+# Override per-matrix in the base block or per-case.
+defaults:
+  resubmit:    1
+  stop_option: nyears
+  stop_n:      20
+  rest_n:      5
+  ntasks:      126
+  account:     s2427
 
 paths:
   cesm_scripts: /gpfsm/dnb33/etwolf/models/cesm1_2_1/scripts

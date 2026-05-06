@@ -206,13 +206,18 @@ def _row_to_base(row, bare=False):
 
 
 def _load_registry_defaults(config_registry_path):
-    """Read machine name and resubmit default from config_registry.yaml."""
+    """Read machine name and defaults block from config_registry.yaml.
+
+    Returns (machine, defaults_dict) where defaults_dict contains any of:
+    resubmit, stop_option, stop_n, rest_n, ntasks, account.
+    """
     try:
         with open(config_registry_path) as f:
             data = yaml.safe_load(f) or {}
-        return data.get('machine'), data.get('resubmit')
+        defaults = data.get('defaults', {}) or {}
+        return data.get('machine'), defaults
     except (OSError, yaml.YAMLError):
-        return None, None
+        return None, {}
 
 
 def cmd_export(args, rows, config_registry_path):
@@ -262,19 +267,29 @@ def cmd_export(args, rows, config_registry_path):
         base['clone'] = clone
 
     # --- inject required run/machine fields into base ---
-    # mach and resubmit: from config_registry.yaml if not overridden on CLI
-    reg_mach, reg_resubmit = _load_registry_defaults(config_registry_path)
-    mach     = getattr(args, 'mach',     None) or reg_mach
-    resubmit = getattr(args, 'resubmit', None)
-    if resubmit is None:
-        resubmit = reg_resubmit
+    # CLI flags take priority; registry defaults fill in what's still missing.
+    reg_mach, reg_defaults = _load_registry_defaults(config_registry_path)
+
+    def _cli_or_default(attr, default_key=None):
+        v = getattr(args, attr, None)
+        if v is not None:
+            return v
+        return reg_defaults.get(default_key or attr)
+
+    mach        = getattr(args, 'mach', None) or reg_mach
+    resubmit    = _cli_or_default('resubmit')
+    stop_option = _cli_or_default('stop_option')
+    stop_n      = _cli_or_default('stop_n')
+    rest_n      = _cli_or_default('rest_n')
+    ntasks      = _cli_or_default('ntasks')
+    account     = _cli_or_default('account') or ''
+
     base['mach']        = mach        or ''
-    base['stop_option'] = getattr(args, 'stop_option', None) or ''
-    base['stop_n']      = getattr(args, 'stop_n',      None) or ''
-    base['rest_n']      = getattr(args, 'rest_n',      None) or ''
-    base['resubmit']    = resubmit    if resubmit is not None else ''
-    base['ntasks']      = getattr(args, 'ntasks',      None) or ''
-    account             = getattr(args, 'account',     None) or ''
+    base['stop_option'] = stop_option or ''
+    base['stop_n']      = stop_n      if stop_n      is not None else ''
+    base['rest_n']      = rest_n      if rest_n      is not None else ''
+    base['resubmit']    = resubmit    if resubmit    is not None else ''
+    base['ntasks']      = ntasks      if ntasks      is not None else ''
     if account:
         base['account'] = account
 

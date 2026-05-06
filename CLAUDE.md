@@ -46,7 +46,7 @@ python exo_data.py purge-logs my_case --execute
 python exo_data.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
-#   --keep-case        move entire tree to long-term intact (no deletions)
+#   --keep-case        move caseroot to long-term intact (no deletions; rundir/archive untouched)
 #   --keep-years N     move N most recent hist years to long-term, then delete
 #   --keep-restarts    move most recent restart to long-term, then delete
 #   --purge-only       delete everything, no preservation
@@ -162,7 +162,7 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty.
 - `cmd_move_case` — moves entire case tree to long-term storage. `--no-casedir/--no-rundir/--no-archive` skip areas.
-- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge-only` (delete everything), `--keep-case` (move entire tree to long-term intact, no deletions), `--keep-years N` (move recent hist to long-term first, then delete), or `--keep-restarts` (move most recent restart to long-term first, then delete). `--keep-years` and `--keep-restarts` may be combined with each other and with `--keep-case`; `--purge-only` is mutually exclusive with all three. Uses `shutil.move` — no intermediate copy, so peak disk usage stays flat. Optional `--registry cases.yaml` warns if case not found in scientific registry.
+- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge-only` (delete everything), `--keep-case` (move caseroot only to `long_term/cases/<case>/`; does not touch rundir or archive; no deletions), `--keep-years N` (move recent hist to long-term first, then delete), or `--keep-restarts` (move most recent restart to long-term first, then delete). `--keep-years` and `--keep-restarts` may be combined with each other and with `--keep-case`; `--purge-only` is mutually exclusive with all three. Uses `shutil.move` — no intermediate copy, so peak disk usage stays flat. Optional `--registry cases.yaml` warns if case not found in scientific registry.
 - `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in cases.yaml; used by `cmd_retire_case` for pre-flight warning only.
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
@@ -172,7 +172,7 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 
 Holds:
 - `machine` — CESM machine name (e.g. `discover`); read by `exo_query.py export` to populate `mach` automatically
-- `resubmit` — default RESUBMIT value (e.g. `1`); read by `exo_query.py export` when `--resubmit` not supplied
+- `defaults` — default run parameters applied when a matrix field is absent: `resubmit`, `stop_option`, `stop_n`, `rest_n`, `ntasks`, `account`. Read by both `exo_build.py` (fills base before case resolution) and `exo_query.py export` (fills exported matrix fields). CLI flags on `exo_query.py export` override these; per-case or per-matrix values override them in `exo_build.py`.
 - `paths` — `cesm_scripts`, `caseroot`, `rundir`, `archive`, `long_term`, `exocam_root`, `exort_root`
 - `cesm_config` — `compset`, `res`, `phys` per `config_type`, used in `create_newcase`
 - `ic_files` — IC file lookup table keyed by `config_type → pressure_str → nlev`

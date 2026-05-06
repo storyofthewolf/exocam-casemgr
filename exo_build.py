@@ -665,7 +665,13 @@ def main():
     # matrix-level path overrides
     paths_override = matrix.get('paths', {}) or {}
 
+    # Apply registry defaults for run fields not set in the matrix base.
+    reg_defaults = registry.get('defaults', {}) or {}
     base = matrix.get('base', {})
+    for key, val in reg_defaults.items():
+        if key not in base:
+            base[key] = val
+
     cases = matrix.get('cases', [])
 
     os.makedirs(args.outdir, exist_ok=True)
