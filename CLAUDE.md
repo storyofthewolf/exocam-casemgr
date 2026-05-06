@@ -12,10 +12,10 @@ The target runtime environment is NASA Discover (SLURM HPC). Build scripts are g
 
 ```bash
 # Generate build scripts (preview only — no execution)
-python exo_build.py experiment_matrix.yaml --outdir scripts/
+python build.py experiment_matrix.yaml --outdir scripts/
 
 # Generate AND execute builds
-python exo_build.py experiment_matrix.yaml --outdir scripts/ --execute
+python build.py experiment_matrix.yaml --outdir scripts/ --execute
 
 # Run a single generated build script
 bash scripts/my_case_build.sh
@@ -24,47 +24,47 @@ bash scripts/my_case_build.sh
 bash run_builds.sh scripts/
 
 # Inspect a case by bare name (resolved to caseroot from config_registry.yaml)
-python exo_inspect.py my_case --registry cases.yaml
+python inspect.py my_case --registry cases.yaml
 
 # Preview inspection without writing the registry
-python exo_inspect.py my_case --dry-run
+python inspect.py my_case --dry-run
 
 # Update (merge) instead of overwriting registry
-python exo_inspect.py my_case --registry cases.yaml --update
+python inspect.py my_case --registry cases.yaml --update
 
 # Rebuild cases.yaml from archived case.yaml entries in long_term/
-python exo_inspect.py --scan-archive --registry cases.yaml
+python inspect.py --scan-archive --registry cases.yaml
 
 # Merge live inspection + archived entries into cases.yaml
-python exo_inspect.py my_case --scan-archive --update
+python inspect.py my_case --scan-archive --update
 
 # Disk usage report across all cases (default when called with no args)
-python exo_data.py
-python exo_data.py report                   # same; optional explicit subcommand
-python exo_data.py report my_case           # single case
+python manage.py
+python manage.py report                   # same; optional explicit subcommand
+python manage.py report my_case           # single case
 
 # Purge/move commands — preview by default, --execute to act
 # All destructive subcommands require explicit case name(s) — no --all flag.
-python exo_data.py purge-bld my_case --execute
-python exo_data.py purge-restarts my_case --keep 1 --execute
-python exo_data.py purge-hist my_case --models atm --execute
-python exo_data.py purge-logs my_case --execute
-python exo_data.py move-hist my_case --models atm --execute
+python manage.py purge-bld my_case --execute
+python manage.py purge-restarts my_case --keep 1 --execute
+python manage.py purge-hist my_case --models atm --execute
+python manage.py purge-logs my_case --execute
+python manage.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
 #   --purge            write case.yaml only to long-term, then delete everything
 #   --keep-years N     copy config + move N most recent hist years to long-term, then delete
 #   --keep-restarts    copy config + move most recent restart to long-term, then delete
 # --keep-years and --keep-restarts are combinable; --purge is mutually exclusive with both
-python exo_data.py retire-case my_case --purge --execute
-python exo_data.py retire-case my_case --keep-years 5 --keep-restarts --execute
-python exo_data.py retire-case my_case --keep-years 5 --execute
+python manage.py retire-case my_case --purge --execute
+python manage.py retire-case my_case --keep-years 5 --keep-restarts --execute
+python manage.py retire-case my_case --keep-years 5 --execute
 
 # Search and export from registry
-python exo_query.py search --config-type cam_land_fv --nlev 51
-python exo_query.py show ExoCAM_thai_ben1_L51_n68equiv
-python exo_query.py export case_a case_b -o sweep.yaml --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
-python exo_query.py export my_base_case -o clone.yaml --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
+python query.py search --config-type cam_land_fv --nlev 51
+python query.py show ExoCAM_thai_ben1_L51_n68equiv
+python query.py export case_a case_b -o sweep.yaml --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
+python query.py export my_base_case -o clone.yaml --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
 ```
 
 Dependencies: `pip install pyyaml` (required); `pip install netCDF4` (optional, for solar file nw validation)
@@ -77,27 +77,27 @@ Dependencies: `pip install pyyaml` (required); `pip install netCDF4` (optional, 
 experiment_matrix.yaml
   + config_registry.yaml
        ↓
-  exo_build.py
+  build.py
        ↓
   scripts/<case>_build.sh                     ← shell script: create_newcase/create_clone + build
   scripts/staging/<case>/exoplanet_mod.F90    ← patched Fortran parameter file
 
 CASE directories on HPC
        ↓
-  exo_inspect.py
+  inspect.py
        ↓
   cases.yaml                                  ← queryable YAML registry
        ↓
-  exo_query.py                                ← search registry, export experiment matrices
+  query.py                                ← search registry, export experiment matrices
 
 cases/ + rundir/ + archive/ on HPC
        ↓
-  exo_data.py                                 ← disk reporting, purge, move
+  manage.py                                 ← disk reporting, purge, move
 ```
 
-### `exo_parse.py` — pure parsing primitives, no filesystem side effects
+### `parse_utils.py` — pure parsing primitives, no filesystem side effects
 
-Used by both `exo_build.py` and `exo_inspect.py`.
+Used by both `build.py` and `inspect.py`.
 
 - `parse_exoplanet_mod(path)` — reads Fortran parameter file → flat dict. Evaluates arithmetic expressions (e.g. `0.91*6.37122e6_R8`) and symbol-substitution expressions (e.g. `1.0 - exo_co2bar - exo_ch4bar`) using `_try_eval_expr()`, which substitutes already-resolved param values then evals in a restricted namespace. Unevaluable expressions fall back to `name_expr` raw string storage.
 - `parse_user_nl_cam(path)` — reads CESM namelist → dict. Captures `ncdata`, IC pressure/level from filename, and any `carma_*` / `volc_*` keys as nested dicts. Handles both single- and double-quoted values.
@@ -105,9 +105,9 @@ Used by both `exo_build.py` and `exo_inspect.py`.
 - `parse_docn_som(path)` — reads `user_docn.streams.txt.som` (XML fragment, wrapped in synthetic root for ElementTree) → dict with `som_pop_frc_file`. Called for aqua and mixed configs only.
 - `parse_cam_config_opts(xmlpath)` — reads `env_build.xml` for `-nlev`, `-usr_src` (exort_pkg), cloud scheme.
 - `compute_pstd_bar(params)` — derives total surface pressure from gas bar values.
-- `read_solar_nw(path)` — reads `nw` dimension from a NetCDF solar file using `netCDF4`. Returns `None` if the library is absent or the file is inaccessible. Used for solar file / exort_pkg consistency checking in `exo_inspect.py`.
+- `read_solar_nw(path)` — reads `nw` dimension from a NetCDF solar file using `netCDF4`. Returns `None` if the library is absent or the file is inaccessible. Used for solar file / exort_pkg consistency checking in `inspect.py`.
 
-### `exo_build.py` — validation and shell script generation
+### `build.py` — validation and shell script generation
 
 - `resolve_case(base, overrides)` — merges base + per-case dict.
 - `validate_case(spec, registry)` — returns list of error strings; checks required fields, IC file availability, solar/exort consistency, synchronous rotation math. Clone cases (`clone` present) use `REQUIRED_FIELDS_CLONE` (relaxed — config fields are inherited from source case).
@@ -126,7 +126,7 @@ Used by both `exo_build.py` and `exo_inspect.py`.
 - `REQUIRED_FIELDS` — required for newcase mode: `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
 - `REQUIRED_FIELDS_CLONE` — required for clone mode: `clone`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
 
-### `exo_inspect.py` — CASE directory scanner → YAML registry
+### `inspect.py` — CASE directory scanner → YAML registry
 
 Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`), extracts scientific metadata, writes a grouped YAML registry. Bare case names are resolved relative to `caseroot` from `config_registry.yaml`.
 
@@ -141,7 +141,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `_REGISTRY_GROUPS` — defines group names and field ordering for YAML output.
 - `SOLAR_NW_MAP` — expected `nw` dimension per `exort_pkg`: `{n68equiv: 68, n84equiv: 84, n28archean: 28, n42h2o: 42}`.
 
-### `exo_query.py` — registry search and experiment matrix export
+### `query.py` — registry search and experiment matrix export
 
 - `load_registry(path)` — loads `cases.yaml` into flat dicts (one per case) for search/export.
 - `load_registry_raw(path)` — loads `cases.yaml` preserving grouped structure; used by `show` to reproduce the exact `cases.yaml` format.
@@ -154,7 +154,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - Key renames from registry to matrix: `clm_finidat` → `finidat`, `clm_fsurdat` → `fsurdat`, `ncdata` → `ncdata_override`.
 - Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`.
 
-### `exo_data.py` — disk management tool
+### `manage.py` — disk management tool
 
 Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on disk — no registry required. All destructive subcommands are **non-destructive by default**; `--execute` is required to make changes, and each case prompts `yes/no` before acting.
 
@@ -179,8 +179,8 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 ### `config_registry.yaml` — machine-specific, must be edited per user
 
 Holds:
-- `machine` — CESM machine name (e.g. `discover`); read by `exo_query.py export` to populate `mach` automatically
-- `defaults` — default run parameters applied when a matrix field is absent: `resubmit`, `stop_option`, `stop_n`, `rest_n`, `ntasks`, `account`. Read by both `exo_build.py` (fills base before case resolution) and `exo_query.py export` (fills exported matrix fields). CLI flags on `exo_query.py export` override these; per-case or per-matrix values override them in `exo_build.py`.
+- `machine` — CESM machine name (e.g. `discover`); read by `query.py export` to populate `mach` automatically
+- `defaults` — default run parameters applied when a matrix field is absent: `resubmit`, `stop_option`, `stop_n`, `rest_n`, `ntasks`, `account`. Read by both `build.py` (fills base before case resolution) and `query.py export` (fills exported matrix fields). CLI flags on `query.py export` override these; per-case or per-matrix values override them in `build.py`.
 - `paths` — `cesm_scripts`, `caseroot`, `rundir`, `archive`, `long_term`, `exocam_root`, `exort_root`
 - `cesm_config` — `compset`, `res`, `phys` per `config_type`, used in `create_newcase`
 - `ic_files` — IC file lookup table keyed by `config_type → pressure_str → nlev`
@@ -265,14 +265,14 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 
 ## Known limitations
 
-### Branch runs not implemented (exo_build.py)
+### Branch runs not implemented (build.py)
 
 `RUN_TYPE=branch` — starting a case from a specific restart file rather than initial conditions — has not been implemented. Branch runs require setting `RUN_TYPE`, `RUN_REFCASE`, and `RUN_REFDATE` via xmlchange, and staging the restart files. Currently, restarting from a specific point must be handled manually after the build script runs.
 
-### Custom RT packages not supported in `create_newcase` builds (exo_build.py)
+### Custom RT packages not supported in `create_newcase` builds (build.py)
 
 `generate_shell_script` only supports radiative transfer packages referenced via `-usr_src ../ExoRT/3dmodels/*`. Cases with custom-modified RT source copied into SourceMods cannot be built via `create_newcase`. For custom RT, clone from an existing case using `clone` in the experiment matrix, which uses `create_clone` and inherits SourceMods from the source case.
 
-### `n68equiv.haze` registered as `n68equiv` (exo_inspect.py)
+### `n68equiv.haze` registered as `n68equiv` (inspect.py)
 
-Some cases were built using `ExoRT/3dmodels/src.cam.n68equiv.haze`, a special variant of n68equiv that includes CARMA haze optics. `exo_inspect.py` currently registers these as plain `n68equiv` — the `.haze` suffix in the `-usr_src` path is not distinguished. No special handling has been implemented because `n68equiv.haze` is expected to be merged into `n68equiv` in a future ExoRT update, at which point the distinction disappears.
+Some cases were built using `ExoRT/3dmodels/src.cam.n68equiv.haze`, a special variant of n68equiv that includes CARMA haze optics. `inspect.py` currently registers these as plain `n68equiv` — the `.haze` suffix in the `-usr_src` path is not distinguished. No special handling has been implemented because `n68equiv.haze` is expected to be merged into `n68equiv` in a future ExoRT update, at which point the distinction disappears.

@@ -4,7 +4,7 @@ registry YAML, validates each case, writes one shell script per case plus a
 staged exoplanet_mod.F90.
 
 Usage:
-  python exo_build.py experiment_matrix.yaml [--outdir scripts/] [--execute]
+  python build.py experiment_matrix.yaml [--outdir scripts/] [--execute]
 
 Default is dry-run: scripts are written but not executed.
 --execute runs each script via bash and tees output to <case>.build.log.
@@ -23,7 +23,7 @@ except ImportError:
     sys.exit("pyyaml is required: pip install pyyaml")
 
 sys.path.insert(0, os.path.dirname(__file__))
-from exo_parse import compute_pstd_bar
+from parse_utils import compute_pstd_bar
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {
@@ -399,7 +399,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
     lines = [
         "#!/bin/bash",
         f"# ExoCAM build script: {case_name}",
-        f"# Generated: {now} by exo_build.py",
+        f"# Generated: {now} by build.py",
         f"# VALIDATION: pstd={pstd:.4g}bar | ncdata={ic_file} | nlev={nlev} | exort={exort_pkg}",
         "#",
         "# Review this script before running.",
@@ -531,7 +531,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         "#!/bin/bash",
         f"# ExoCAM clone build script: {case_name}",
         f"# Cloned from: {clone_of}",
-        f"# Generated: {now} by exo_build.py",
+        f"# Generated: {now} by build.py",
         f"# VALIDATION: pstd={pstd_label} | ncdata={ic_label} | nlev={nlev} | exort={exort_pkg}",
         "#",
         "# Review this script before running.",

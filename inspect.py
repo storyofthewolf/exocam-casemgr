@@ -3,7 +3,7 @@ ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
 writes a queryable YAML registry.
 
 Usage:
-  python exo_inspect.py CASE_NAME [CASE_NAME ...] [--registry cases.yaml] [--update]
+  python inspect.py CASE_NAME [CASE_NAME ...] [--registry cases.yaml] [--update]
 
 Each argument is a bare case name, an absolute path, or a parent dir.
 Bare names are resolved relative to caseroot in config_registry.yaml.
@@ -17,7 +17,7 @@ import yaml
 
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
-from exo_parse import (
+from parse_utils import (
     parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_docn_som,
     parse_cam_config_opts, compute_pstd_bar, pressure_str_to_bar, read_solar_nw
 )
@@ -291,7 +291,7 @@ def _rows_to_ordered(rows):
 
 _REGISTRY_HEADER = (
     "# Auto-generated cache — regenerate with: "
-    "python exo_inspect.py --scan-archive --update\n"
+    "python inspect.py --scan-archive --update\n"
 )
 
 
@@ -379,10 +379,10 @@ def main():
         description='Inspect ExoCAM CASE directories and write YAML registry',
         epilog=(
             'Examples:\n'
-            '  python exo_inspect.py my_case --registry cases.yaml\n'
-            '  python exo_inspect.py my_case --registry cases.yaml --update\n'
-            '  python exo_inspect.py --scan-archive --registry cases.yaml\n'
-            '  python exo_inspect.py my_case --scan-archive --update\n'
+            '  python inspect.py my_case --registry cases.yaml\n'
+            '  python inspect.py my_case --registry cases.yaml --update\n'
+            '  python inspect.py --scan-archive --registry cases.yaml\n'
+            '  python inspect.py my_case --scan-archive --update\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -1,5 +1,5 @@
 """
-exo_data.py — ExoCAM data management tool
+manage.py — ExoCAM data management tool
 
 Inspect, manage, and purge GCM data across the three primary storage areas:
   cases/    CESM case directories (build scripts, SourceMods, namelists)
@@ -47,7 +47,7 @@ SAFETY
   report is read-only and safe to run bare — no case names means all cases.
 
 Run any subcommand with --help for full options, e.g.:
-  python exo_data.py purge-bld --help
+  python manage.py purge-bld --help
 """
 
 import argparse
@@ -840,7 +840,7 @@ def cmd_retire_case(args, paths):
         if not entry_found:
             print(f"  WARNING: '{case}' not found in registry {registry_path}.")
             print(f"           A minimal case.yaml stub will be written. "
-                  f"Run exo_inspect.py first to capture full metadata.")
+                  f"Run inspect.py first to capture full metadata.")
 
         # config copy (unless --purge)
         config_actions = []
@@ -957,7 +957,7 @@ def _add_models_arg(p, help_prefix='Restrict to these model components'):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog='exo_data.py',
+        prog='manage.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

@@ -1,5 +1,5 @@
 """
-exo_query.py — search cases.yaml and generate experiment matrices
+query.py — search cases.yaml and generate experiment matrices
 
 SUBCOMMANDS
 -----------
@@ -9,12 +9,12 @@ SUBCOMMANDS
 
 Examples
 --------
-  python exo_query.py search --config-type cam_land_fv
-  python exo_query.py search --exort-pkg n68equiv --nlev 51
-  python exo_query.py search --name thai              # substring match
-  python exo_query.py show ExoCAM_thai_ben1_L51_n68equiv
-  python exo_query.py export ExoCAM_thai_ben1_L51_n68equiv -o my_run.yaml
-  python exo_query.py export case_a case_b -o sweep.yaml
+  python query.py search --config-type cam_land_fv
+  python query.py search --exort-pkg n68equiv --nlev 51
+  python query.py search --name thai              # substring match
+  python query.py show ExoCAM_thai_ben1_L51_n68equiv
+  python query.py export ExoCAM_thai_ben1_L51_n68equiv -o my_run.yaml
+  python query.py export case_a case_b -o sweep.yaml
 """
 
 import argparse
@@ -24,7 +24,7 @@ import sys
 
 import yaml
 
-# Registry group order — mirrors exo_inspect._REGISTRY_GROUPS
+# Registry group order — mirrors inspect._REGISTRY_GROUPS
 _REGISTRY_GROUPS = [
     'meta', 'atmosphere', 'geophysical', 'model_options', 'special', 'diagnostics',
 ]
@@ -34,7 +34,7 @@ DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'config_registry.yaml')
 
 # ---------------------------------------------------------------------------
-# Registry I/O  (mirrors exo_inspect.load_registry)
+# Registry I/O  (mirrors inspect.load_registry)
 # ---------------------------------------------------------------------------
 
 def load_registry(path):
@@ -322,7 +322,7 @@ def cmd_export(args, rows, config_registry_path):
         warning = (
             "# ============================================================\n"
             "# FIXME: the following required fields are blank.\n"
-            "# Fill them in before running exo_build.py.\n"
+            "# Fill them in before running build.py.\n"
             "#\n"
             + "".join(f"#   {label}\n" for label in missing)
             + "# ============================================================\n\n"
@@ -368,7 +368,7 @@ def _dump_matrix(matrix):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog='exo_query.py',
+        prog='query.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

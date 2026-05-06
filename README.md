@@ -8,7 +8,7 @@ Case management tools for [ExoCAM](https://github.com/storyofthewolf/ExoCAM) —
 pip install pyyaml
 ```
 
-Optional (for solar file `nw` validation in `exo_inspect.py`):
+Optional (for solar file `nw` validation in `inspect.py`):
 ```bash
 pip install netCDF4
 ```
@@ -19,11 +19,11 @@ Python 3.8+.
 
 | File | Purpose |
 |---|---|
-| `exo_build.py` | Build script generator — validation, Fortran patching, shell script writer |
-| `exo_inspect.py` | CASE directory scanner → YAML registry |
-| `exo_parse.py` | Parsing primitives shared by build and inspect (no side effects) |
-| `exo_data.py` | Data management — disk usage reporting, purging, and moving data |
-| `exo_query.py` | Registry search and experiment matrix export |
+| `build.py` | Build script generator — validation, Fortran patching, shell script writer |
+| `inspect.py` | CASE directory scanner → YAML registry |
+| `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
+| `manage.py` | Data management — disk usage reporting, purging, and moving data |
+| `query.py` | Registry search and experiment matrix export |
 | `run_builds.sh` | Batch runner for all `*_build.sh` scripts in a directory |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
 | `experiment_matrix.yaml.example` | Annotated template for writing experiment matrices |
@@ -74,7 +74,7 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 ### 3. Generate build scripts
 
 ```bash
-python exo_build.py my_runs.yaml --outdir scripts/
+python build.py my_runs.yaml --outdir scripts/
 ```
 
 This validates every case and writes one script per case:
@@ -90,7 +90,7 @@ The build script handles all config-specific file path updates:
 **Review the generated scripts before running.** To also execute the builds immediately:
 
 ```bash
-python exo_build.py my_runs.yaml --outdir scripts/ --execute
+python build.py my_runs.yaml --outdir scripts/ --execute
 ```
 
 Build output is tee'd to `scripts/<case>.build.log`. Job submission (`.run`) is always manual.
@@ -131,16 +131,16 @@ cases:
 
 The generated script uses `create_clone`, inheriting SourceMods, namelists, and all CESM configuration from the source case. The `exoplanet_mod.F90` template is taken from the clone source's SourceMods rather than the repo default, so any custom parameter baselines are preserved. Only the parameters explicitly listed in the matrix are patched. `config_type`, `exort_pkg`, and `nlev` are optional — supply them to enable IC file lookup and `CAM_CONFIG_OPTS` update; omit them to inherit everything from the source.
 
-#### Generating a clone matrix with exo_query
+#### Generating a clone matrix with query.py
 
 ```bash
 # Bare export (default when --clone is used) — only run config in base, stubs in cases
-python exo_query.py export my_base_case -o sweep.yaml \
+python query.py export my_base_case -o sweep.yaml \
     --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 \
     --resubmit 4 --ntasks 126 --account s2427
 
 # Full export — all scientific parameters in base for reference
-python exo_query.py export my_base_case -o sweep.yaml \
+python query.py export my_base_case -o sweep.yaml \
     --clone my_base_case --full --stop-option nyears --stop-n 20 --rest-n 5 \
     --resubmit 4 --ntasks 126
 ```
@@ -151,22 +151,22 @@ Then add per-case entries with only the parameters that differ from the clone so
 
 ```bash
 # List all cases
-python exo_query.py search
+python query.py search
 
 # Filter by metadata
-python exo_query.py search --name thai
-python exo_query.py search --config-type cam_land_fv --nlev 51
-python exo_query.py search --exort-pkg n68equiv
+python query.py search --name thai
+python query.py search --config-type cam_land_fv --nlev 51
+python query.py search --exort-pkg n68equiv
 
 # Show all parameters for one case
-python exo_query.py show ExoCAM_thai_ben1_L51_n68equiv
+python query.py show ExoCAM_thai_ben1_L51_n68equiv
 
 # Export a full matrix from one or more registry cases
-python exo_query.py export case_a case_b -o sweep.yaml \
+python query.py export case_a case_b -o sweep.yaml \
     --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126 --account s2427
 
 # Export a bare clone matrix (minimal base, stubs per case)
-python exo_query.py export my_base_case -o clone_sweep.yaml \
+python query.py export my_base_case -o clone_sweep.yaml \
     --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 \
     --resubmit 4 --ntasks 126 --account s2427
 ```
@@ -179,19 +179,19 @@ For multi-case exports, shared parameters are automatically factored into `base`
 
 ```bash
 # Bare case name — resolved relative to caseroot in config_registry.yaml
-python exo_inspect.py my_case
+python inspect.py my_case
 
 # Multiple cases at once
-python exo_inspect.py case1 case2 case3 --registry cases.yaml
+python inspect.py case1 case2 case3 --registry cases.yaml
 
 # Scan all cases in caseroot (pass the full path or use . from caseroot)
-python exo_inspect.py /path/to/cases/
+python inspect.py /path/to/cases/
 
 # Add new cases to an existing registry without overwriting old rows
-python exo_inspect.py my_new_case --registry cases.yaml --update
+python inspect.py my_new_case --registry cases.yaml --update
 
 # Preview inspection results without writing the registry
-python exo_inspect.py my_case --dry-run
+python inspect.py my_case --dry-run
 ```
 
 A CASE directory is recognized by the presence of `SourceMods/src.share/exoplanet_mod.F90`. The registry captures metadata from multiple sources per case:
@@ -238,21 +238,21 @@ Consistency warnings are generated for pressure mismatches, level mismatches, an
 
 ```bash
 # Show disk usage across cases/, rundir/, and archive/ (default when called with no args)
-python exo_data.py
-python exo_data.py report               # explicit
-python exo_data.py report case1 case2   # specific cases only
+python manage.py
+python manage.py report               # explicit
+python manage.py report case1 case2   # specific cases only
 
 # Preview what each command would do (safe default — nothing is changed)
-python exo_data.py purge-bld my_case
-python exo_data.py purge-restarts my_case --keep 1
-python exo_data.py purge-hist my_case --models atm lnd
-python exo_data.py purge-logs my_case
-python exo_data.py move-hist my_case --models atm
+python manage.py purge-bld my_case
+python manage.py purge-restarts my_case --keep 1
+python manage.py purge-hist my_case --models atm lnd
+python manage.py purge-logs my_case
+python manage.py move-hist my_case --models atm
 
 # Add --execute to actually perform the action (prompts yes/no per case)
-python exo_data.py purge-bld my_case --execute
-python exo_data.py purge-restarts my_case --keep 1 --execute
-python exo_data.py move-hist my_case --models atm --execute
+python manage.py purge-bld my_case --execute
+python manage.py purge-restarts my_case --keep 1 --execute
+python manage.py move-hist my_case --models atm --execute
 ```
 
 All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes, and each case prompts for confirmation before acting. There is no `--all` flag — case names must always be listed explicitly.
@@ -282,19 +282,19 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 
 ```bash
 # Preview (no --execute — always safe to run first)
-python exo_data.py retire-case my_case --keep-years 5 --keep-restarts
+python manage.py retire-case my_case --keep-years 5 --keep-restarts
 
 # Move full case tree to long-term, no deletions
-python exo_data.py retire-case my_case --keep-case --execute
+python manage.py retire-case my_case --keep-case --execute
 
 # Keep last 5 years of history + most recent restart, delete the rest
-python exo_data.py retire-case my_case --keep-years 5 --keep-restarts --execute
+python manage.py retire-case my_case --keep-years 5 --keep-restarts --execute
 
 # Delete everything (case has no long-term value)
-python exo_data.py retire-case my_case --purge-only --execute
+python manage.py retire-case my_case --purge-only --execute
 
 # With registry pre-flight check
-python exo_data.py retire-case my_case --purge-only --registry cases.yaml --execute
+python manage.py retire-case my_case --purge-only --registry cases.yaml --execute
 ```
 
 Run any subcommand with `--help` for full options.
@@ -317,4 +317,4 @@ For total surface pressure > 1 bar, set `exo_n2bar_explicit` in the case spec. N
 
 ## Fortran expression evaluation
 
-`exo_parse.py` evaluates arithmetic expressions in `exoplanet_mod.F90` parameter lines rather than treating them as opaque strings. Parameters defined as multiplicative factors of Earth values (e.g. `0.91*6.37122e6_R8`) are evaluated to their numeric result. Parameters defined in terms of previously defined parameters (e.g. `1.0 - exo_co2bar - exo_ch4bar`) are resolved by substituting the already-parsed values. This means `exo_inspect.py` correctly recovers numeric values for gravity, radius, and N2 bar even from older cases that use expression-style definitions.
+`parse_utils.py` evaluates arithmetic expressions in `exoplanet_mod.F90` parameter lines rather than treating them as opaque strings. Parameters defined as multiplicative factors of Earth values (e.g. `0.91*6.37122e6_R8`) are evaluated to their numeric result. Parameters defined in terms of previously defined parameters (e.g. `1.0 - exo_co2bar - exo_ch4bar`) are resolved by substituting the already-parsed values. This means `inspect.py` correctly recovers numeric values for gravity, radius, and N2 bar even from older cases that use expression-style definitions.
