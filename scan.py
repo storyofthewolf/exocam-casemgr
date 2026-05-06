@@ -244,12 +244,14 @@ def check_consistency(meta):
                     f"but {os.path.basename(solar)} has nw={actual_nw}"
                 )
         else:
-            # file not accessible (remote path, missing) — fall back to stem check
+            # nw unreadable — stem check only for standard solar filenames.
+            # Custom stellar spectra (BT-Settl etc.) don't carry the stem; skip silently.
             stem = SOLAR_STEM_MAP[exort_pkg]
-            if stem not in os.path.basename(solar):
+            basename = os.path.basename(solar)
+            if any(s in basename for s in SOLAR_STEM_MAP.values()) and stem not in basename:
                 warnings.append(
                     f"solar file mismatch: exort_pkg={exort_pkg} expects stem '{stem}' "
-                    f"but solar file is {os.path.basename(solar)} (nw unreadable)"
+                    f"but solar file is {basename} (nw unreadable)"
                 )
 
     return warnings

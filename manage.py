@@ -925,13 +925,20 @@ def cmd_retire_case(args, paths):
                 shutil.move(src, dst)
 
         # Delete from cesm_scratch
+        deleted_bytes = 0
         print(f"  Deleting from cesm_scratch...")
         for p in [casedir_path, rundir_path, archive_path]:
             if p and os.path.exists(p):
+                deleted_bytes += dir_size_bytes(p)
                 shutil.rmtree(p)
                 print(f"    deleted {p}")
 
-        print(f"  Done: {case}")
+        # Tally what landed in long-term
+        kept_bytes = dir_size_bytes(lt_case_dir)
+
+        print(f"  Done: {case}  "
+              f"(freed {fmt_size(deleted_bytes)} from cesm_scratch, "
+              f"kept {fmt_size(kept_bytes)} in long-term)")
 
 
 # ---------------------------------------------------------------------------
