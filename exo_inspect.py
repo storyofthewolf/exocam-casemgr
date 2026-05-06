@@ -289,10 +289,18 @@ def _rows_to_ordered(rows):
     return {'cases': ordered}
 
 
+_REGISTRY_HEADER = (
+    "# Auto-generated cache — regenerate with: "
+    "python exo_inspect.py --scan-archive --update\n"
+)
+
+
 def write_registry(rows, path):
+    body = yaml.dump(_rows_to_ordered(rows),
+                     default_flow_style=False, allow_unicode=True, sort_keys=False)
     with open(path, 'w') as f:
-        yaml.dump(_rows_to_ordered(rows), f,
-                  default_flow_style=False, allow_unicode=True, sort_keys=False)
+        f.write(_REGISTRY_HEADER)
+        f.write(body)
     print(f"Registry written: {path}  ({len(rows)} cases)")
 
 
@@ -303,6 +311,51 @@ def _load_caseroot(config_registry_path):
     with open(config_registry_path) as f:
         data = yaml.safe_load(f)
     return (data or {}).get('paths', {}).get('caseroot')
+
+
+def _load_long_term(config_registry_path):
+    """Return long_term path from config_registry.yaml, or None if unavailable."""
+    if not config_registry_path or not os.path.exists(config_registry_path):
+        return None
+    with open(config_registry_path) as f:
+        data = yaml.safe_load(f)
+    return (data or {}).get('paths', {}).get('long_term')
+
+
+def scan_archive_entries(long_term_path):
+    """Walk long_term_path for subdirectories containing case.yaml.
+
+    Returns list of flat row dicts (same format as inspect_case output),
+    read directly from each case.yaml without re-inspecting any source files.
+    """
+    rows = []
+    if not long_term_path or not os.path.isdir(long_term_path):
+        return rows
+    for name in sorted(os.listdir(long_term_path)):
+        case_yaml = os.path.join(long_term_path, name, 'case.yaml')
+        if not os.path.isfile(case_yaml):
+            continue
+        try:
+            with open(case_yaml) as f:
+                data = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError) as e:
+            print(f"WARNING: could not read {case_yaml}: {e}", file=sys.stderr)
+            continue
+        # Full registry entry: {'cases': [entry]} where entry has group sub-dicts
+        if 'cases' in data:
+            for entry in data['cases']:
+                row = {}
+                for val in entry.values():
+                    if isinstance(val, dict):
+                        row.update(val)
+                if row:
+                    rows.append(row)
+        # Minimal stub: flat dict with case_name etc.
+        elif 'case_name' in data:
+            rows.append(data)
+        else:
+            print(f"WARNING: unrecognised case.yaml format in {case_yaml}", file=sys.stderr)
+    return rows
 
 
 def _resolve_path(p, caseroot):
@@ -319,24 +372,46 @@ def _resolve_path(p, caseroot):
 
 def main():
     # locate config_registry.yaml next to this script by default
-    default_registry = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    'config_registry.yaml')
+    default_config = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'config_registry.yaml')
 
-    parser = argparse.ArgumentParser(description='Inspect ExoCAM CASE directories and write YAML registry')
-    parser.add_argument('paths', nargs='+', help='CASE name(s), dir(s), or parent dir(s) to scan')
-    parser.add_argument('--registry', default='cases.yaml', help='Output YAML path (default: cases.yaml)')
+    parser = argparse.ArgumentParser(
+        description='Inspect ExoCAM CASE directories and write YAML registry',
+        epilog=(
+            'Examples:\n'
+            '  python exo_inspect.py my_case --registry cases.yaml\n'
+            '  python exo_inspect.py my_case --registry cases.yaml --update\n'
+            '  python exo_inspect.py --scan-archive --registry cases.yaml\n'
+            '  python exo_inspect.py my_case --scan-archive --update\n'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('paths', nargs='*',
+                        help='CASE name(s), dir(s), or parent dir(s) to inspect')
+    parser.add_argument('--registry', default='cases.yaml',
+                        help='Output YAML path (default: cases.yaml)')
     parser.add_argument('--update', action='store_true',
                         help='Merge with existing registry instead of overwriting')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print inspection results to screen without writing the registry')
-    parser.add_argument('--config-registry', default=default_registry,
+    parser.add_argument('--scan-archive', action='store_true', dest='scan_archive',
+                        help='Load pre-captured case.yaml entries from long_term/ '
+                             '(from config_registry.yaml). No Fortran or namelist files '
+                             'are read. May be combined with live case paths.')
+    parser.add_argument('--config-registry', default=default_config,
                         dest='config_registry',
-                        help='Path to config_registry.yaml (default: config_registry.yaml next to this script)')
+                        help='Path to config_registry.yaml '
+                             '(default: config_registry.yaml next to this script)')
     args = parser.parse_args()
 
-    caseroot = _load_caseroot(args.config_registry)
+    if not args.paths and not args.scan_archive:
+        parser.error("provide at least one CASE path or --scan-archive")
 
-    # collect all case dirs
+    caseroot  = _load_caseroot(args.config_registry)
+    long_term = _load_long_term(args.config_registry)
+
+    # --- live inspection ---
+    live_rows = []
     all_case_dirs = []
     for p in args.paths:
         resolved = _resolve_path(p, caseroot)
@@ -345,46 +420,69 @@ def main():
             print(f"WARNING: no CASE dirs found under {resolved}", file=sys.stderr)
         all_case_dirs.extend(found)
 
-    if not all_case_dirs:
-        print("No CASE directories found.", file=sys.stderr)
-        sys.exit(1)
-
-    rows = []
     for casedir in all_case_dirs:
         print(f"Inspecting: {casedir}")
         try:
             row = inspect_case(casedir)
-            rows.append(row)
+            live_rows.append(row)
             if row['warnings']:
                 for w in row['warnings']:
                     print(f"  WARNING: {w}")
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
 
+    # --- archive scan ---
+    archive_rows = []
+    if args.scan_archive:
+        if not long_term:
+            print("WARNING: long_term path not set in config_registry.yaml — "
+                  "--scan-archive has nothing to read.", file=sys.stderr)
+        else:
+            archive_rows = scan_archive_entries(long_term)
+            print(f"Archive scan: found {len(archive_rows)} case(s) in {long_term}")
+
+    # --- merge: live takes precedence over archived; both take precedence over existing ---
     if args.dry_run:
-        # print full YAML to stdout, no file written
+        rows = live_rows + [r for r in archive_rows
+                            if r.get('case_name') not in
+                            {lr['case_name'] for lr in live_rows}]
+        print(_REGISTRY_HEADER, end='')
         print(yaml.dump(_rows_to_ordered(rows),
                         default_flow_style=False, allow_unicode=True, sort_keys=False),
               end='')
     else:
+        # Start from existing registry when --update, otherwise empty
         if args.update:
             existing = load_registry(args.registry)
-            existing_by_name = {r['case_name']: r for r in existing}
-            for row in rows:
-                existing_by_name[row['case_name']] = row
-            rows = list(existing_by_name.values())
+            by_name = {r['case_name']: r for r in existing}
+        else:
+            by_name = {}
 
+        # archived entries fill in (overwrite existing if same name)
+        for r in archive_rows:
+            if r.get('case_name'):
+                by_name[r['case_name']] = r
+
+        # live entries take highest precedence
+        for r in live_rows:
+            by_name[r['case_name']] = r
+
+        rows = list(by_name.values())
         write_registry(rows, args.registry)
 
     # print summary table
-    print(f"\n{'CASE':<45} {'CONFIG':<16} {'PSTD':>8} {'NLEV':>5}  WARNINGS")
-    print('-' * 90)
-    for r in rows:
-        pstd = r.get('exo_pstd_computed_bar')
-        pstd_s = f"{float(pstd):.3f}" if pstd else '?'
-        warn_s = '; '.join(r['warnings']) if r.get('warnings') else ''
-        print(f"{r['case_name']:<45} {str(r.get('config_type','')):<16} "
-              f"{pstd_s:>8} {str(r.get('nlev','?')):>5}  {warn_s[:40]}")
+    if live_rows or archive_rows:
+        summary_rows = live_rows + [r for r in archive_rows
+                                    if r.get('case_name') not in
+                                    {lr['case_name'] for lr in live_rows}]
+        print(f"\n{'CASE':<45} {'CONFIG':<16} {'PSTD':>8} {'NLEV':>5}  WARNINGS")
+        print('-' * 90)
+        for r in summary_rows:
+            pstd = r.get('exo_pstd_computed_bar')
+            pstd_s = f"{float(pstd):.3f}" if pstd else '?'
+            warn_s = '; '.join(r['warnings']) if r.get('warnings') else ''
+            print(f"{r['case_name']:<45} {str(r.get('config_type','')):<16} "
+                  f"{pstd_s:>8} {str(r.get('nlev','?')):>5}  {warn_s[:40]}")
 
 
 if __name__ == '__main__':

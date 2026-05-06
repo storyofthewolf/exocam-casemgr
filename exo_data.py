@@ -26,7 +26,8 @@ SUBCOMMANDS
   purge-hist          Delete history NetCDF files in archive/<case>/<model>/hist/
   purge-logs          Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
   move-hist           Move history files to long-term storage
-  retire-case         Retire a case: preserve data to long-term and/or delete from cesm_scratch
+  retire-case         Retire a case: copy config/data to long-term, then delete
+                      from cesm_scratch
 
 SAFETY
 ------
@@ -37,9 +38,11 @@ SAFETY
   purge-hist additionally requires --keep-years N or --models to prevent
   accidental deletion of all history files.
 
-  retire-case requires one of --keep-years N, --keep-restarts, --keep-case,
-  or --purge-only to force stating intent explicitly. --keep-case moves only
-  the caseroot directory to long-term storage without deleting anything.
+  retire-case requires one of --purge, --keep-years N, or --keep-restarts to
+  force stating intent explicitly. --purge saves only case.yaml and deletes
+  everything; without --purge, SourceMods, namelists, and env files are also
+  copied to long-term. --purge is mutually exclusive with --keep-years and
+  --keep-restarts.
 
   report is read-only and safe to run bare — no case names means all cases.
 
@@ -650,50 +653,135 @@ def cmd_move_hist(args, paths):
 # Subcommand: retire-case
 # ---------------------------------------------------------------------------
 
-def _check_registry(case, registry_path):
-    """Return True if case is found in registry_path, False if not, None if registry unavailable."""
+DEFAULT_RETIRE_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       'cases.yaml')
+
+
+def _load_registry_entry(case, registry_path):
+    """Return the raw grouped entry dict for *case* from registry_path, or None."""
     if not registry_path or not os.path.exists(registry_path):
         return None
     with open(registry_path) as f:
         data = yaml.safe_load(f) or {}
     for entry in data.get('cases', []):
         if (entry.get('meta') or {}).get('case_name') == case:
-            return True
-    return False
+            return entry
+    return None
+
+
+def _write_case_yaml(case, lt_case_dir, registry_path):
+    """Write case.yaml into lt_case_dir.
+
+    Uses the full registry entry when available; falls back to a minimal stub.
+    Returns True if the full entry was found, False if stub was written.
+    """
+    import datetime as _dt
+    os.makedirs(lt_case_dir, exist_ok=True)
+    dst = os.path.join(lt_case_dir, 'case.yaml')
+    entry = _load_registry_entry(case, registry_path)
+    if entry is not None:
+        with open(dst, 'w') as f:
+            yaml.dump({'cases': [entry]}, f,
+                      default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return True
+    else:
+        stub = {'case_name': case, 'retired_date': _dt.date.today().isoformat()}
+        with open(dst, 'w') as f:
+            yaml.dump(stub, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return False
+
+
+def _copy_case_config(casedir_path, lt_case_dir):
+    """Copy SourceMods/, user_* files, and env_* files from casedir to lt_case_dir.
+
+    Returns list of (label, src, dst) describing what was copied.
+    """
+    actions = []
+
+    # SourceMods/
+    src_sm = os.path.join(casedir_path, 'SourceMods')
+    if os.path.isdir(src_sm):
+        dst_sm = os.path.join(lt_case_dir, 'SourceMods')
+        actions.append(('SourceMods/', src_sm, dst_sm))
+
+    # user_* files
+    nl_dst = os.path.join(lt_case_dir, 'namelists')
+    try:
+        for name in sorted(os.listdir(casedir_path)):
+            if name.startswith('user_') and os.path.isfile(
+                    os.path.join(casedir_path, name)):
+                actions.append((f'namelists/{name}',
+                                 os.path.join(casedir_path, name),
+                                 os.path.join(nl_dst, name)))
+    except OSError:
+        pass
+
+    # env_* files
+    env_dst = os.path.join(lt_case_dir, 'env')
+    try:
+        for name in sorted(os.listdir(casedir_path)):
+            if name.startswith('env_') and os.path.isfile(
+                    os.path.join(casedir_path, name)):
+                actions.append((f'env/{name}',
+                                 os.path.join(casedir_path, name),
+                                 os.path.join(env_dst, name)))
+    except OSError:
+        pass
+
+    return actions
+
+
+def _execute_copy_case_config(actions):
+    """Perform the copies described by _copy_case_config actions list."""
+    for label, src, dst in actions:
+        if os.path.isdir(src):
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+        else:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
 
 
 def cmd_retire_case(args, paths):
     """
-    Retire one or more cases. Intent must be stated explicitly via one or more flags.
+    Retire one or more cases from cesm_scratch. At least one intent flag required.
 
-    Intent flags (at least one required):
+    Intent flags:
 
-      --purge-only       Delete caseroot, rundir, and archive entirely.
-                         Mutually exclusive with all other intent flags.
+      --purge            Write case.yaml to long-term, then delete caseroot,
+                         rundir, and archive entirely. Mutually exclusive with
+                         --keep-years and --keep-restarts.
 
-      --keep-case        Move caseroot/<case>/ to long-term storage (preserves
-                         SourceMods, namelists, and configuration). No deletions.
-                         Does not touch rundir or archive. Mutually exclusive
-                         with --purge-only.
+      --keep-years N     Copy config files (SourceMods, namelists, env) and
+                         case.yaml to long-term. Move hist files from the N
+                         most recent model years to long-term. Then delete
+                         caseroot, rundir, and archive.
 
-      --keep-years N     Move hist files from the N most recent model years
-                         to long-term storage, then delete everything else.
+      --keep-restarts    Copy config files and case.yaml to long-term. Move the
+                         most recent restart set to long-term. Then delete
+                         caseroot, rundir, and archive.
 
-      --keep-restarts    Move the single most recent restart set to long-term
-                         storage, then delete everything else.
+    --keep-years and --keep-restarts may be combined. --purge is mutually
+    exclusive with both.
 
-    --keep-years and --keep-restarts may be combined with each other and with
-    --keep-case (preserving selected data while also keeping the full tree).
-    --purge-only is mutually exclusive with all three.
+    In all modes, case.yaml is written to long_term/<case>/case.yaml. If the
+    case is found in --registry (default: cases.yaml), the full registry entry
+    is written; otherwise a minimal stub (case_name, retired_date) is written
+    and a warning is printed.
 
-    All moves use shutil.move — no intermediate copy, so peak disk usage
-    stays flat.
+    Long-term layout:
+      long_term/<case>/case.yaml
+      long_term/<case>/SourceMods/          (unless --purge)
+      long_term/<case>/namelists/           (unless --purge)
+      long_term/<case>/env/                 (unless --purge)
+      long_term/<case>/<model>/hist/        (--keep-years only)
+      long_term/<case>/rest/<date>/         (--keep-restarts only)
 
     SAFEGUARDS:
       - --execute required; default is preview only.
       - Explicit case names required; no --all flag.
       - At least one intent flag required.
-      - If --registry is supplied, warns if the case is not found in cases.yaml.
       - Each case requires individual yes/no confirmation.
 
     WARNING: deletions are permanent. Ensure cases.yaml is current before running.
@@ -706,24 +794,22 @@ def cmd_retire_case(args, paths):
     if not any([caseroot, rundir, archive]):
         sys.exit("ERROR: no storage paths configured.")
 
-    has_preserve = args.keep_years is not None or args.keep_restarts or args.keep_case
-    if args.purge_only and has_preserve:
-        sys.exit("ERROR: --purge-only is mutually exclusive with "
-                 "--keep-years, --keep-restarts, and --keep-case.")
-    if not args.purge_only and not has_preserve:
-        sys.exit("ERROR: retire-case requires at least one of --keep-years N, "
-                 "--keep-restarts, --keep-case, or --purge-only. "
-                 "State your intent explicitly.")
+    if not long_term:
+        sys.exit("ERROR: retire-case requires long_term path. "
+                 "Set paths.long_term in config_registry.yaml or use --long-term.")
 
-    needs_long_term = args.keep_years is not None or args.keep_restarts or args.keep_case
-    if needs_long_term and not long_term:
-        sys.exit("ERROR: --keep-years, --keep-restarts, and --keep-case require "
-                 "long_term path. Set paths.long_term in config_registry.yaml "
-                 "or use --long-term.")
+    has_keep = args.keep_years is not None or args.keep_restarts
+    if args.purge and has_keep:
+        sys.exit("ERROR: --purge is mutually exclusive with --keep-years and --keep-restarts.")
+    if not args.purge and not has_keep:
+        sys.exit("ERROR: retire-case requires at least one of --purge, --keep-years N, "
+                 "or --keep-restarts. State your intent explicitly.")
 
     cases_requested = args.cases
     if not cases_requested:
         sys.exit("ERROR: retire-case requires explicit case name(s).")
+
+    registry_path = getattr(args, 'registry', None) or DEFAULT_RETIRE_REGISTRY
 
     all_on_disk = discover_cases(paths)
     missing = [c for c in cases_requested if c not in all_on_disk]
@@ -739,56 +825,60 @@ def cmd_retire_case(args, paths):
         print(f"  CASE: {case}")
         print(f"{'='*60}")
 
-        reg_status = _check_registry(case, getattr(args, 'registry', None))
-        if reg_status is False:
-            print(f"  WARNING: '{case}' not found in registry {args.registry}.")
-            print(f"           Run exo_inspect.py first to preserve case metadata.")
-        elif reg_status is True:
-            print(f"  Registry: found in {args.registry}")
-
         casedir_path = os.path.join(caseroot, case) if caseroot else ''
         rundir_path  = os.path.join(rundir,   case) if rundir   else ''
         archive_path = os.path.join(archive,  case) if archive  else ''
+        lt_case_dir  = os.path.join(long_term, case)
 
         sz = case_sizes(case, paths)
         total_on_disk = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
 
-        preserve_hist    = []  # (src_file, dst_file)
-        preserve_restart = []  # (src_dir, dst_dir)
-        keep_case_moves  = []  # (src_dir, dst_dir) for --keep-case whole-tree move
+        # --- build plan ---
 
-        if args.keep_case:
-            src = os.path.join(paths.get('caseroot', ''), case)
-            if os.path.exists(src):
-                dst = os.path.join(long_term, 'cases', case)
-                keep_case_moves.append((src, dst, dir_size_bytes(src)))
+        # case.yaml
+        entry_found = _load_registry_entry(case, registry_path) is not None
+        if not entry_found:
+            print(f"  WARNING: '{case}' not found in registry {registry_path}.")
+            print(f"           A minimal case.yaml stub will be written. "
+                  f"Run exo_inspect.py first to capture full metadata.")
 
+        # config copy (unless --purge)
+        config_actions = []
+        if not args.purge and casedir_path and os.path.isdir(casedir_path):
+            config_actions = _copy_case_config(casedir_path, lt_case_dir)
+
+        # hist preservation
+        preserve_hist = []  # (src_file, dst_file)
         if args.keep_years is not None:
             keep_years, per_model = _hist_keep_years_filter(
                 archive_path, HIST_MODELS, args.keep_years)
+            keep_set = set(keep_years)
             for model, info in per_model.items():
                 for f in info['keep']:
                     y = _hist_year(f)
-                    if y and y in set(keep_years):
+                    if y and y in keep_set:
                         src = os.path.join(info['dir'], f)
-                        dst = os.path.join(long_term, case, model, 'hist', f)
+                        dst = os.path.join(lt_case_dir, model, 'hist', f)
                         preserve_hist.append((src, dst))
 
+        # restart preservation
+        preserve_restart = []  # (src_dir, dst_dir)
         if args.keep_restarts:
             sets = restart_sets(case, paths)
             if sets:
                 date_str, rest_path = sets[-1]
-                preserve_restart.append((rest_path,
-                                         os.path.join(long_term, case, 'rest', date_str)))
+                preserve_restart.append(
+                    (rest_path, os.path.join(lt_case_dir, 'rest', date_str)))
 
-        # Print plan
+        # --- print plan ---
         print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
-        if keep_case_moves:
-            kc_total = sum(m[2] for m in keep_case_moves)
-            print(f"  MOVE to long-term (--keep-case): entire case tree "
-                  f"({fmt_size(kc_total)})")
-            for src, dst, size in keep_case_moves:
-                print(f"    {src}  ->  {dst}  ({fmt_size(size)})")
+        print(f"  COPY to long-term: {lt_case_dir}/case.yaml "
+              f"({'full registry entry' if entry_found else 'minimal stub'})")
+        if config_actions:
+            print(f"  COPY to long-term: SourceMods/, namelists/, env/ "
+                  f"({len(config_actions)} item(s))")
+            for label, src, dst in config_actions:
+                print(f"    {src}  ->  {dst}")
         if preserve_hist:
             hist_size = sum(os.path.getsize(s) for s, _ in preserve_hist)
             print(f"  MOVE to long-term: {len(preserve_hist)} hist file(s) "
@@ -796,13 +886,10 @@ def cmd_retire_case(args, paths):
         if preserve_restart:
             rest_size = sum(dir_size_bytes(s) for s, _ in preserve_restart)
             print(f"  MOVE to long-term: most recent restart set ({fmt_size(rest_size)})")
-        if args.purge_only:
-            print(f"  Mode: --purge-only (no preservation)")
-        if not args.keep_case:
-            print(f"  DELETE from cesm_scratch:")
-            for path in [casedir_path, rundir_path, archive_path]:
-                if path and os.path.exists(path):
-                    print(f"    {path}")
+        print(f"  DELETE from cesm_scratch:")
+        for p in [casedir_path, rundir_path, archive_path]:
+            if p and os.path.exists(p):
+                print(f"    {p}")
 
         if not args.execute:
             print(f"\n  [preview] add --execute to perform these actions")
@@ -813,33 +900,35 @@ def cmd_retire_case(args, paths):
             print(f"  Skipped.")
             continue
 
-        # --keep-case: move entire tree, then stop (no deletions)
-        if keep_case_moves:
-            print(f"  Moving entire case tree to long-term...")
-            for src, dst, _ in keep_case_moves:
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.move(src, dst)
-            print(f"  Done: {case}")
-            continue
+        # Write case.yaml
+        _write_case_yaml(case, lt_case_dir, registry_path)
+        print(f"  Written: {lt_case_dir}/case.yaml")
 
-        # Selective preservation moves
+        # Copy config files (unless --purge)
+        if config_actions:
+            print(f"  Copying SourceMods/, namelists/, env/...")
+            _execute_copy_case_config(config_actions)
+
+        # Move hist files
         if preserve_hist:
             print(f"  Moving {len(preserve_hist)} hist file(s) to long-term...")
             for src, dst in preserve_hist:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.move(src, dst)
 
+        # Move restart set
         if preserve_restart:
             print(f"  Moving restart set to long-term...")
             for src, dst in preserve_restart:
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.move(src, dst)
 
+        # Delete from cesm_scratch
         print(f"  Deleting from cesm_scratch...")
-        for path in [casedir_path, rundir_path, archive_path]:
-            if path and os.path.exists(path):
-                shutil.rmtree(path)
-                print(f"    deleted {path}")
+        for p in [casedir_path, rundir_path, archive_path]:
+            if p and os.path.exists(p):
+                shutil.rmtree(p)
+                print(f"    deleted {p}")
 
         print(f"  Done: {case}")
 
@@ -957,25 +1046,24 @@ def build_parser():
     # ---- retire-case ----
     p_arc = sub.add_parser(
         'retire-case',
-        help='Retire a case: move to long-term storage and/or delete from cesm_scratch',
+        help='Retire a case: copy config/data to long-term, then delete from cesm_scratch',
         description=cmd_retire_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_destructive_args(p_arc)
-    p_arc.add_argument('--keep-case', action='store_true', dest='keep_case',
-                       help='Move the caseroot directory to long-term storage (preserves '
-                            'SourceMods, namelists, and configuration). No deletions. '
-                            'Does not touch rundir or archive. Mutually exclusive '
-                            'with --purge-only.')
+    p_arc.add_argument('--purge', action='store_true',
+                       help='Write case.yaml only to long-term, then delete everything. '
+                            'Mutually exclusive with --keep-years and --keep-restarts.')
     p_arc.add_argument('--keep-years', type=int, metavar='N', default=None,
-                       help='Move hist files from the N most recent model years to long-term storage')
-    p_arc.add_argument('--keep-restarts', action='store_true',
-                       help='Move the most recent restart set to long-term storage before deleting')
-    p_arc.add_argument('--purge-only', action='store_true', dest='purge_only',
-                       help='Delete everything with no preservation (mutually exclusive '
-                            'with --keep-case / --keep-years / --keep-restarts)')
+                       dest='keep_years',
+                       help='Copy config files to long-term and move hist files from the '
+                            'N most recent model years, then delete everything')
+    p_arc.add_argument('--keep-restarts', action='store_true', dest='keep_restarts',
+                       help='Copy config files to long-term and move the most recent '
+                            'restart set, then delete everything')
     p_arc.add_argument('--registry', metavar='FILE', default=None,
-                       help='Path to cases.yaml — warns if case not found (does not require it)')
+                       help=f'Path to cases.yaml for case.yaml export '
+                            f'(default: {DEFAULT_RETIRE_REGISTRY})')
 
     return parser
 

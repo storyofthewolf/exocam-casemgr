@@ -32,6 +32,12 @@ python exo_inspect.py my_case --dry-run
 # Update (merge) instead of overwriting registry
 python exo_inspect.py my_case --registry cases.yaml --update
 
+# Rebuild cases.yaml from archived case.yaml entries in long_term/
+python exo_inspect.py --scan-archive --registry cases.yaml
+
+# Merge live inspection + archived entries into cases.yaml
+python exo_inspect.py my_case --scan-archive --update
+
 # Disk usage report across all cases (default when called with no args)
 python exo_data.py
 python exo_data.py report                   # same; optional explicit subcommand
@@ -46,13 +52,13 @@ python exo_data.py purge-logs my_case --execute
 python exo_data.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
-#   --keep-case        move caseroot to long-term intact (no deletions; rundir/archive untouched)
-#   --keep-years N     move N most recent hist years to long-term, then delete
-#   --keep-restarts    move most recent restart to long-term, then delete
-#   --purge-only       delete everything, no preservation
-python exo_data.py retire-case my_case --purge-only --execute
+#   --purge            write case.yaml only to long-term, then delete everything
+#   --keep-years N     copy config + move N most recent hist years to long-term, then delete
+#   --keep-restarts    copy config + move most recent restart to long-term, then delete
+# --keep-years and --keep-restarts are combinable; --purge is mutually exclusive with both
+python exo_data.py retire-case my_case --purge --execute
 python exo_data.py retire-case my_case --keep-years 5 --keep-restarts --execute
-python exo_data.py retire-case my_case --keep-case --execute
+python exo_data.py retire-case my_case --keep-years 5 --execute
 
 # Search and export from registry
 python exo_query.py search --config-type cam_land_fv --nlev 51
@@ -128,8 +134,10 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `_infer_config_type(casedir)` — checks presence of `src.cice` and `src.clm` to determine aqua/land/mixed.
 - `check_consistency(meta)` — generates warnings for pressure mismatches, level mismatches, and solar file/exort_pkg mismatches. Uses `read_solar_nw()` when the file is accessible; falls back to filename stem check otherwise.
 - `_rows_to_ordered(rows)` — converts flat row dicts to the grouped YAML structure.
-- `write_registry(rows, path)` — writes grouped YAML via `_rows_to_ordered`.
+- `write_registry(rows, path)` — writes grouped YAML via `_rows_to_ordered`, prepending a `# Auto-generated cache` comment header.
 - `load_registry(path)` — reads grouped YAML and flattens groups back to plain dicts for internal use.
+- `scan_archive_entries(long_term_path)` — walks `long_term/` for subdirectories containing `case.yaml`; reads each as a pre-captured registry entry without touching any Fortran or namelist files. Returns flat row dicts. Handles both full registry-format entries (`{'cases': [...]}`) and minimal stubs (`{'case_name': ..., 'retired_date': ...}`).
+- `--scan-archive` flag — when passed, calls `scan_archive_entries` using `long_term` from `config_registry.yaml`. May be used alone (no live case paths) or combined with live paths and `--update`; live inspection always takes precedence over archived entries on name collision.
 - `_REGISTRY_GROUPS` — defines group names and field ordering for YAML output.
 - `SOLAR_NW_MAP` — expected `nw` dimension per `exort_pkg`: `{n68equiv: 68, n84equiv: 84, n28archean: 28, n42h2o: 42}`.
 
@@ -162,7 +170,7 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty.
 - `cmd_move_case` — moves entire case tree to long-term storage. `--no-casedir/--no-rundir/--no-archive` skip areas.
-- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge-only` (delete everything), `--keep-case` (move caseroot only to `long_term/cases/<case>/`; does not touch rundir or archive; no deletions), `--keep-years N` (move recent hist to long-term first, then delete), or `--keep-restarts` (move most recent restart to long-term first, then delete). `--keep-years` and `--keep-restarts` may be combined with each other and with `--keep-case`; `--purge-only` is mutually exclusive with all three. Uses `shutil.move` — no intermediate copy, so peak disk usage stays flat. Optional `--registry cases.yaml` warns if case not found in scientific registry.
+- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge` (write `case.yaml` to long-term only, then delete caseroot + rundir + archive), `--keep-years N` (copy config files + move N most recent hist years to long-term, then delete), or `--keep-restarts` (copy config files + move most recent restart to long-term, then delete). `--keep-years` and `--keep-restarts` are combinable; `--purge` is mutually exclusive with both. Without `--purge`, always copies `SourceMods/`, `user_*` files (→ `namelists/`), and `env_*` files (→ `env/`) to `long_term/<case>/`. `case.yaml` is always written from `--registry` (default: `cases.yaml`); falls back to a minimal stub if the case is not found. Uses `shutil.move` for hist/restart moves — no intermediate copy, so peak disk usage stays flat.
 - `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in cases.yaml; used by `cmd_retire_case` for pre-flight warning only.
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
