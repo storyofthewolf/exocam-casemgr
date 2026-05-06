@@ -24,22 +24,22 @@ bash scripts/my_case_build.sh
 bash run_builds.sh scripts/
 
 # Scan all cases under caseroot (default when no paths given)
-python inspect.py --registry cases.yaml
+python scan.py --registry cases.yaml
 
 # Inspect a single case by bare name (resolved to caseroot from config_registry.yaml)
-python inspect.py my_case --registry cases.yaml
+python scan.py my_case --registry cases.yaml
 
 # Preview inspection without writing the registry
-python inspect.py my_case --dry-run
+python scan.py my_case --dry-run
 
 # Update (merge) instead of overwriting registry
-python inspect.py my_case --registry cases.yaml --update
+python scan.py my_case --registry cases.yaml --update
 
 # Rebuild cases.yaml from archived case.yaml entries in long_term/
-python inspect.py --scan-archive --registry cases.yaml
+python scan.py --scan-archive --registry cases.yaml
 
 # Merge live inspection + archived entries into cases.yaml
-python inspect.py my_case --scan-archive --update
+python scan.py my_case --scan-archive --update
 
 # Disk usage report across all cases (default when called with no args)
 python manage.py
@@ -87,7 +87,7 @@ experiment_matrix.yaml
 
 CASE directories on HPC
        ↓
-  inspect.py
+  scan.py
        ↓
   cases.yaml                                  ← queryable YAML registry
        ↓
@@ -100,7 +100,7 @@ cases/ + rundir/ + archive/ on HPC
 
 ### `parse_utils.py` — pure parsing primitives, no filesystem side effects
 
-Used by both `build.py` and `inspect.py`.
+Used by both `build.py` and `scan.py`.
 
 - `parse_exoplanet_mod(path)` — reads Fortran parameter file → flat dict. Evaluates arithmetic expressions (e.g. `0.91*6.37122e6_R8`) and symbol-substitution expressions (e.g. `1.0 - exo_co2bar - exo_ch4bar`) using `_try_eval_expr()`, which substitutes already-resolved param values then evals in a restricted namespace. Unevaluable expressions fall back to `name_expr` raw string storage.
 - `parse_user_nl_cam(path)` — reads CESM namelist → dict. Captures `ncdata`, IC pressure/level from filename, and any `carma_*` / `volc_*` keys as nested dicts. Handles both single- and double-quoted values.
@@ -108,7 +108,7 @@ Used by both `build.py` and `inspect.py`.
 - `parse_docn_som(path)` — reads `user_docn.streams.txt.som` (XML fragment, wrapped in synthetic root for ElementTree) → dict with `som_pop_frc_file`. Called for aqua and mixed configs only.
 - `parse_cam_config_opts(xmlpath)` — reads `env_build.xml` for `-nlev`, `-usr_src` (exort_pkg), cloud scheme.
 - `compute_pstd_bar(params)` — derives total surface pressure from gas bar values.
-- `read_solar_nw(path)` — reads `nw` dimension from a NetCDF solar file using `netCDF4`. Returns `None` if the library is absent or the file is inaccessible. Used for solar file / exort_pkg consistency checking in `inspect.py`.
+- `read_solar_nw(path)` — reads `nw` dimension from a NetCDF solar file using `netCDF4`. Returns `None` if the library is absent or the file is inaccessible. Used for solar file / exort_pkg consistency checking in `scan.py`.
 
 ### `build.py` — validation and shell script generation
 
@@ -129,7 +129,7 @@ Used by both `build.py` and `inspect.py`.
 - `REQUIRED_FIELDS` — required for newcase mode: `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
 - `REQUIRED_FIELDS_CLONE` — required for clone mode: `clone`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
 
-### `inspect.py` — CASE directory scanner → YAML registry
+### `scan.py` — CASE directory scanner → YAML registry
 
 Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`), extracts scientific metadata, writes a grouped YAML registry. Bare case names are resolved relative to `caseroot` from `config_registry.yaml`.
 
@@ -276,6 +276,6 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 
 `generate_shell_script` only supports radiative transfer packages referenced via `-usr_src ../ExoRT/3dmodels/*`. Cases with custom-modified RT source copied into SourceMods cannot be built via `create_newcase`. For custom RT, clone from an existing case using `clone` in the experiment matrix, which uses `create_clone` and inherits SourceMods from the source case.
 
-### `n68equiv.haze` registered as `n68equiv` (inspect.py)
+### `n68equiv.haze` registered as `n68equiv` (scan.py)
 
-Some cases were built using `ExoRT/3dmodels/src.cam.n68equiv.haze`, a special variant of n68equiv that includes CARMA haze optics. `inspect.py` currently registers these as plain `n68equiv` — the `.haze` suffix in the `-usr_src` path is not distinguished. No special handling has been implemented because `n68equiv.haze` is expected to be merged into `n68equiv` in a future ExoRT update, at which point the distinction disappears.
+Some cases were built using `ExoRT/3dmodels/src.cam.n68equiv.haze`, a special variant of n68equiv that includes CARMA haze optics. `scan.py` currently registers these as plain `n68equiv` — the `.haze` suffix in the `-usr_src` path is not distinguished. No special handling has been implemented because `n68equiv.haze` is expected to be merged into `n68equiv` in a future ExoRT update, at which point the distinction disappears.

@@ -840,7 +840,7 @@ def cmd_retire_case(args, paths):
         if not entry_found:
             print(f"  WARNING: '{case}' not found in registry {registry_path}.")
             print(f"           A minimal case.yaml stub will be written. "
-                  f"Run inspect.py first to capture full metadata.")
+                  f"Run scan.py first to capture full metadata.")
 
         # config copy (unless --purge)
         config_actions = []

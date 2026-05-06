@@ -24,7 +24,7 @@ import sys
 
 import yaml
 
-# Registry group order — mirrors inspect._REGISTRY_GROUPS
+# Registry group order — mirrors scan._REGISTRY_GROUPS
 _REGISTRY_GROUPS = [
     'meta', 'atmosphere', 'geophysical', 'model_options', 'special', 'diagnostics',
 ]
@@ -34,7 +34,7 @@ DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'config_registry.yaml')
 
 # ---------------------------------------------------------------------------
-# Registry I/O  (mirrors inspect.load_registry)
+# Registry I/O  (mirrors scan.load_registry)
 # ---------------------------------------------------------------------------
 
 def load_registry(path):

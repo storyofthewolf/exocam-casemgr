@@ -3,7 +3,7 @@ ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
 writes a queryable YAML registry.
 
 Usage:
-  python inspect.py [CASE_NAME ...] [--registry cases.yaml] [--update]
+  python scan.py [CASE_NAME ...] [--registry cases.yaml] [--update]
 
 With no arguments, scans all cases under caseroot from config_registry.yaml.
 Each argument may be a bare case name, an absolute path, or a parent directory.
@@ -292,7 +292,7 @@ def _rows_to_ordered(rows):
 
 _REGISTRY_HEADER = (
     "# Auto-generated cache — regenerate with: "
-    "python inspect.py --scan-archive --update\n"
+    "python scan.py --scan-archive --update\n"
 )
 
 
@@ -380,10 +380,10 @@ def main():
         description='Inspect ExoCAM CASE directories and write YAML registry',
         epilog=(
             'Examples:\n'
-            '  python inspect.py my_case --registry cases.yaml\n'
-            '  python inspect.py my_case --registry cases.yaml --update\n'
-            '  python inspect.py --scan-archive --registry cases.yaml\n'
-            '  python inspect.py my_case --scan-archive --update\n'
+            '  python scan.py my_case --registry cases.yaml\n'
+            '  python scan.py my_case --registry cases.yaml --update\n'
+            '  python scan.py --scan-archive --registry cases.yaml\n'
+            '  python scan.py my_case --scan-archive --update\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

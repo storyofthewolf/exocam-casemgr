@@ -8,7 +8,7 @@ Case management tools for [ExoCAM](https://github.com/storyofthewolf/ExoCAM) —
 pip install pyyaml
 ```
 
-Optional (for solar file `nw` validation in `inspect.py`):
+Optional (for solar file `nw` validation in `scan.py`):
 ```bash
 pip install netCDF4
 ```
@@ -20,7 +20,7 @@ Python 3.8+.
 | File | Purpose |
 |---|---|
 | `build.py` | Build script generator — validation, Fortran patching, shell script writer |
-| `inspect.py` | CASE directory scanner → YAML registry |
+| `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `manage.py` | Data management — disk usage reporting, purging, and moving data |
 | `query.py` | Registry search and experiment matrix export |
@@ -179,19 +179,19 @@ For multi-case exports, shared parameters are automatically factored into `base`
 
 ```bash
 # Bare case name — resolved relative to caseroot in config_registry.yaml
-python inspect.py my_case
+python scan.py my_case
 
 # Multiple cases at once
-python inspect.py case1 case2 case3 --registry cases.yaml
+python scan.py case1 case2 case3 --registry cases.yaml
 
 # Scan all cases in caseroot (pass the full path or use . from caseroot)
-python inspect.py /path/to/cases/
+python scan.py /path/to/cases/
 
 # Add new cases to an existing registry without overwriting old rows
-python inspect.py my_new_case --registry cases.yaml --update
+python scan.py my_new_case --registry cases.yaml --update
 
 # Preview inspection results without writing the registry
-python inspect.py my_case --dry-run
+python scan.py my_case --dry-run
 ```
 
 A CASE directory is recognized by the presence of `SourceMods/src.share/exoplanet_mod.F90`. The registry captures metadata from multiple sources per case:
@@ -317,4 +317,4 @@ For total surface pressure > 1 bar, set `exo_n2bar_explicit` in the case spec. N
 
 ## Fortran expression evaluation
 
-`parse_utils.py` evaluates arithmetic expressions in `exoplanet_mod.F90` parameter lines rather than treating them as opaque strings. Parameters defined as multiplicative factors of Earth values (e.g. `0.91*6.37122e6_R8`) are evaluated to their numeric result. Parameters defined in terms of previously defined parameters (e.g. `1.0 - exo_co2bar - exo_ch4bar`) are resolved by substituting the already-parsed values. This means `inspect.py` correctly recovers numeric values for gravity, radius, and N2 bar even from older cases that use expression-style definitions.
+`parse_utils.py` evaluates arithmetic expressions in `exoplanet_mod.F90` parameter lines rather than treating them as opaque strings. Parameters defined as multiplicative factors of Earth values (e.g. `0.91*6.37122e6_R8`) are evaluated to their numeric result. Parameters defined in terms of previously defined parameters (e.g. `1.0 - exo_co2bar - exo_ch4bar`) are resolved by substituting the already-parsed values. This means `scan.py` correctly recovers numeric values for gravity, radius, and N2 bar even from older cases that use expression-style definitions.
