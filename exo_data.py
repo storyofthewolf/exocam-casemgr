@@ -26,8 +26,7 @@ SUBCOMMANDS
   purge-hist          Delete history NetCDF files in archive/<case>/<model>/hist/
   purge-logs          Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
   move-hist           Move history files to long-term storage
-  move-case           Move an entire case tree (cases + rundir + archive) to long-term storage
-  archive-case        Retire a case: optionally preserve hist/restarts to long-term, then delete all
+  retire-case         Retire a case: preserve data to long-term and/or delete from cesm_scratch
 
 SAFETY
 ------
@@ -38,8 +37,9 @@ SAFETY
   purge-hist additionally requires --keep-years N or --models to prevent
   accidental deletion of all history files.
 
-  archive-case requires one of --keep-years N, --keep-restarts, or
-  --purge-only to force stating intent explicitly.
+  retire-case requires one of --keep-years N, --keep-restarts, --keep-case,
+  or --purge-only to force stating intent explicitly. --keep-case moves the
+  entire case tree to long-term storage without deleting anything.
 
   report is read-only and safe to run bare — no case names means all cases.
 
@@ -647,66 +647,7 @@ def cmd_move_hist(args, paths):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: move-case
-# ---------------------------------------------------------------------------
-
-def cmd_move_case(args, paths):
-    """
-    Move a complete case tree to long-term storage.
-
-    Moves all three areas for each specified case:
-      cases/<case>         -> <long_term>/cases/<case>
-      rundir/<case>/       -> <long_term>/rundir/<case>/
-      archive/<case>/      -> <long_term>/archive/<case>/
-
-    Use --no-casedir, --no-rundir, or --no-archive to skip those areas.
-    Intended for cases that are fully complete and no longer active.
-    """
-    long_term = paths.get('long_term', '')
-    if not long_term:
-        sys.exit("ERROR: long_term path not configured. Set paths.long_term in "
-                 "config_registry.yaml or use --long-term.")
-
-    cases = _require_cases(discover_cases(paths), args)
-    if not cases:
-        return
-
-    areas = []
-    if not args.no_casedir:
-        areas.append(('caseroot', 'cases'))
-    if not args.no_rundir:
-        areas.append(('rundir', 'rundir'))
-    if not args.no_archive:
-        areas.append(('archive', 'archive'))
-
-    for case in cases:
-        moves = []
-        for path_key, lt_subdir in areas:
-            src = os.path.join(paths.get(path_key, ''), case)
-            if os.path.exists(src):
-                dst = os.path.join(long_term, lt_subdir, case)
-                size = dir_size_bytes(src)
-                moves.append((src, dst, size))
-
-        if not moves:
-            print(f"  {case}: nothing found to move, skipping")
-            continue
-
-        total = sum(m[2] for m in moves)
-        print(f"  {case}: {fmt_size(total)} across {len(moves)} area(s)")
-        for src, dst, size in moves:
-            print(f"    {src}  ->  {dst}  ({fmt_size(size)})")
-
-        action = f"move {fmt_size(total)} for case '{case}' to long-term storage"
-        if confirm(action, args.execute):
-            for src, dst, _ in moves:
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.move(src, dst)
-            print(f"    moved {case}")
-
-
-# ---------------------------------------------------------------------------
-# Subcommand: archive-case
+# Subcommand: retire-case
 # ---------------------------------------------------------------------------
 
 def _check_registry(case, registry_path):
@@ -721,30 +662,36 @@ def _check_registry(case, registry_path):
     return False
 
 
-def cmd_archive_case(args, paths):
+def cmd_retire_case(args, paths):
     """
-    Retire one or more cases from cesm_scratch. Intent must be stated explicitly.
+    Retire one or more cases. Intent must be stated explicitly via one or more flags.
 
-    Required — one of:
+    Intent flags (at least one required):
+
+      --purge-only       Delete caseroot, rundir, and archive entirely.
+                         Mutually exclusive with all other intent flags.
+
+      --keep-case        Move the complete case tree (caseroot + rundir + archive)
+                         to long-term storage intact. No deletions. Mutually
+                         exclusive with --purge-only.
+
       --keep-years N     Move hist files from the N most recent model years
-                         to long-term storage before deleting.
-      --keep-restarts    Move the single most recent restart set to
-                         long-term storage before deleting.
-      --purge-only       Delete everything with no preservation.
+                         to long-term storage, then delete everything else.
 
-    --keep-years and --keep-restarts may be combined. --purge-only is
-    mutually exclusive with both.
+      --keep-restarts    Move the single most recent restart set to long-term
+                         storage, then delete everything else.
 
-    After any preservation moves complete, caseroot/<case>, rundir/<case>,
-    and archive/<case> are all deleted from cesm_scratch.
+    --keep-years and --keep-restarts may be combined with each other and with
+    --keep-case (preserving selected data while also keeping the full tree).
+    --purge-only is mutually exclusive with all three.
 
-    Preservation uses shutil.move — no intermediate copy, so peak disk
-    usage stays flat.
+    All moves use shutil.move — no intermediate copy, so peak disk usage
+    stays flat.
 
     SAFEGUARDS:
       - --execute required; default is preview only.
       - Explicit case names required; no --all flag.
-      - One of --keep-years, --keep-restarts, --purge-only required.
+      - At least one intent flag required.
       - If --registry is supplied, warns if the case is not found in cases.yaml.
       - Each case requires individual yes/no confirmation.
 
@@ -758,21 +705,24 @@ def cmd_archive_case(args, paths):
     if not any([caseroot, rundir, archive]):
         sys.exit("ERROR: no storage paths configured.")
 
-    has_preserve = args.keep_years is not None or args.keep_restarts
+    has_preserve = args.keep_years is not None or args.keep_restarts or args.keep_case
     if args.purge_only and has_preserve:
         sys.exit("ERROR: --purge-only is mutually exclusive with "
-                 "--keep-years and --keep-restarts.")
+                 "--keep-years, --keep-restarts, and --keep-case.")
     if not args.purge_only and not has_preserve:
-        sys.exit("ERROR: archive-case requires one of --keep-years N, "
-                 "--keep-restarts, or --purge-only. State your intent explicitly.")
+        sys.exit("ERROR: retire-case requires at least one of --keep-years N, "
+                 "--keep-restarts, --keep-case, or --purge-only. "
+                 "State your intent explicitly.")
 
-    if has_preserve and not long_term:
-        sys.exit("ERROR: --keep-years and --keep-restarts require long_term path. "
-                 "Set paths.long_term in config_registry.yaml or use --long-term.")
+    needs_long_term = args.keep_years is not None or args.keep_restarts or args.keep_case
+    if needs_long_term and not long_term:
+        sys.exit("ERROR: --keep-years, --keep-restarts, and --keep-case require "
+                 "long_term path. Set paths.long_term in config_registry.yaml "
+                 "or use --long-term.")
 
     cases_requested = args.cases
     if not cases_requested:
-        sys.exit("ERROR: archive-case requires explicit case name(s).")
+        sys.exit("ERROR: retire-case requires explicit case name(s).")
 
     all_on_disk = discover_cases(paths)
     missing = [c for c in cases_requested if c not in all_on_disk]
@@ -804,6 +754,15 @@ def cmd_archive_case(args, paths):
 
         preserve_hist    = []  # (src_file, dst_file)
         preserve_restart = []  # (src_dir, dst_dir)
+        keep_case_moves  = []  # (src_dir, dst_dir) for --keep-case whole-tree move
+
+        if args.keep_case:
+            for path_key, lt_subdir in [('caseroot', 'cases'), ('rundir', 'rundir'),
+                                         ('archive', 'archive')]:
+                src = os.path.join(paths.get(path_key, ''), case)
+                if os.path.exists(src):
+                    dst = os.path.join(long_term, lt_subdir, case)
+                    keep_case_moves.append((src, dst, dir_size_bytes(src)))
 
         if args.keep_years is not None:
             keep_years, per_model = _hist_keep_years_filter(
@@ -823,7 +782,14 @@ def cmd_archive_case(args, paths):
                 preserve_restart.append((rest_path,
                                          os.path.join(long_term, case, 'rest', date_str)))
 
+        # Print plan
         print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
+        if keep_case_moves:
+            kc_total = sum(m[2] for m in keep_case_moves)
+            print(f"  MOVE to long-term (--keep-case): entire case tree "
+                  f"({fmt_size(kc_total)})")
+            for src, dst, size in keep_case_moves:
+                print(f"    {src}  ->  {dst}  ({fmt_size(size)})")
         if preserve_hist:
             hist_size = sum(os.path.getsize(s) for s, _ in preserve_hist)
             print(f"  MOVE to long-term: {len(preserve_hist)} hist file(s) "
@@ -833,21 +799,31 @@ def cmd_archive_case(args, paths):
             print(f"  MOVE to long-term: most recent restart set ({fmt_size(rest_size)})")
         if args.purge_only:
             print(f"  Mode: --purge-only (no preservation)")
-        print(f"  DELETE from cesm_scratch:")
-        for path, label in [(casedir_path, 'caseroot'), (rundir_path, 'rundir'),
-                            (archive_path, 'archive')]:
-            if path and os.path.exists(path):
-                print(f"    {path}")
+        if not args.keep_case:
+            print(f"  DELETE from cesm_scratch:")
+            for path in [casedir_path, rundir_path, archive_path]:
+                if path and os.path.exists(path):
+                    print(f"    {path}")
 
         if not args.execute:
             print(f"\n  [preview] add --execute to perform these actions")
             continue
 
-        answer = input(f"\n  Confirm archive-case for '{case}'? [yes/no]: ").strip().lower()
+        answer = input(f"\n  Confirm retire-case for '{case}'? [yes/no]: ").strip().lower()
         if answer != 'yes':
             print(f"  Skipped.")
             continue
 
+        # --keep-case: move entire tree, then stop (no deletions)
+        if keep_case_moves:
+            print(f"  Moving entire case tree to long-term...")
+            for src, dst, _ in keep_case_moves:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+            print(f"  Done: {case}")
+            continue
+
+        # Selective preservation moves
         if preserve_hist:
             print(f"  Moving {len(preserve_hist)} hist file(s) to long-term...")
             for src, dst in preserve_hist:
@@ -979,36 +955,25 @@ def build_parser():
     _add_destructive_args(p_mvhist)
     _add_models_arg(p_mvhist)
 
-    # ---- move-case ----
-    p_mvcase = sub.add_parser(
-        'move-case',
-        help='Move a complete case tree (cases + rundir + archive) to long-term storage',
-        description=cmd_move_case.__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    _add_destructive_args(p_mvcase)
-    p_mvcase.add_argument('--no-casedir', action='store_true',
-                          help='Skip moving cases/<case>')
-    p_mvcase.add_argument('--no-rundir', action='store_true',
-                          help='Skip moving rundir/<case>')
-    p_mvcase.add_argument('--no-archive', action='store_true',
-                          help='Skip moving archive/<case>')
-
-    # ---- archive-case ----
+    # ---- retire-case ----
     p_arc = sub.add_parser(
-        'archive-case',
-        help='Retire a case: optionally preserve data to long-term, then delete from cesm_scratch',
-        description=cmd_archive_case.__doc__,
+        'retire-case',
+        help='Retire a case: move to long-term storage and/or delete from cesm_scratch',
+        description=cmd_retire_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_destructive_args(p_arc)
+    p_arc.add_argument('--keep-case', action='store_true', dest='keep_case',
+                       help='Move the entire case tree (caseroot + rundir + archive) to '
+                            'long-term storage intact; no deletions. Mutually exclusive '
+                            'with --purge-only.')
     p_arc.add_argument('--keep-years', type=int, metavar='N', default=None,
                        help='Move hist files from the N most recent model years to long-term storage')
     p_arc.add_argument('--keep-restarts', action='store_true',
                        help='Move the most recent restart set to long-term storage before deleting')
     p_arc.add_argument('--purge-only', action='store_true', dest='purge_only',
                        help='Delete everything with no preservation (mutually exclusive '
-                            'with --keep-years / --keep-restarts)')
+                            'with --keep-case / --keep-years / --keep-restarts)')
     p_arc.add_argument('--registry', metavar='FILE', default=None,
                        help='Path to cases.yaml — warns if case not found (does not require it)')
 
@@ -1026,8 +991,7 @@ COMMANDS = {
     'purge-hist':      cmd_purge_hist,
     'purge-logs':      cmd_purge_logs,
     'move-hist':       cmd_move_hist,
-    'move-case':       cmd_move_case,
-    'archive-case':    cmd_archive_case,
+    'retire-case':     cmd_retire_case,
 }
 
 

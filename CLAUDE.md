@@ -44,8 +44,9 @@ python exo_data.py purge-restarts my_case --keep 1 --execute
 python exo_data.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
-python exo_data.py archive-case my_case --purge-only --execute
-python exo_data.py archive-case my_case --keep-years 5 --keep-restarts --execute
+python exo_data.py retire-case my_case --purge-only --execute
+python exo_data.py retire-case my_case --keep-years 5 --keep-restarts --execute
+python exo_data.py retire-case my_case --keep-case --execute
 
 # Search and export from registry
 python exo_query.py search --config-type cam_land_fv --nlev 51
@@ -155,8 +156,8 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty.
 - `cmd_move_case` — moves entire case tree to long-term storage. `--no-casedir/--no-rundir/--no-archive` skip areas.
-- `cmd_archive_case` — retires a case from cesm_scratch. Requires one of `--purge-only` (delete everything), `--keep-years N` (move recent hist to long-term first), or `--keep-restarts` (move most recent restart to long-term first). `--keep-years` and `--keep-restarts` may be combined; `--purge-only` is mutually exclusive with both. Uses `shutil.move` — no intermediate copy, so peak disk usage stays flat. Optional `--registry cases.yaml` warns if case not found in scientific registry.
-- `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in cases.yaml; used by `cmd_archive_case` for pre-flight warning only.
+- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge-only` (delete everything), `--keep-case` (move entire tree to long-term intact, no deletions), `--keep-years N` (move recent hist to long-term first, then delete), or `--keep-restarts` (move most recent restart to long-term first, then delete). `--keep-years` and `--keep-restarts` may be combined with each other and with `--keep-case`; `--purge-only` is mutually exclusive with all three. Uses `shutil.move` — no intermediate copy, so peak disk usage stays flat. Optional `--registry cases.yaml` warns if case not found in scientific registry.
+- `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in cases.yaml; used by `cmd_retire_case` for pre-flight warning only.
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
 - `HIST_MODELS` — `ARCHIVE_MODELS` minus `'rest'`; the components with `hist/` and `logs/` subdirs.
