@@ -401,25 +401,52 @@ def cmd_report(args, paths):
         print("No cases found.")
         return
 
+    col_w = max(len(c) for c in cases) + 2
+    cw = 11
+    header = (f"{'CASE':<{col_w}}  {'CASEDIR':>{cw}}  {'BLD':>{cw}}  {'RUN':>{cw}}  "
+              f"{'HIST':>{cw}}  {'LOGS':>{cw}}  {'REST':>{cw}}  {'TOTAL':>{cw}}")
+    print(header)
+    print('-' * len(header))
+
     now_ts = datetime.datetime.now().replace(microsecond=0).isoformat()
     cases_data = {}
+    grand = {k: 0 for k in ('casedir_bytes', 'bld_bytes', 'run_bytes',
+                             'hist_bytes', 'logs_bytes', 'rest_bytes')}
     for case in cases:
         sz = case_sizes(case, paths)
+        cd, bl, ru, hi, lo, re = (sz['casedir'], sz['bld'], sz['run'],
+                                   sz['hist'], sz['logs'], sz['rest'])
         cases_data[case] = {
-            'casedir_bytes': sz['casedir'],
-            'bld_bytes':     sz['bld'],
-            'run_bytes':     sz['run'],
-            'hist_bytes':    sz['hist'],
-            'logs_bytes':    sz['logs'],
-            'rest_bytes':    sz['rest'],
+            'casedir_bytes': cd,
+            'bld_bytes':     bl,
+            'run_bytes':     ru,
+            'hist_bytes':    hi,
+            'logs_bytes':    lo,
+            'rest_bytes':    re,
             'updated':       now_ts,
         }
+        for k, v in (('casedir_bytes', cd), ('bld_bytes', bl), ('run_bytes', ru),
+                     ('hist_bytes', hi), ('logs_bytes', lo), ('rest_bytes', re)):
+            grand[k] += v
+        print(f"{case:<{col_w}}  {fmt_size(cd):>{cw}}  {fmt_size(bl):>{cw}}  "
+              f"{fmt_size(ru):>{cw}}  {fmt_size(hi):>{cw}}  "
+              f"{fmt_size(lo):>{cw}}  {fmt_size(re):>{cw}}  "
+              f"{fmt_size(cd + bl + ru + hi + lo + re):>{cw}}")
+
+    grand_total = sum(grand.values())
+    print('-' * len(header))
+    print(f"{'TOTAL':<{col_w}}  "
+          f"{fmt_size(grand['casedir_bytes']):>{cw}}  "
+          f"{fmt_size(grand['bld_bytes']):>{cw}}  "
+          f"{fmt_size(grand['run_bytes']):>{cw}}  "
+          f"{fmt_size(grand['hist_bytes']):>{cw}}  "
+          f"{fmt_size(grand['logs_bytes']):>{cw}}  "
+          f"{fmt_size(grand['rest_bytes']):>{cw}}  "
+          f"{fmt_size(grand_total):>{cw}}")
 
     # Save: bare invocation updates 'generated'; named-case scan does not
     generated_ts = now_ts if not requested else None
     save_usage_yaml(usage_path, cases_data, generated_ts)
-
-    _print_report_table(cases, cases_data)
 
 
 def _print_report_table(cases, cases_data):
