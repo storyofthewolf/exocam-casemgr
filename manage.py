@@ -52,6 +52,7 @@ Run any subcommand with --help for full options, e.g.:
 """
 
 import argparse
+import datetime
 import os
 import re
 import shutil
@@ -67,6 +68,8 @@ HIST_MODELS = [m for m in ARCHIVE_MODELS if m != 'rest']
 
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
+DEFAULT_USAGE_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'usage.yaml')
 
 
 def load_paths(args):
@@ -301,6 +304,51 @@ def _require_cases(all_cases, args):
 
 
 # ---------------------------------------------------------------------------
+# usage.yaml helpers
+# ---------------------------------------------------------------------------
+
+def save_usage_yaml(path, cases_data, generated_ts):
+    """Write cases_data to usage.yaml.
+
+    cases_data : {case_name: {casedir_bytes, bld_bytes, run_bytes,
+                               hist_bytes, logs_bytes, rest_bytes, updated}}
+    generated_ts : ISO-format string; written only for bare (all-cases) scans.
+                   Pass None to preserve the existing 'generated' timestamp.
+    """
+    existing = {}
+    existing_generated = None
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                doc = yaml.safe_load(f) or {}
+            existing = doc.get('cases', {}) or {}
+            existing_generated = doc.get('generated')
+        except Exception:
+            pass
+
+    existing.update(cases_data)
+
+    doc = {}
+    if generated_ts is not None:
+        doc['generated'] = generated_ts
+    elif existing_generated is not None:
+        doc['generated'] = existing_generated
+    doc['cases'] = existing
+
+    with open(path, 'w') as f:
+        yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def load_usage_yaml(path):
+    """Load usage.yaml; exit with an error if the file is missing."""
+    if not os.path.exists(path):
+        sys.exit(f"ERROR: {path} not found. Run 'manage.py report' first to generate it.")
+    with open(path) as f:
+        doc = yaml.safe_load(f) or {}
+    return doc
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: report
 # ---------------------------------------------------------------------------
 
@@ -308,12 +356,39 @@ def cmd_report(args, paths):
     """
     Show disk usage per case across cases/, rundir/, and archive/.
 
-    Read-only. With no case names, reports on every discovered case.
+    Read-only. With no case names, reports on every discovered case and
+    saves results to usage.yaml (next to this script).
+
+    With specific case names, scans only those cases and merges the results
+    into usage.yaml (other cases are preserved; 'generated' timestamp is not
+    updated for partial scans).
+
+    --cached prints the last saved usage.yaml without touching the disk.
+    Cannot be combined with explicit case names.
 
     Columns: CASE | CASEDIR | BLD | RUN | HIST | LOGS | REST | TOTAL
     """
-    all_cases = discover_cases(paths)
+    usage_path = getattr(args, 'usage_yaml', None) or DEFAULT_USAGE_YAML
+    cached = getattr(args, 'cached', False)
     requested = getattr(args, 'cases', None) or []
+
+    if cached and requested:
+        sys.exit("ERROR: --cached cannot be combined with explicit case names.")
+
+    if cached:
+        doc = load_usage_yaml(usage_path)
+        generated = doc.get('generated', '(unknown)')
+        cases_data = doc.get('cases', {}) or {}
+        if not cases_data:
+            print("No cases in usage.yaml.")
+            return
+        cases = sorted(cases_data.keys())
+        print(f"(cached snapshot from {generated})")
+        _print_report_table(cases, cases_data)
+        return
+
+    # Live scan
+    all_cases = discover_cases(paths)
     if requested:
         missing = [c for c in requested if c not in all_cases]
         if missing:
@@ -326,6 +401,29 @@ def cmd_report(args, paths):
         print("No cases found.")
         return
 
+    now_ts = datetime.datetime.now().replace(microsecond=0).isoformat()
+    cases_data = {}
+    for case in cases:
+        sz = case_sizes(case, paths)
+        cases_data[case] = {
+            'casedir_bytes': sz['casedir'],
+            'bld_bytes':     sz['bld'],
+            'run_bytes':     sz['run'],
+            'hist_bytes':    sz['hist'],
+            'logs_bytes':    sz['logs'],
+            'rest_bytes':    sz['rest'],
+            'updated':       now_ts,
+        }
+
+    # Save: bare invocation updates 'generated'; named-case scan does not
+    generated_ts = now_ts if not requested else None
+    save_usage_yaml(usage_path, cases_data, generated_ts)
+
+    _print_report_table(cases, cases_data)
+
+
+def _print_report_table(cases, cases_data):
+    """Print the aligned disk-usage table from a {case: bytes-dict} mapping."""
     col_w = max(len(c) for c in cases) + 2
     cw = 11
     header = (f"{'CASE':<{col_w}}  {'CASEDIR':>{cw}}  {'BLD':>{cw}}  {'RUN':>{cw}}  "
@@ -333,22 +431,34 @@ def cmd_report(args, paths):
     print(header)
     print('-' * len(header))
 
-    grand = {k: 0 for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest')}
+    grand = {k: 0 for k in ('casedir_bytes', 'bld_bytes', 'run_bytes',
+                             'hist_bytes', 'logs_bytes', 'rest_bytes')}
     for case in cases:
-        sz = case_sizes(case, paths)
-        total = sum(sz[k] for k in grand)
-        for k in grand:
-            grand[k] += sz[k]
-        print(f"{case:<{col_w}}  {fmt_size(sz['casedir']):>{cw}}  {fmt_size(sz['bld']):>{cw}}  "
-              f"{fmt_size(sz['run']):>{cw}}  {fmt_size(sz['hist']):>{cw}}  "
-              f"{fmt_size(sz['logs']):>{cw}}  {fmt_size(sz['rest']):>{cw}}  "
+        d = cases_data.get(case, {})
+        cd = d.get('casedir_bytes', 0)
+        bl = d.get('bld_bytes',     0)
+        ru = d.get('run_bytes',     0)
+        hi = d.get('hist_bytes',    0)
+        lo = d.get('logs_bytes',    0)
+        re = d.get('rest_bytes',    0)
+        total = cd + bl + ru + hi + lo + re
+        for k, v in (('casedir_bytes', cd), ('bld_bytes', bl), ('run_bytes', ru),
+                     ('hist_bytes', hi), ('logs_bytes', lo), ('rest_bytes', re)):
+            grand[k] += v
+        print(f"{case:<{col_w}}  {fmt_size(cd):>{cw}}  {fmt_size(bl):>{cw}}  "
+              f"{fmt_size(ru):>{cw}}  {fmt_size(hi):>{cw}}  "
+              f"{fmt_size(lo):>{cw}}  {fmt_size(re):>{cw}}  "
               f"{fmt_size(total):>{cw}}")
 
     grand_total = sum(grand.values())
     print('-' * len(header))
-    print(f"{'TOTAL':<{col_w}}  {fmt_size(grand['casedir']):>{cw}}  {fmt_size(grand['bld']):>{cw}}  "
-          f"{fmt_size(grand['run']):>{cw}}  {fmt_size(grand['hist']):>{cw}}  "
-          f"{fmt_size(grand['logs']):>{cw}}  {fmt_size(grand['rest']):>{cw}}  "
+    print(f"{'TOTAL':<{col_w}}  "
+          f"{fmt_size(grand['casedir_bytes']):>{cw}}  "
+          f"{fmt_size(grand['bld_bytes']):>{cw}}  "
+          f"{fmt_size(grand['run_bytes']):>{cw}}  "
+          f"{fmt_size(grand['hist_bytes']):>{cw}}  "
+          f"{fmt_size(grand['logs_bytes']):>{cw}}  "
+          f"{fmt_size(grand['rest_bytes']):>{cw}}  "
           f"{fmt_size(grand_total):>{cw}}")
 
 
@@ -990,6 +1100,12 @@ def build_parser():
     )
     p_report.add_argument('cases', nargs='*',
                           help='Case name(s) to report (default: all discovered cases)')
+    p_report.add_argument('--cached', action='store_true',
+                          help='Print last saved usage.yaml without scanning disk '
+                               '(cannot combine with case names)')
+    p_report.add_argument('--usage-yaml', metavar='FILE', default=None, dest='usage_yaml',
+                          help=f'Path to usage.yaml snapshot '
+                               f'(default: usage.yaml next to this script)')
 
     # ---- purge-bld ----
     p_bld = sub.add_parser(
@@ -1098,6 +1214,8 @@ def main():
     if args.command is None:
         args.command = 'report'
         args.cases = []
+        args.cached = False
+        args.usage_yaml = None
 
     paths = load_paths(args)
 

@@ -42,9 +42,13 @@ python scan.py --scan-archive --registry cases.yaml
 python scan.py my_case --scan-archive --update
 
 # Disk usage report across all cases (default when called with no args)
+# Scans disk and saves results to usage.yaml automatically
 python manage.py
 python manage.py report                   # same; optional explicit subcommand
-python manage.py report my_case           # single case
+python manage.py report my_case           # scan single case, merge into usage.yaml
+
+# Print last saved usage.yaml without touching disk
+python manage.py report --cached
 
 # Purge/move commands — preview by default, --execute to act
 # All destructive subcommands require explicit case name(s) — no --all flag.
@@ -166,7 +170,9 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `restart_sets(case, paths)` — returns sorted list of `(date_str, path)` for dated subdirs in `archive/<case>/rest/`.
 - `list_files_with_size(directory)` — returns `(filenames, total_bytes)` for files directly in a directory; used by hist/logs/move operations.
 - `_hist_keep_years_filter(archive_path, models, keep_n)` — partitions hist files into keep/delete lists based on the most-recent N model years; shared by `purge-hist` and `archive-case`.
-- `cmd_report` — prints aligned disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL. Read-only; bare invocation (no case names) reports all cases.
+- `save_usage_yaml(path, cases_data, generated_ts)` — writes `{case: {*_bytes, updated}}` records into `usage.yaml`, merging with any existing entries. `generated_ts` is written only when not `None` (bare scans); partial scans pass `None` to preserve the existing timestamp.
+- `load_usage_yaml(path)` — loads `usage.yaml`; exits with an error if the file is missing.
+- `cmd_report` — prints aligned disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL. Bare invocation scans all cases, prints the table, and saves results to `usage.yaml` (updating `generated`). Named-case invocation scans only those cases, merges into `usage.yaml` (preserves `generated`). `--cached` loads `usage.yaml` and prints without scanning disk; incompatible with explicit case names. Raw bytes stored in YAML; formatted for display.
 - `cmd_purge_bld` — deletes `rundir/<case>/bld/`. `--logs-only` removes only `.o`/`.mod` files.
 - `cmd_purge_restarts` — trims old restart sets keeping the N most recent (`--keep N`, default 1).
 - `cmd_purge_hist` — deletes `archive/<case>/<model>/hist/` contents. `--models` restricts components. Requires `--keep-years N` or `--models` to prevent accidental total deletion.
