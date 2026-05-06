@@ -41,9 +41,15 @@ python exo_data.py report my_case           # single case
 # All destructive subcommands require explicit case name(s) — no --all flag.
 python exo_data.py purge-bld my_case --execute
 python exo_data.py purge-restarts my_case --keep 1 --execute
+python exo_data.py purge-hist my_case --models atm --execute
+python exo_data.py purge-logs my_case --execute
 python exo_data.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
+#   --keep-case        move entire tree to long-term intact (no deletions)
+#   --keep-years N     move N most recent hist years to long-term, then delete
+#   --keep-restarts    move most recent restart to long-term, then delete
+#   --purge-only       delete everything, no preservation
 python exo_data.py retire-case my_case --purge-only --execute
 python exo_data.py retire-case my_case --keep-years 5 --keep-restarts --execute
 python exo_data.py retire-case my_case --keep-case --execute

@@ -243,29 +243,59 @@ python exo_data.py report               # explicit
 python exo_data.py report case1 case2   # specific cases only
 
 # Preview what each command would do (safe default — nothing is changed)
-python exo_data.py purge-bld
-python exo_data.py purge-restarts --keep 1
-python exo_data.py purge-hist --models atm lnd
-python exo_data.py move-hist --models atm
-python exo_data.py move-case my_old_case
+python exo_data.py purge-bld my_case
+python exo_data.py purge-restarts my_case --keep 1
+python exo_data.py purge-hist my_case --models atm lnd
+python exo_data.py purge-logs my_case
+python exo_data.py move-hist my_case --models atm
 
-# Add --execute to actually perform the action (prompts yes/N per case)
-python exo_data.py purge-bld --execute
-python exo_data.py purge-restarts --keep 1 --execute
-python exo_data.py move-hist --models atm --execute my_case
-python exo_data.py move-case --execute my_old_case
+# Add --execute to actually perform the action (prompts yes/no per case)
+python exo_data.py purge-bld my_case --execute
+python exo_data.py purge-restarts my_case --keep 1 --execute
+python exo_data.py move-hist my_case --models atm --execute
 ```
 
-All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes, and each case prompts for confirmation before acting.
+All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes, and each case prompts for confirmation before acting. There is no `--all` flag — case names must always be listed explicitly.
 
 | Subcommand | What it does |
 |---|---|
-| `report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case |
+| `report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Read-only; bare invocation reports all cases. |
 | `purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
-| `purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Use `--models` to target specific components. Use `--keep-years N` to retain the N most recent model years (cutoff shared across all targeted components). |
+| `purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |
+| `purge-logs` | Delete log files from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`. Both locations safe to purge after a run. `--no-archive-logs` / `--no-case-logs` skip one side. |
 | `move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
-| `move-case` | Move an entire case tree (cases + rundir + archive) to long-term storage. Use `--no-casedir`, `--no-rundir`, or `--no-archive` to skip areas. |
+| `retire-case` | Retire a completed case. Requires an explicit intent flag (see below). |
+
+#### Retiring a case with `retire-case`
+
+`retire-case` is the end-of-life command for a case. It requires at least one intent flag so the operation is always deliberate:
+
+| Flag | What it does |
+|---|---|
+| `--keep-case` | Move the entire case tree (caseroot + rundir + archive) to long-term storage intact. No deletions. |
+| `--keep-years N` | Move hist files from the N most recent model years to long-term, then delete everything from cesm_scratch. |
+| `--keep-restarts` | Move the single most recent restart set to long-term, then delete everything from cesm_scratch. |
+| `--purge-only` | Delete everything. No preservation. Mutually exclusive with the other flags. |
+
+`--keep-years` and `--keep-restarts` may be combined with each other and with `--keep-case`. `--purge-only` is mutually exclusive with all three.
+
+```bash
+# Preview (no --execute — always safe to run first)
+python exo_data.py retire-case my_case --keep-years 5 --keep-restarts
+
+# Move full case tree to long-term, no deletions
+python exo_data.py retire-case my_case --keep-case --execute
+
+# Keep last 5 years of history + most recent restart, delete the rest
+python exo_data.py retire-case my_case --keep-years 5 --keep-restarts --execute
+
+# Delete everything (case has no long-term value)
+python exo_data.py retire-case my_case --purge-only --execute
+
+# With registry pre-flight check
+python exo_data.py retire-case my_case --purge-only --registry cases.yaml --execute
+```
 
 Run any subcommand with `--help` for full options.
 
