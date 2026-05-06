@@ -3,9 +3,10 @@ ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
 writes a queryable YAML registry.
 
 Usage:
-  python inspect.py CASE_NAME [CASE_NAME ...] [--registry cases.yaml] [--update]
+  python inspect.py [CASE_NAME ...] [--registry cases.yaml] [--update]
 
-Each argument is a bare case name, an absolute path, or a parent dir.
+With no arguments, scans all cases under caseroot from config_registry.yaml.
+Each argument may be a bare case name, an absolute path, or a parent directory.
 Bare names are resolved relative to caseroot in config_registry.yaml.
 """
 
@@ -387,7 +388,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('paths', nargs='*',
-                        help='CASE name(s), dir(s), or parent dir(s) to inspect')
+                        help='CASE name(s), dir(s), or parent dir(s) to inspect '
+                             '(default: scan all cases under caseroot from config_registry.yaml)')
     parser.add_argument('--registry', default='cases.yaml',
                         help='Output YAML path (default: cases.yaml)')
     parser.add_argument('--update', action='store_true',
@@ -404,11 +406,15 @@ def main():
                              '(default: config_registry.yaml next to this script)')
     args = parser.parse_args()
 
-    if not args.paths and not args.scan_archive:
-        parser.error("provide at least one CASE path or --scan-archive")
-
     caseroot  = _load_caseroot(args.config_registry)
     long_term = _load_long_term(args.config_registry)
+
+    if not args.paths and not args.scan_archive:
+        if not caseroot:
+            parser.error("provide at least one CASE path, or set paths.caseroot in "
+                         "config_registry.yaml for automatic caseroot scanning")
+        print(f"No paths specified — scanning caseroot: {caseroot}")
+        args.paths = [caseroot]
 
     # --- live inspection ---
     live_rows = []

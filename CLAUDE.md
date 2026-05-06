@@ -23,7 +23,10 @@ bash scripts/my_case_build.sh
 # Run all build scripts in a directory
 bash run_builds.sh scripts/
 
-# Inspect a case by bare name (resolved to caseroot from config_registry.yaml)
+# Scan all cases under caseroot (default when no paths given)
+python inspect.py --registry cases.yaml
+
+# Inspect a single case by bare name (resolved to caseroot from config_registry.yaml)
 python inspect.py my_case --registry cases.yaml
 
 # Preview inspection without writing the registry
