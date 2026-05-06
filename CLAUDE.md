@@ -72,6 +72,10 @@ python query.py search --config-type cam_land_fv --nlev 51
 python query.py show ExoCAM_thai_ben1_L51_n68equiv
 python query.py export case_a case_b -o sweep.yaml --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
 python query.py export my_base_case -o clone.yaml --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
+
+# SourceMods diff — check for custom Fortran before retiring
+python diff.py my_case                        # summary: IDENTICAL / MODIFIED / CASE ONLY per file
+python diff.py my_case --full physpkg.F90     # full diff for one file (or contents if CASE ONLY)
 ```
 
 Dependencies: `pip install pyyaml` (required); `pip install netCDF4` (optional, for solar file nw validation)
@@ -184,6 +188,18 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
 - `HIST_MODELS` — `ARCHIVE_MODELS` minus `'rest'`; the components with `hist/` and `logs/` subdirs.
+
+### `diff.py` — SourceMods diff tool
+
+Compares a case's `SourceMods/` directories against the ExoCAM reference source (`{exocam_root}/cesm1.2.1/configs/cam_aqua_fv/SourceMods/`). `cam_aqua_fv` is always the reference config — it is consistent across all config types. Used before retiring a case to determine whether custom Fortran is worth preserving.
+
+- `discover_sourcemods_files(case_sourcemods_root)` — walks each component directory recursively; returns `{component: [(rel_path, abs_path), ...]}`. Skips editor backup files (`~`).
+- `find_exocam_counterpart(filename, component, exocam_sourcemods_root)` — searches the top level of the ExoCAM reference directory for that component; returns path or `None`.
+- `diff_summary(case_lines, exo_lines)` — returns `(added, removed)` line counts using multiset comparison (`collections.Counter`). Pure Python, no subprocess.
+- `cmd_summary(args, paths)` — prints per-component table with three categories: `IDENTICAL` (byte-for-byte match), `MODIFIED` (+N / -N lines), `CASE ONLY` (no ExoCAM counterpart; shows file size). Always prints all five component sections. `exoplanet_mod.F90` is always skipped and noted. Ends with a one-line verdict.
+- `cmd_full(args, paths)` — accepts a bare filename; finds it in the case SourceMods, then shells out to `diff exo_file case_file` via `subprocess.run`. If `CASE ONLY`, prints the full file contents instead.
+- `COMPONENTS` — `['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']`; printed in this order.
+- `SKIP_FILES` — `{'exoplanet_mod.F90'}`; always skipped.
 
 ### `config_registry.yaml` — machine-specific, must be edited per user
 

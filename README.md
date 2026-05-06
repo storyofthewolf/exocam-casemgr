@@ -24,6 +24,7 @@ Python 3.8+.
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `manage.py` | Data management — disk usage reporting, purging, and moving data |
 | `query.py` | Registry search and experiment matrix export |
+| `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
 | `run_builds.sh` | Batch runner for all `*_build.sh` scripts in a directory |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
 | `experiment_matrix.yaml.example` | Annotated template for writing experiment matrices |

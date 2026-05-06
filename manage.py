@@ -20,8 +20,8 @@ every command only reports what it would do.
 
 SUBCOMMANDS
 -----------
-  report              Show disk usage per case across all three areas (default;
-                      bare invocation reports on every discovered case)
+  report              Show disk usage per case; saves snapshot to usage.yaml
+                      (--cached prints last snapshot without scanning disk)
   purge-bld           Delete build artifacts in rundir/<case>/bld/
   purge-restarts      Trim old restart sets in archive/<case>/rest/; keep last N
   purge-hist          Delete history NetCDF files in archive/<case>/<model>/hist/
@@ -356,15 +356,12 @@ def cmd_report(args, paths):
     """
     Show disk usage per case across cases/, rundir/, and archive/.
 
-    Read-only. With no case names, reports on every discovered case and
-    saves results to usage.yaml (next to this script).
+    Read-only. Results are automatically saved to usage.yaml (next to this
+    script) for fast offline reference.
 
-    With specific case names, scans only those cases and merges the results
-    into usage.yaml (other cases are preserved; 'generated' timestamp is not
-    updated for partial scans).
-
-    --cached prints the last saved usage.yaml without touching the disk.
-    Cannot be combined with explicit case names.
+      report                 Full disk scan of all cases; writes usage.yaml
+      report my_case         Scan one case; updates that entry in usage.yaml
+      report --cached        Print last saved usage.yaml instantly (no disk scan)
 
     Columns: CASE | CASEDIR | BLD | RUN | HIST | LOGS | REST | TOTAL
     """
