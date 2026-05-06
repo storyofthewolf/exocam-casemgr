@@ -45,11 +45,8 @@ def load_paths(config_registry):
     return data.get('paths', {})
 
 
-def load_config_type(case, cases_yaml_path):
-    """Return config_type for case from cases.yaml.
-
-    Exits with a clear message if cases.yaml is missing or the case is not found.
-    """
+def load_case_meta(case, cases_yaml_path):
+    """Return {'config_type': ..., 'exort_pkg': ...} for case from cases.yaml."""
     if not os.path.exists(cases_yaml_path):
         sys.exit(f"ERROR: cases.yaml not found at {cases_yaml_path}.\n"
                  f"Run 'python scan.py' to generate it before using diff.py.")
@@ -58,17 +55,43 @@ def load_config_type(case, cases_yaml_path):
     for entry in data.get('cases', []):
         meta = entry.get('meta', {})
         if meta.get('case_name') == case:
-            return meta.get('config_type')
+            exort_pkg = (meta.get('exort_pkg') or '').rstrip('*') or None
+            return {'config_type': meta.get('config_type'),
+                    'exort_pkg':   exort_pkg}
     sys.exit(f"ERROR: case '{case}' not found in cases.yaml.\n"
              f"Run 'python scan.py {case}' first to register it before diffing.")
 
 
-def walk_sourcemods(sourcemods_root):
-    """Return {component: {filename: abs_path}} for all files under SourceMods/.
+def build_exort_fileset(exort_root, exort_pkg):
+    """Return {filename: filepath} for all files in exort_root/3dmodels/src.cam.{exort_pkg}/."""
+    pkg_dir = os.path.join(exort_root, '3dmodels', f'src.cam.{exort_pkg}')
+    if not os.path.isdir(pkg_dir):
+        return {}
+    fileset = {}
+    for root, _, files in os.walk(pkg_dir):
+        for f in files:
+            fileset[f] = os.path.join(root, f)
+    return fileset
 
-    Skips editor backup files (~). When the same filename appears in multiple
-    subdirectories, the shallowest occurrence wins.
-    """
+
+def _load_exort_fileset(paths, exort_pkg):
+    """Resolve ExoRT fileset, printing a warning and returning {} on any failure."""
+    exort_root = paths.get('exort_root', '')
+    if not exort_root:
+        print("WARNING: paths.exort_root not set in config_registry.yaml; RT file detection disabled.")
+        return {}
+    if not exort_pkg:
+        print("WARNING: exort_pkg not found in cases.yaml for this case; RT file detection disabled.")
+        return {}
+    fileset = build_exort_fileset(exort_root, exort_pkg)
+    if not fileset:
+        pkg_dir = os.path.join(exort_root, '3dmodels', f'src.cam.{exort_pkg}')
+        print(f"WARNING: ExoRT package directory not found: {pkg_dir}; RT file detection disabled.")
+    return fileset
+
+
+def walk_sourcemods(sourcemods_root):
+    """Return {component: {filename: abs_path}}. Skips ~ files; shallowest wins."""
     result = {comp: {} for comp in COMPONENTS}
     for comp in COMPONENTS:
         comp_dir = os.path.join(sourcemods_root, comp)
@@ -85,15 +108,13 @@ def find_exocam_counterpart(filename, component, exocam_sm_root):
     candidate = os.path.join(exocam_sm_root, component, filename)
     return candidate if os.path.isfile(candidate) else None
 
-
 def diff_counts(path_a, path_b):
-    """Return (added, removed) line counts of path_a vs path_b (b is reference)."""
+    """Return (added, removed) line counts; b is reference."""
     a = open(path_a, 'rb').read().decode('utf-8', errors='replace').splitlines()
     b = open(path_b, 'rb').read().decode('utf-8', errors='replace').splitlines()
     ca, cb = Counter(a), Counter(b)
     return (sum(max(0, ca[l] - cb[l]) for l in ca),
             sum(max(0, cb[l] - ca[l]) for l in cb))
-
 
 def _sm_root(caseroot, case):
     case_dir = os.path.join(caseroot, case)
@@ -104,10 +125,6 @@ def _sm_root(caseroot, case):
         sys.exit(f"ERROR: SourceMods not found in case: {sm}")
     return sm
 
-
-# ---------------------------------------------------------------------------
-# Subcommands
-# ---------------------------------------------------------------------------
 
 def cmd_summary(args, paths):
     caseroot = paths.get('caseroot', '') or sys.exit(
@@ -129,41 +146,43 @@ def cmd_summary(args, paths):
                 continue
             for fname in names:
                 if fname in SKIP_FILES:
-                    print(f"  {'':12}  {fname:<40}  [skipped]")
+                    print(f"  {'':14}  {fname:<40}  [skipped]")
                     continue
                 in1, in2 = fname in f1, fname in f2
                 if in1 and in2:
                     if open(f1[fname],'rb').read() == open(f2[fname],'rb').read():
-                        print(f"  {'IDENTICAL':<12}  {fname}"); n_eq += 1
+                        print(f"  {'IDENTICAL':<14}  {fname}"); n_eq += 1
                     else:
                         ad, rm = diff_counts(f1[fname], f2[fname])
-                        print(f"  {'MODIFIED':<12}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
+                        print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
                 elif in1:
-                    print(f"  {'CASE1 ONLY':<12}  {fname:<40}  ({fmt_size(os.path.getsize(f1[fname]))})"); n_c1 += 1
+                    print(f"  {'CASE1 ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(f1[fname]))})"); n_c1 += 1
                 else:
-                    print(f"  {'CASE2 ONLY':<12}  {fname:<40}  ({fmt_size(os.path.getsize(f2[fname]))})"); n_c2 += 1
+                    print(f"  {'CASE2 ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(f2[fname]))})"); n_c2 += 1
             print()
         if n_mod == 0 and n_c1 == 0 and n_c2 == 0:
             print("Summary: all identical  →  SourceMods are equivalent")
         else:
-            parts = ([f"{n_mod} modified"] if n_mod else []) + \
-                    ([f"{n_c1} case1-only"] if n_c1 else []) + \
-                    ([f"{n_c2} case2-only"] if n_c2 else []) + \
-                    ([f"{n_eq} identical"]  if n_eq  else [])
+            parts = ([f"{n_mod} modified"]   if n_mod else []) + \
+                    ([f"{n_c1} case1-only"]  if n_c1  else []) + \
+                    ([f"{n_c2} case2-only"]  if n_c2  else []) + \
+                    ([f"{n_eq} identical"]   if n_eq  else [])
             print(f"Summary: {', '.join(parts)}")
     else:
         exocam_root = paths.get('exocam_root', '') or sys.exit(
             "ERROR: paths.exocam_root not set in config_registry.yaml")
-        cases_yaml = paths.get('cases_yaml') or DEFAULT_CASES_YAML
-        config_type = load_config_type(args.case, cases_yaml)
-        exocam_sm = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
-                                 config_type, 'SourceMods')
+        cases_yaml  = paths.get('cases_yaml') or DEFAULT_CASES_YAML
+        meta        = load_case_meta(args.case, cases_yaml)
+        config_type = meta['config_type']
+        exort_files = _load_exort_fileset(paths, meta['exort_pkg'])
+        exocam_sm   = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
+                                   config_type, 'SourceMods')
         if not os.path.isdir(exocam_sm):
             sys.exit(f"ERROR: ExoCAM reference SourceMods not found: {exocam_sm}")
         files = walk_sourcemods(case1_sm)
         print(f"Comparing: {args.case}  vs  ExoCAM source")
         print(f"Excluding: exoplanet_mod.F90  (captured by scan.py)\n")
-        n_mod = n_co = n_eq = 0
+        n_mod = n_co = n_eq = n_rt_mod = n_rt_eq = 0
         for comp in COMPONENTS:
             comp_files = files[comp]
             print(comp)
@@ -172,23 +191,33 @@ def cmd_summary(args, paths):
                 continue
             for fname, abs_path in sorted(comp_files.items()):
                 if fname in SKIP_FILES:
-                    print(f"  {'':12}  {fname:<40}  [skipped]")
+                    print(f"  {'':14}  {fname:<40}  [skipped]")
                     continue
                 exo_path = find_exocam_counterpart(fname, comp, exocam_sm)
-                if exo_path is None:
-                    print(f"  {'CASE ONLY':<12}  {fname:<40}  ({fmt_size(os.path.getsize(abs_path))})"); n_co += 1
-                elif open(abs_path,'rb').read() == open(exo_path,'rb').read():
-                    print(f"  {'IDENTICAL':<12}  {fname}"); n_eq += 1
+                if exo_path is not None:
+                    if open(abs_path,'rb').read() == open(exo_path,'rb').read():
+                        print(f"  {'IDENTICAL':<14}  {fname}"); n_eq += 1
+                    else:
+                        ad, rm = diff_counts(abs_path, exo_path)
+                        print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
+                elif fname in exort_files:
+                    rt_path = exort_files[fname]
+                    if open(abs_path,'rb').read() == open(rt_path,'rb').read():
+                        print(f"  {'RT IDENTICAL':<14}  {fname}"); n_rt_eq += 1
+                    else:
+                        ad, rm = diff_counts(abs_path, rt_path)
+                        print(f"  {'RT MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_rt_mod += 1
                 else:
-                    ad, rm = diff_counts(abs_path, exo_path)
-                    print(f"  {'MODIFIED':<12}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
+                    print(f"  {'CASE ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(abs_path))})"); n_co += 1
             print()
-        if n_mod == 0 and n_co == 0:
+        if n_mod == 0 and n_rt_mod == 0 and n_co == 0:
             print("Summary: all identical  →  safe to retire without preserving SourceMods")
         else:
-            parts = ([f"{n_mod} modified"] if n_mod else []) + \
-                    ([f"{n_co} case-only"]  if n_co  else []) + \
-                    ([f"{n_eq} identical"]  if n_eq  else [])
+            parts = ([f"{n_mod} modified"]        if n_mod    else []) + \
+                    ([f"{n_rt_mod} RT-modified"]   if n_rt_mod else []) + \
+                    ([f"{n_rt_eq} RT-identical"]   if n_rt_eq  else []) + \
+                    ([f"{n_co} case-only"]         if n_co     else []) + \
+                    ([f"{n_eq} identical"]         if n_eq     else [])
             print(f"Summary: {', '.join(parts)}  →  review before retiring")
 
 
@@ -220,26 +249,29 @@ def cmd_full(args, paths):
     else:
         exocam_root = paths.get('exocam_root', '') or sys.exit(
             "ERROR: paths.exocam_root not set in config_registry.yaml")
-        cases_yaml = paths.get('cases_yaml') or DEFAULT_CASES_YAML
-        config_type = load_config_type(args.case, cases_yaml)
-        exocam_sm = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
-                                 config_type, 'SourceMods')
+        cases_yaml  = paths.get('cases_yaml') or DEFAULT_CASES_YAML
+        meta        = load_case_meta(args.case, cases_yaml)
+        config_type = meta['config_type']
+        exort_files = _load_exort_fileset(paths, meta['exort_pkg'])
+        exocam_sm   = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
+                                   config_type, 'SourceMods')
         if path1 is None:
             sys.exit(f"ERROR: '{target}' not found in SourceMods of case '{args.case}'")
         found_comp = next(c for c in COMPONENTS if target in files1[c])
         exo_path   = find_exocam_counterpart(target, found_comp, exocam_sm)
-        if exo_path is None:
-            print(f"CASE ONLY — {target} has no ExoCAM counterpart\n  {path1}\n")
-            sys.stdout.write(open(path1).read())
-        else:
+        if exo_path is not None:
             r = subprocess.run(['diff', exo_path, path1])
             if r.returncode == 0:
                 print("(files are identical)")
+        elif target in exort_files:
+            rt_path = exort_files[target]
+            r = subprocess.run(['diff', rt_path, path1])
+            if r.returncode == 0:
+                print("(RT file is identical to ExoRT source)")
+        else:
+            print(f"CASE ONLY — {target} has no ExoCAM or ExoRT counterpart\n  {path1}\n")
+            sys.stdout.write(open(path1).read())
 
-
-# ---------------------------------------------------------------------------
-# Argument parser
-# ---------------------------------------------------------------------------
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -265,6 +297,4 @@ def main():
     paths = load_paths(args.config_registry)
     cmd_full(args, paths) if args.full else cmd_summary(args, paths)
 
-
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': main()
