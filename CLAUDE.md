@@ -306,3 +306,21 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 ### `n68equiv.haze` registered as `n68equiv` (scan.py)
 
 Some cases were built using `ExoRT/3dmodels/src.cam.n68equiv.haze`, a special variant of n68equiv that includes CARMA haze optics. `scan.py` currently registers these as plain `n68equiv` — the `.haze` suffix in the `-usr_src` path is not distinguished. No special handling has been implemented because `n68equiv.haze` is expected to be merged into `n68equiv` in a future ExoRT update, at which point the distinction disappears.
+
+### diff.py: non-standard ExoRT package directory paths
+
+`build_exort_fileset` constructs the ExoRT reference directory as:
+  `{exort_root}/3dmodels/src.cam.{exort_pkg}/`
+
+Experimental or non-standard ExoRT branches may live outside this path
+(e.g. `source/experimental/src.n68equiv_exp/shr/`). When this occurs,
+`build_exort_fileset` returns an empty dict, RT file detection is silently
+disabled, and affected files appear as `CASE ONLY` in diff.py output.
+
+Cases with embedded non-standard RT are already flagged with `*` in
+`query.py search` output (e.g. `n68equiv_exp*`). If RT file detection
+fails unexpectedly, verify that `exort_pkg` (stripped of `*`) maps to a
+valid directory under `{exort_root}/3dmodels/`.
+
+Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml` to
+support non-standard package directory paths without code changes.
