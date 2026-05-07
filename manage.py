@@ -27,8 +27,8 @@ SUBCOMMANDS
   purge-hist          Delete history NetCDF files in archive/<case>/<model>/hist/
   purge-logs          Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
   move-hist           Move history files to long-term storage
-  avg-hist            Inspect or compute time-averaged history files using ncra
-  retire-case         Retire a case: copy config/data to long-term, then delete
+  avg                 Inspect or compute time-averaged history files using ncra
+  retire              Retire a case: copy config/data to long-term, then delete
                       from cesm_scratch
 
 SAFETY
@@ -1421,13 +1421,14 @@ def build_parser():
     _add_destructive_args(p_mvhist)
     _add_models_arg(p_mvhist)
 
-    # ---- avg-hist ----
+    # ---- avg (alias: avg-hist) ----
     p_avg = sub.add_parser(
-        'avg-hist',
+        'avg',
         help='Inspect or compute time-averaged history files using ncra',
         description=cmd_avg_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    sub._name_parser_map['avg-hist'] = p_avg  # hidden alias
     p_avg.add_argument('cases', nargs='*',
                        help='Case name(s) to process (or use --prefix)')
     p_avg.add_argument('--prefix', metavar='STR', default=None,
@@ -1441,13 +1442,14 @@ def build_parser():
     mode.add_argument('--last', type=int, metavar='N',
                       help='Average the N most recent model years using ncra')
 
-    # ---- retire-case ----
+    # ---- retire (alias: retire-case) ----
     p_arc = sub.add_parser(
-        'retire-case',
+        'retire',
         help='Retire a case: copy config/data to long-term, then delete from cesm_scratch',
         description=cmd_retire_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    sub._name_parser_map['retire-case'] = p_arc  # hidden alias
     _add_destructive_args(p_arc)
     p_arc.add_argument('--prefix', metavar='STR', default=None,
                        help='Case-insensitive prefix filter; retire all matched cases with a '
@@ -1485,7 +1487,9 @@ COMMANDS = {
     'purge-hist':      cmd_purge_hist,
     'purge-logs':      cmd_purge_logs,
     'move-hist':       cmd_move_hist,
+    'avg':             cmd_avg_hist,
     'avg-hist':        cmd_avg_hist,
+    'retire':          cmd_retire_case,
     'retire-case':     cmd_retire_case,
 }
 

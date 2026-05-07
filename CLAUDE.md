@@ -94,9 +94,9 @@ python manage.py move-hist my_case --models atm --execute
 #   --keep-years N     copy config + move N most recent hist years to long-term, then delete
 #   --keep-restarts    copy config + move most recent restart to long-term, then delete
 # --keep-years and --keep-restarts are combinable; --purge is mutually exclusive with both
-python manage.py retire-case my_case --purge --execute
-python manage.py retire-case my_case --keep-years 5 --keep-restarts --execute
-python manage.py retire-case my_case --keep-years 5 --execute
+python manage.py retire my_case --purge --execute           # (retire-case also accepted)
+python manage.py retire my_case --keep-years 5 --keep-restarts --execute
+python manage.py retire my_case --keep-years 5 --execute
 
 # --- SOURCEMODS DIFF: check for custom Fortran before retiring ---
 
