@@ -27,23 +27,26 @@ bash run_builds.sh scripts/
 
 # --- INSPECTION: scanning cases into a registry ---
 
-# Scan all cases under caseroot (default when no paths given)
-python scan.py --registry cases.yaml
+# Scan all cases under caseroot, print only (no file written)
+python scan.py
+
+# Scan all cases under caseroot and write active.yaml
+python scan.py --update
 
 # Inspect a single case by bare name (resolved to caseroot from config_registry.yaml)
-python scan.py my_case --registry cases.yaml
+python scan.py my_case
 
-# Preview inspection without writing the registry
-python scan.py my_case --dry-run
+# Inspect and merge into active.yaml
+python scan.py my_case --registry active.yaml --update
 
-# Update (merge) instead of overwriting registry
-python scan.py my_case --registry cases.yaml --update
+# Scan long_term archive entries only, print only
+python scan.py --archive
 
-# Rebuild cases.yaml from archived case.yaml entries in long_term/
-python scan.py --scan-archive --registry cases.yaml
+# Scan long_term archive entries and write archived.yaml
+python scan.py --archive --update
 
-# Merge live inspection + archived entries into cases.yaml
-python scan.py my_case --scan-archive --update
+# Merge live inspection + archived entries into active.yaml
+python scan.py my_case --archive --update
 
 # --- QUERYING: search and export from the registry ---
 
@@ -72,31 +75,31 @@ python query.py export my_base_case -o clone.yaml \
 
 # Disk usage report across all cases (default when called with no args)
 # Scans disk and saves results to usage.yaml automatically
-python manage.py
-python manage.py report                   # same; optional explicit subcommand
-python manage.py report my_case           # scan single case, merge into usage.yaml
+python data.py
+python data.py report                   # same; optional explicit subcommand
+python data.py report my_case           # scan single case, merge into usage.yaml
 
 # Print last saved usage.yaml without touching disk
 # (incompatible with explicit case names)
-python manage.py report --cached
+python data.py report --cached
 
 # Purge/move commands — preview by default, --execute to act
 # All destructive subcommands require explicit case name(s) — no --all flag.
-python manage.py purge-bld my_case --execute
-python manage.py purge-bld my_case --logs-only --execute   # remove .o/.mod only
-python manage.py purge-restarts my_case --keep 1 --execute
-python manage.py purge-hist my_case --models atm --execute
-python manage.py purge-logs my_case --execute
-python manage.py move-hist my_case --models atm --execute
+python data.py purge-bld my_case --execute
+python data.py purge-bld my_case --logs-only --execute   # remove .o/.mod only
+python data.py purge-restarts my_case --keep 1 --execute
+python data.py purge-hist my_case --models atm --execute
+python data.py purge-logs my_case --execute
+python data.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
 #   --purge            write case.yaml only to long-term, then delete everything
 #   --keep-years N     copy config + move N most recent hist years to long-term, then delete
 #   --keep-restarts    copy config + move most recent restart to long-term, then delete
 # --keep-years and --keep-restarts are combinable; --purge is mutually exclusive with both
-python manage.py retire my_case --purge --execute
-python manage.py retire my_case --keep-years 5 --keep-restarts --execute
-python manage.py retire my_case --keep-years 5 --execute
+python data.py retire my_case --purge --execute
+python data.py retire my_case --keep-years 5 --keep-restarts --execute
+python data.py retire my_case --keep-years 5 --execute
 
 # --- SOURCEMODS DIFF: check for custom Fortran before retiring ---
 
@@ -127,13 +130,14 @@ CASE directories on HPC
        ↓
   scan.py
        ↓
-  cases.yaml                                  ← queryable YAML registry
+  active.yaml                                 ← queryable YAML registry (active cases)
+  archived.yaml                               ← queryable YAML registry (retired cases)
        ↓
   query.py                                    ← search registry, export experiment matrices
 
 cases/ + rundir/ + archive/ on HPC
        ↓
-  manage.py                                   ← disk reporting, purge, move-hist, retire
+  data.py                                   ← disk reporting, purge, move-hist, retire
 ```
 
 ### `parse_utils.py` — pure parsing primitives, no filesystem side effects
@@ -185,17 +189,17 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `write_registry(rows, path)` — writes grouped YAML via `_rows_to_ordered`, prepending a `# Auto-generated cache` comment header.
 - `load_registry(path)` — reads grouped YAML and flattens groups back to plain dicts for internal use.
 - `scan_archive_entries(long_term_path)` — walks `long_term/` for subdirectories containing `case.yaml`; reads each as a pre-captured registry entry without touching any Fortran or namelist files. Returns flat row dicts. Handles both full registry-format entries (`{'cases': [...]}`) and minimal stubs (`{'case_name': ..., 'retired_date': ...}`).
-- `--scan-archive` flag — when passed, calls `scan_archive_entries` using `long_term` from `config_registry.yaml`. May be used alone (no live case paths) or combined with live paths and `--update`; live inspection always takes precedence over archived entries on name collision; archived entries take precedence over existing registry entries.
+- `--archive` flag — when passed, calls `scan_archive_entries` using `long_term` from `config_registry.yaml`. May be used alone (no live case paths) or combined with live paths and `--update`; live inspection always takes precedence over archived entries on name collision; archived entries take precedence over existing registry entries.
 - `_REGISTRY_GROUPS` — list of `(group_name, [field_names])` tuples defining group names and field ordering for YAML output.
 - `SOLAR_NW_MAP` — expected `nw` dimension per `exort_pkg`: `{n68equiv: 68, n84equiv: 84, n28archean: 28, n42h2o: 42}`.
 - `SOLAR_STEM_MAP` — expected solar filename stem per `exort_pkg`: `{n68equiv: 'n68', n84equiv: 'n84', n28archean: 'n28', n42h2o: 'n42'}`.
 
 ### `query.py` — registry search and experiment matrix export
 
-- `load_registry(path)` — loads `cases.yaml` into flat dicts (one per case) for search/export.
-- `load_registry_raw(path)` — loads `cases.yaml` preserving grouped structure; used by `show` to reproduce the exact `cases.yaml` format.
+- `load_registry(path)` — loads `active.yaml` (or `archived.yaml`) into flat dicts (one per case) for search/export.
+- `load_registry_raw(path)` — loads the registry preserving grouped structure; used by `show` to reproduce the exact registry format.
 - `cmd_search` — tabular listing filtered by `--name` (substring, case-insensitive), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE.
-- `cmd_show` — dumps one case's full grouped YAML, identical in format to `cases.yaml`.
+- `cmd_show` — dumps one case's full grouped YAML, identical in format to the registry file.
 - `cmd_export` — generates a ready-to-use `experiment_matrix.yaml` from one or more registry cases. For multiple cases, shared fields are factored into `base` automatically. `mach` and run defaults are populated from `config_registry.yaml` unless overridden via CLI flags. Required fields left blank are written as empty strings with a prominent `# FIXME` warning header prepended to the file.
 - `_row_to_base(row, bare=False)` — converts a flat registry row to a matrix base dict. `bare=True` strips atmosphere, geophysical, model_options, and special fields; used for clone exports where the clone source supplies those values. Bare mode is the default when `--clone` is set; `--full` overrides to include all scientific parameters.
 - `_BARE_STRIP_KEYS` — set of fields omitted from `base` in bare mode.
@@ -204,7 +208,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`.
 - The exported matrix always includes a `meta` block (`description`, `author`, `created`, `source_registry`) that `query.py export` auto-populates; `description` and `author` are written as empty strings for the user to fill in.
 
-### `manage.py` — disk management tool
+### `data.py` — disk management tool
 
 Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on disk — no registry required. All destructive subcommands are **non-destructive by default**; `--execute` is required to make changes, and each case confirms the action before acting.
 
@@ -221,23 +225,23 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `cmd_purge_hist` — deletes `archive/<case>/<model>/hist/` contents. `--models` restricts components. Requires `--keep-years N` or `--models` to prevent accidental total deletion.
 - `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty. Uses `shutil.move` — no intermediate copy, peak disk usage stays flat.
-- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge` (write `case.yaml` to long-term only, then delete caseroot + rundir + archive), `--keep-years N` (copy config files + move N most recent hist years to long-term, then delete), or `--keep-restarts` (copy config files + move most recent restart to long-term, then delete). `--keep-years` and `--keep-restarts` are combinable; `--purge` is mutually exclusive with both. Without `--purge`, always copies `SourceMods/`, `user_*` files (→ `namelists/`), and `env_*` files (→ `env/`) to `long_term/<case>/`. `case.yaml` is always written from `--registry` (default: `cases.yaml`); falls back to a minimal stub if the case is not found in the registry.
-- `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in cases.yaml; used by `cmd_retire_case` for pre-flight warning only.
+- `cmd_retire_case` — retires a case from cesm_scratch. Requires at least one intent flag: `--purge` (write `case.yaml` to long-term only, then delete caseroot + rundir + archive), `--keep-years N` (copy config files + move N most recent hist years to long-term, then delete), or `--keep-restarts` (copy config files + move most recent restart to long-term, then delete). `--keep-years` and `--keep-restarts` are combinable; `--purge` is mutually exclusive with both. Without `--purge`, always copies `SourceMods/`, `user_*` files (→ `namelists/`), and `env_*` files (→ `env/`) to `long_term/<case>/`. `case.yaml` is always written from `--registry` (default: `active.yaml`); falls back to a minimal stub if the case is not found in the registry.
+- `_check_registry(case, registry_path)` — returns True/False/None indicating whether a case appears in active.yaml; used by `cmd_retire_case` for pre-flight warning only.
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
 - `HIST_MODELS` — `ARCHIVE_MODELS` minus `'rest'`; the components with `hist/` and `logs/` subdirs.
 
 ### `diff.py` — SourceMods diff tool
 
-Compares a case's `SourceMods/` against either the ExoCAM reference source or another case. The ExoCAM reference path is `{exocam_root}/cesm1.2.1/configs/{config_type}/SourceMods/` where `config_type` is looked up from `cases.yaml`. RT files are detected by matching against the ExoRT package directory and reported as separate categories. Used before retiring to determine whether custom Fortran is worth preserving.
+Compares a case's `SourceMods/` against either the ExoCAM reference source or another case. The ExoCAM reference path is `{exocam_root}/cesm1.2.1/configs/{config_type}/SourceMods/` where `config_type` is looked up from `active.yaml`. RT files are detected by matching against the ExoRT package directory and reported as separate categories. Used before retiring to determine whether custom Fortran is worth preserving.
 
-- `load_case_meta(case, cases_yaml_path)` — reads `cases.yaml`, matches on `meta.case_name`, returns `{'config_type': ..., 'exort_pkg': ...}` with the `*` suffix stripped from `exort_pkg`. Exits with a clear error if `cases.yaml` is missing (directs user to run `scan.py`).
+- `load_case_meta(case, cases_yaml_path)` — reads `active.yaml`, matches on `meta.case_name`, returns `{'config_type': ..., 'exort_pkg': ...}` with the `*` suffix stripped from `exort_pkg`. Exits with a clear error if `active.yaml` is missing (directs user to run `scan.py`).
 - `build_exort_fileset(exort_root, exort_pkg)` — returns `{filename: filepath}` for all files in `exort_root/3dmodels/src.cam.{exort_pkg}/`. Returns empty dict if directory does not exist.
-- `_load_exort_fileset(paths, exort_pkg)` — wraps `build_exort_fileset` with three warning paths: `exort_root` not configured, `exort_pkg` missing from cases.yaml, or package directory not on disk. Returns `{}` (RT detection disabled) in all three cases.
+- `_load_exort_fileset(paths, exort_pkg)` — wraps `build_exort_fileset` with three warning paths: `exort_root` not configured, `exort_pkg` missing from active.yaml, or package directory not on disk. Returns `{}` (RT detection disabled) in all three cases.
 - `walk_sourcemods(sourcemods_root)` — walks each component directory recursively; returns `{component: {filename: abs_path}}`. Skips editor backup files (`~`). Shallowest occurrence wins on filename collision across subdirs.
 - `find_exocam_counterpart(filename, component, exocam_sm_root)` — checks for filename at the top level of the ExoCAM reference component dir; returns path or `None`. Only used in case-vs-ExoCAM mode.
 - `diff_counts(path_a, path_b)` — returns `(added, removed)` line counts of a vs b using `collections.Counter`. Pure Python, no subprocess.
-- `cmd_summary(args, paths)` — branches on `args.case2`. Case-vs-ExoCAM: five categories (`IDENTICAL`, `MODIFIED`, `RT IDENTICAL`, `RT MODIFIED`, `CASE ONLY`); ExoCAM match takes priority over RT match. Case-vs-case: four categories (`IDENTICAL`, `MODIFIED`, `CASE1 ONLY`, `CASE2 ONLY`); no `cases.yaml` or ExoRT lookup. Always prints all five component sections. `exoplanet_mod.F90` always skipped. Ends with a one-line verdict.
+- `cmd_summary(args, paths)` — branches on `args.case2`. Case-vs-ExoCAM: five categories (`IDENTICAL`, `MODIFIED`, `RT IDENTICAL`, `RT MODIFIED`, `CASE ONLY`); ExoCAM match takes priority over RT match. Case-vs-case: four categories (`IDENTICAL`, `MODIFIED`, `CASE1 ONLY`, `CASE2 ONLY`); no `active.yaml` or ExoRT lookup. Always prints all five component sections. `exoplanet_mod.F90` always skipped. Ends with a one-line verdict.
 - `cmd_full(args, paths)` — branches on `args.case2`. In case-vs-ExoCAM mode, resolves classification (ExoCAM → RT → CASE ONLY) and diffs against the appropriate reference or prints file contents. In case-vs-case mode, diffs the two case files or prints the one-sided file.
 - `COMPONENTS` — `['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']`; printed in this order.
 - `SKIP_FILES` — `{'exoplanet_mod.F90'}`; always skipped.
@@ -375,7 +379,7 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 ## Design invariants — do not violate
 
 - `parse_utils.py` must remain free of filesystem side effects. It reads files via paths passed to it; it never discovers or writes files itself.
-- All destructive `manage.py` operations require `--execute`. Without it, every command only prints what it would do.
+- All destructive `data.py` operations require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations. Cases must be named explicitly.
 - `build.py` generates scripts but never executes them unless `--execute` is passed.
 - `scan.py` merge precedence: live inspection > archived (long_term) entries > existing registry.

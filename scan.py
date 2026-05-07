@@ -4,7 +4,10 @@ ExoCAM case inspector. Walks CASE directories, extracts scientific metadata,
 writes a queryable YAML registry.
 
 Usage:
-  python scan.py [CASE_NAME ...] [--registry cases.yaml] [--update]
+  python scan.py                     # scan active caseroot, print only
+  python scan.py --update            # scan active caseroot, write active.yaml
+  python scan.py --archive           # scan long_term archive, print only
+  python scan.py --archive --update  # scan long_term archive, write archived.yaml
 
 With no arguments, scans all cases under caseroot from config_registry.yaml.
 Each argument may be a bare case name, an absolute path, or a parent directory.
@@ -295,7 +298,7 @@ def _rows_to_ordered(rows):
 
 _REGISTRY_HEADER = (
     "# Auto-generated cache — regenerate with: "
-    "python scan.py --scan-archive --update\n"
+    "python scan.py --archive --update\n"
 )
 
 
@@ -383,23 +386,23 @@ def main():
         description='Inspect ExoCAM CASE directories and write YAML registry',
         epilog=(
             'Examples:\n'
-            '  python scan.py my_case --registry cases.yaml\n'
-            '  python scan.py my_case --registry cases.yaml --update\n'
-            '  python scan.py --scan-archive --registry cases.yaml\n'
-            '  python scan.py my_case --scan-archive --update\n'
+            '  python scan.py                        # scan active caseroot, print only\n'
+            '  python scan.py --update               # scan active caseroot, write active.yaml\n'
+            '  python scan.py --archive              # scan long_term archive, print only\n'
+            '  python scan.py --archive --update     # scan long_term archive, write archived.yaml\n'
+            '  python scan.py my_case --registry active.yaml --update\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('paths', nargs='*',
                         help='CASE name(s), dir(s), or parent dir(s) to inspect '
                              '(default: scan all cases under caseroot from config_registry.yaml)')
-    parser.add_argument('--registry', default='cases.yaml',
-                        help='Output YAML path (default: cases.yaml)')
+    parser.add_argument('--registry', default=None,
+                        help='Output YAML path (default: active.yaml, or archived.yaml with --archive)')
     parser.add_argument('--update', action='store_true',
-                        help='Merge with existing registry instead of overwriting')
-    parser.add_argument('--dry-run', action='store_true',
-                        help='Print inspection results to screen without writing the registry')
-    parser.add_argument('--scan-archive', action='store_true', dest='scan_archive',
+                        help='Write results to the registry file (merging with any existing content); '
+                             'without --update, results are printed only')
+    parser.add_argument('--archive', action='store_true', dest='archive',
                         help='Load pre-captured case.yaml entries from long_term/ '
                              '(from config_registry.yaml). No Fortran or namelist files '
                              'are read. May be combined with live case paths.')
@@ -409,10 +412,16 @@ def main():
                              '(default: config_registry.yaml next to this script)')
     args = parser.parse_args()
 
+    # resolve default registry filename based on mode
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if args.registry is None:
+        args.registry = os.path.join(script_dir,
+                                     'archived.yaml' if args.archive else 'active.yaml')
+
     caseroot  = _load_caseroot(args.config_registry)
     long_term = _load_long_term(args.config_registry)
 
-    if not args.paths and not args.scan_archive:
+    if not args.paths and not args.archive:
         if not caseroot:
             parser.error("provide at least one CASE path, or set paths.caseroot in "
                          "config_registry.yaml for automatic caseroot scanning")
@@ -442,30 +451,19 @@ def main():
 
     # --- archive scan ---
     archive_rows = []
-    if args.scan_archive:
+    if args.archive:
         if not long_term:
             print("WARNING: long_term path not set in config_registry.yaml — "
-                  "--scan-archive has nothing to read.", file=sys.stderr)
+                  "--archive has nothing to read.", file=sys.stderr)
         else:
             archive_rows = scan_archive_entries(long_term)
             print(f"Archive scan: found {len(archive_rows)} case(s) in {long_term}")
 
     # --- merge: live takes precedence over archived; both take precedence over existing ---
-    if args.dry_run:
-        rows = live_rows + [r for r in archive_rows
-                            if r.get('case_name') not in
-                            {lr['case_name'] for lr in live_rows}]
-        print(_REGISTRY_HEADER, end='')
-        print(yaml.dump(_rows_to_ordered(rows),
-                        default_flow_style=False, allow_unicode=True, sort_keys=False),
-              end='')
-    else:
-        # Start from existing registry when --update, otherwise empty
-        if args.update:
-            existing = load_registry(args.registry)
-            by_name = {r['case_name']: r for r in existing}
-        else:
-            by_name = {}
+    # Always load existing registry when the file is present (preserves merge precedence).
+    if args.update:
+        existing = load_registry(args.registry) if os.path.exists(args.registry) else []
+        by_name = {r['case_name']: r for r in existing}
 
         # archived entries fill in (overwrite existing if same name)
         for r in archive_rows:

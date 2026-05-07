@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-manage.py — ExoCAM data management tool
+data.py — ExoCAM data management tool
 
 Inspect, manage, and purge GCM data across the three primary storage areas:
   cases/    CESM case directories (build scripts, SourceMods, namelists)
@@ -49,7 +49,7 @@ SAFETY
   report is read-only and safe to run bare — no case names means all cases.
 
 Run any subcommand with --help for full options, e.g.:
-  python manage.py purge-bld --help
+  python data.py purge-bld --help
 """
 
 import argparse
@@ -330,7 +330,7 @@ def save_usage_yaml(path, cases_data, generated_ts):
 def load_usage_yaml(path):
     """Load usage.yaml; exit with an error if the file is missing."""
     if not os.path.exists(path):
-        sys.exit(f"ERROR: {path} not found. Run 'manage.py report' first to generate it.")
+        sys.exit(f"ERROR: {path} not found. Run 'data.py report' first to generate it.")
     with open(path) as f:
         doc = yaml.safe_load(f) or {}
     return doc
@@ -790,7 +790,7 @@ def cmd_move_hist(args, paths):
 # ---------------------------------------------------------------------------
 
 DEFAULT_RETIRE_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       'cases.yaml')
+                                       'active.yaml')
 
 
 def _load_registry_entry(case, registry_path):
@@ -1249,7 +1249,8 @@ def cmd_avg_hist(args, paths):
                     span = f"years {years[0]}–{years[-1]}"
                 else:
                     span = "years unknown"
-                print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)})")
+                avg_note = ", avg file present" if any('avg' in f for f in files) else ""
+                print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
         return
 
     # --- --last N mode ---
@@ -1326,7 +1327,7 @@ def _add_models_arg(p, help_prefix='Restrict to these model components'):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog='manage.py',
+        prog='data.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1468,7 +1469,7 @@ def build_parser():
                        help='Move the most recent restart set to long-term, then delete '
                             'everything. Combinable with --keep-config and --keep-years.')
     p_arc.add_argument('--registry', metavar='FILE', default=None,
-                       help=f'Path to cases.yaml for case.yaml export '
+                       help=f'Path to active.yaml for case.yaml export '
                             f'(default: {DEFAULT_RETIRE_REGISTRY})')
 
     return parser
