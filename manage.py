@@ -1201,22 +1201,41 @@ def cmd_avg_hist(args, paths):
     if not archive:
         sys.exit("ERROR: archive path not configured.")
 
-    if not args.cases:
-        sys.exit("ERROR: avg-hist requires at least one case name.")
-
     has_info = getattr(args, 'info', False)
     last_n   = getattr(args, 'last', None)
+    prefix_filter = getattr(args, 'prefix', None)
 
     if has_info and last_n is not None:
         sys.exit("ERROR: --info and --last are mutually exclusive.")
     if not has_info and last_n is None:
         sys.exit("ERROR: avg-hist requires --info or --last N.")
 
+    if args.cases and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+    if not args.cases and not prefix_filter:
+        sys.exit("ERROR: avg-hist requires explicit case name(s) or --prefix.")
+
+    all_on_disk = discover_cases(paths)
+
+    if prefix_filter:
+        cases = [c for c in all_on_disk if c.lower().startswith(prefix_filter.lower())]
+        if not cases:
+            print(f"No cases matching prefix '{prefix_filter}'.")
+            return
+    else:
+        missing = [c for c in args.cases if c not in all_on_disk]
+        if missing:
+            print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
+        cases = [c for c in args.cases if c in all_on_disk]
+        if not cases:
+            print("No cases found on disk.")
+            return
+
     models = args.models if args.models else AVG_HIST_DEFAULT_MODELS
 
     # --- --info mode ---
     if has_info:
-        for case in args.cases:
+        for case in cases:
             print(f"\n{case}")
             for model in models:
                 hist_dir = os.path.join(archive, case, model, 'hist')
@@ -1234,15 +1253,20 @@ def cmd_avg_hist(args, paths):
         return
 
     # --- --last N mode ---
-    all_on_disk = discover_cases(paths)
-    for case in args.cases:
-        if case not in all_on_disk:
-            print(f"WARNING: {case} not found on disk, skipping", file=sys.stderr)
-            continue
-
+    for case in cases:
         archive_path = os.path.join(archive, case)
         print(f"\n{case}")
         _, per_model = _hist_keep_years_filter(archive_path, models, last_n)
+
+        all_years_count = len(set(
+            _hist_year(f)
+            for info in per_model.values()
+            for f in info['keep'] + info['delete']
+            if _hist_year(f)
+        ))
+        if all_years_count < last_n:
+            print(f"  WARNING: only {all_years_count} year(s) available, "
+                  f"averaging all {all_years_count} (requested --last {last_n})")
 
         for model in models:
             if model not in per_model:
@@ -1404,8 +1428,10 @@ def build_parser():
         description=cmd_avg_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_avg.add_argument('cases', nargs='+',
-                       help='Case name(s) to process')
+    p_avg.add_argument('cases', nargs='*',
+                       help='Case name(s) to process (or use --prefix)')
+    p_avg.add_argument('--prefix', metavar='STR', default=None,
+                       help='Case-insensitive prefix filter; cannot combine with explicit case names')
     p_avg.add_argument('--execute', action='store_true',
                        help='Actually run ncra (default is preview only)')
     _add_models_arg(p_avg, help_prefix=f'Models to process (default: {", ".join(AVG_HIST_DEFAULT_MODELS)})')
