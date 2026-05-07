@@ -308,33 +308,13 @@ def _require_cases(all_cases, args):
 # ---------------------------------------------------------------------------
 
 def save_usage_yaml(path, cases_data, generated_ts):
-    """Write cases_data to usage.yaml.
+    """Clobber-write usage.yaml with cases_data as the complete snapshot.
 
-    cases_data : {case_name: {casedir_bytes, bld_bytes, run_bytes,
-                               hist_bytes, logs_bytes, rest_bytes, updated}}
-    generated_ts : ISO-format string; written only for bare (all-cases) scans.
-                   Pass None to preserve the existing 'generated' timestamp.
+    cases_data    : {case_name: {casedir_bytes, bld_bytes, run_bytes,
+                                  hist_bytes, logs_bytes, rest_bytes, updated}}
+    generated_ts  : ISO-format string written as the top-level 'generated' key.
     """
-    existing = {}
-    existing_generated = None
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                doc = yaml.safe_load(f) or {}
-            existing = doc.get('cases', {}) or {}
-            existing_generated = doc.get('generated')
-        except Exception:
-            pass
-
-    existing.update(cases_data)
-
-    doc = {}
-    if generated_ts is not None:
-        doc['generated'] = generated_ts
-    elif existing_generated is not None:
-        doc['generated'] = existing_generated
-    doc['cases'] = existing
-
+    doc = {'generated': generated_ts, 'cases': cases_data}
     with open(path, 'w') as f:
         yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -356,19 +336,20 @@ def cmd_report(args, paths):
     """
     Show disk usage per case across cases/, rundir/, and archive/.
 
-    Read-only. Results are automatically saved to usage.yaml (next to this
-    script) for fast offline reference.
-
-      report                 Full disk scan of all cases; writes usage.yaml
-      report my_case         Scan one case; updates that entry in usage.yaml
-      report --cached        Print last saved usage.yaml instantly (no disk scan)
+      report                 Full disk scan of all cases; clobbers usage.yaml
+      report my_case         Diagnostic scan of one case; prints only, no yaml write
+      report --name prox     Substring filter; prints only, no yaml write
+      report --cached        Print last saved usage.yaml without scanning disk
 
     Columns: CASE | CASEDIR | BLD | RUN | HIST | LOGS | REST | TOTAL
     """
     usage_path = getattr(args, 'usage_yaml', None) or DEFAULT_USAGE_YAML
     cached = getattr(args, 'cached', False)
     requested = getattr(args, 'cases', None) or []
+    name_filter = getattr(args, 'name', None)
 
+    if requested and name_filter:
+        sys.exit("ERROR: --name cannot be combined with explicit case names.")
     if cached and requested:
         sys.exit("ERROR: --cached cannot be combined with explicit case names.")
 
@@ -391,6 +372,11 @@ def cmd_report(args, paths):
         if missing:
             print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
         cases = [c for c in requested if c in all_cases]
+    elif name_filter:
+        cases = [c for c in all_cases if name_filter.lower() in c.lower()]
+        if not cases:
+            print(f"No cases matching '{name_filter}'.")
+            return
     else:
         cases = all_cases
 
@@ -442,9 +428,14 @@ def cmd_report(args, paths):
           f"{fmt_size(grand['rest_bytes']):>{cw}}  "
           f"{fmt_size(grand_total):>{cw}}")
 
-    # Save: bare invocation updates 'generated'; named-case scan does not
-    generated_ts = now_ts if not requested else None
-    save_usage_yaml(usage_path, cases_data, generated_ts)
+    # Bare invocation: clobber usage.yaml with the full snapshot.
+    # Named-case or --name filtered invocation: diagnostic print only, no yaml write.
+    if not requested and not name_filter:
+        caseroot = paths.get('caseroot', '')
+        no_caseroot = sum(1 for c in cases if not os.path.isdir(os.path.join(caseroot, c)))
+        if no_caseroot:
+            print(f"Note: {no_caseroot} of {len(cases)} cases have no caseroot directory (archive/rundir only).")
+        save_usage_yaml(usage_path, cases_data, now_ts)
 
 
 def _print_report_table(cases, cases_data):
@@ -1126,6 +1117,9 @@ def build_parser():
     )
     p_report.add_argument('cases', nargs='*',
                           help='Case name(s) to report (default: all discovered cases)')
+    p_report.add_argument('--name', metavar='STR', default=None,
+                          help='Case-insensitive substring filter; prints only, no yaml write '
+                               '(cannot combine with explicit case names)')
     p_report.add_argument('--cached', action='store_true',
                           help='Print last saved usage.yaml without scanning disk '
                                '(cannot combine with case names)')
