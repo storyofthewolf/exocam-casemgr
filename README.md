@@ -179,20 +179,23 @@ For multi-case exports, shared parameters are automatically factored into `base`
 ### 6. Inspect existing cases
 
 ```bash
-# Bare case name — resolved relative to caseroot in config_registry.yaml
+# Bare case name — resolved relative to caseroot in config_registry.yaml (print only)
 python scan.py my_case
 
-# Multiple cases at once
-python scan.py case1 case2 case3 --registry cases.yaml
+# Scan all cases in caseroot and write active.yaml
+python scan.py --update
 
-# Scan all cases in caseroot (pass the full path or use . from caseroot)
+# Multiple cases at once, write to active.yaml
+python scan.py case1 case2 case3 --update
+
+# Scan all cases in caseroot (pass the full path)
 python scan.py /path/to/cases/
 
-# Add new cases to an existing registry without overwriting old rows
-python scan.py my_new_case --registry cases.yaml --update
+# Add new cases to an existing registry (merges with current active.yaml)
+python scan.py my_new_case --registry active.yaml --update
 
-# Preview inspection results without writing the registry
-python scan.py my_case --dry-run
+# Scan long_term archive entries and write archived.yaml
+python scan.py --archive --update
 ```
 
 A CASE directory is recognized by the presence of `SourceMods/src.share/exoplanet_mod.F90`. The registry captures metadata from multiple sources per case:
@@ -260,17 +263,18 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 
 | Subcommand | What it does |
 |---|---|
-| `report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Read-only; bare invocation reports all cases. |
+| `report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Bare invocation scans all cases and clobbers `usage.yaml`. Named-case or `--prefix` invocations print only. `--cached` prints last saved snapshot. |
 | `purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
 | `purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |
 | `purge-logs` | Delete log files from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`. Both locations safe to purge after a run. `--no-archive-logs` / `--no-case-logs` skip one side. |
 | `move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
-| `retire-case` | Retire a completed case. Requires an explicit intent flag (see below). |
+| `avg` | Inspect or compute time-averaged history files using ncra (NCO). |
+| `retire` | Retire a completed case. Requires an explicit intent flag (see below). |
 
-#### Retiring a case with `retire-case`
+#### Retiring a case with `retire`
 
-`retire-case` is the end-of-life command for a case. It requires at least one intent flag so the operation is always deliberate:
+`retire` is the end-of-life command for a case. It requires at least one intent flag so the operation is always deliberate. Avg files (filenames containing `"avg"`) are always moved to long-term unconditionally.
 
 | Flag | What it does |
 |---|---|
@@ -283,22 +287,22 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 
 ```bash
 # Preview (no --execute — always safe to run first)
-python data.py retire-case my_case --keep-config --keep-years 5 --keep-restarts
+python data.py retire my_case --keep-config --keep-years 5 --keep-restarts
 
 # Save config files only, delete everything from cesm_scratch
-python data.py retire-case my_case --keep-config --execute
+python data.py retire my_case --keep-config --execute
 
 # Save config files, 1 year of history, and most recent restart
-python data.py retire-case my_case --keep-config --keep-years 1 --keep-restarts --execute
+python data.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
 
 # Keep last 5 years of history + most recent restart, delete the rest
-python data.py retire-case my_case --keep-years 5 --keep-restarts --execute
+python data.py retire my_case --keep-years 5 --keep-restarts --execute
 
 # Delete everything (case has no long-term value)
-python data.py retire-case my_case --purge --execute
+python data.py retire my_case --purge --execute
 
 # With registry pre-flight check
-python data.py retire-case my_case --purge --registry cases.yaml --execute
+python data.py retire my_case --purge --registry active.yaml --execute
 ```
 
 Run any subcommand with `--help` for full options.
