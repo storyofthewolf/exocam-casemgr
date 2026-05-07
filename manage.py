@@ -27,6 +27,7 @@ SUBCOMMANDS
   purge-hist          Delete history NetCDF files in archive/<case>/<model>/hist/
   purge-logs          Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
   move-hist           Move history files to long-term storage
+  avg-hist            Inspect or compute time-averaged history files using ncra
   retire-case         Retire a case: copy config/data to long-term, then delete
                       from cesm_scratch
 
@@ -56,6 +57,7 @@ import datetime
 import os
 import re
 import shutil
+import subprocess
 import sys
 import yaml
 
@@ -65,6 +67,12 @@ import yaml
 
 ARCHIVE_MODELS = ['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']
 HIST_MODELS = [m for m in ARCHIVE_MODELS if m != 'rest']
+
+MODEL_STEM = {
+    'atm': 'cam', 'lnd': 'clm2', 'ice': 'cice', 'ocn': 'pop',
+    'rof': 'mosart', 'glc': 'cism', 'wav': 'ww3', 'cpl': 'cpl',
+}
+AVG_HIST_DEFAULT_MODELS = ['atm', 'lnd', 'ice']
 
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
@@ -901,12 +909,16 @@ def cmd_retire_case(args, paths):
     is written; otherwise a minimal stub (case_name, retired_date) is written
     and a warning is printed.
 
+    Avg files (filenames containing "avg") found in any archive/<case>/<model>/hist/
+    are always moved to long-term storage regardless of which intent flags are used.
+    This preserves previously computed time averages unconditionally.
+
     Long-term layout:
       long_term/<case>/case.yaml
       long_term/<case>/SourceMods/          (--keep-config only)
       long_term/<case>/namelists/           (--keep-config only)
       long_term/<case>/env/                 (--keep-config only)
-      long_term/<case>/<model>/hist/        (--keep-years only)
+      long_term/<case>/<model>/hist/        (--keep-years and/or avg files)
       long_term/<case>/rest/<date>/         (--keep-restarts only)
 
     SAFEGUARDS:
@@ -1062,6 +1074,18 @@ def cmd_retire_case(args, paths):
                 preserve_restart.append(
                     (rest_path, os.path.join(lt_case_dir, 'rest', date_str)))
 
+        # avg file preservation (unconditional — move any "avg" files in hist/)
+        preserve_avg = []  # (src, dst)
+        for model in HIST_MODELS:
+            hist_dir = os.path.join(archive_path, model, 'hist')
+            files, _ = list_files_with_size(hist_dir)
+            for f in files:
+                if 'avg' in f:
+                    preserve_avg.append((
+                        os.path.join(hist_dir, f),
+                        os.path.join(lt_case_dir, model, 'hist', f),
+                    ))
+
         # --- print plan ---
         print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
         print(f"  COPY to long-term: {lt_case_dir}/case.yaml "
@@ -1078,6 +1102,10 @@ def cmd_retire_case(args, paths):
         if preserve_restart:
             rest_size = sum(dir_size_bytes(s) for s, _ in preserve_restart)
             print(f"  MOVE to long-term: most recent restart set ({fmt_size(rest_size)})")
+        if preserve_avg:
+            print(f"  MOVE to long-term: {len(preserve_avg)} avg file(s)")
+            for src, dst in preserve_avg:
+                print(f"    {src}  ->  {dst}")
         print(f"  DELETE from cesm_scratch:")
         for p in [casedir_path, rundir_path, archive_path]:
             if p and os.path.exists(p):
@@ -1116,6 +1144,13 @@ def cmd_retire_case(args, paths):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.move(src, dst)
 
+        # Move avg files
+        if preserve_avg:
+            print(f"  Moving {len(preserve_avg)} avg file(s) to long-term...")
+            for src, dst in preserve_avg:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+
         # Delete from cesm_scratch
         deleted_bytes = 0
         print(f"  Deleting from cesm_scratch...")
@@ -1131,6 +1166,116 @@ def cmd_retire_case(args, paths):
         print(f"  Done: {case}  "
               f"(freed {fmt_size(deleted_bytes)} from cesm_scratch, "
               f"kept {fmt_size(kept_bytes)} in long-term)")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: avg-hist
+# ---------------------------------------------------------------------------
+
+def cmd_avg_hist(args, paths):
+    """
+    Compute or inspect time-averaged history files using ncra (NCO).
+
+    Operates on archive/<case>/<model>/hist/ for each targeted model.
+    Default models: atm, lnd, ice.
+
+    Modes (mutually exclusive, exactly one required):
+
+      --info             Print file count, year span, and total size per model.
+                         Read-only; --execute is not needed or used.
+
+      --last N           Average the N most recent model years using ncra.
+                         Avg files (filenames containing "avg") are excluded
+                         from inputs. Output is written into the same hist/
+                         directory as the inputs.
+
+    Output filename format:
+      <case>.<model_stem>.h0.avg_last{N}yr.nc
+
+    Example:
+      avg-hist mycase --info
+      avg-hist mycase --last 10 --models atm lnd
+      avg-hist mycase --last 10 --execute
+    """
+    archive = paths.get('archive', '')
+    if not archive:
+        sys.exit("ERROR: archive path not configured.")
+
+    if not args.cases:
+        sys.exit("ERROR: avg-hist requires at least one case name.")
+
+    has_info = getattr(args, 'info', False)
+    last_n   = getattr(args, 'last', None)
+
+    if has_info and last_n is not None:
+        sys.exit("ERROR: --info and --last are mutually exclusive.")
+    if not has_info and last_n is None:
+        sys.exit("ERROR: avg-hist requires --info or --last N.")
+
+    models = args.models if args.models else AVG_HIST_DEFAULT_MODELS
+
+    # --- --info mode ---
+    if has_info:
+        for case in args.cases:
+            print(f"\n{case}")
+            for model in models:
+                hist_dir = os.path.join(archive, case, model, 'hist')
+                files, total = list_files_with_size(hist_dir)
+                non_avg = [f for f in files if 'avg' not in f]
+                if not non_avg:
+                    print(f"  {model}/hist:    0 files")
+                    continue
+                years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
+                if years:
+                    span = f"years {years[0]}–{years[-1]}"
+                else:
+                    span = "years unknown"
+                print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)})")
+        return
+
+    # --- --last N mode ---
+    all_on_disk = discover_cases(paths)
+    for case in args.cases:
+        if case not in all_on_disk:
+            print(f"WARNING: {case} not found on disk, skipping", file=sys.stderr)
+            continue
+
+        archive_path = os.path.join(archive, case)
+        print(f"\n{case}")
+        _, per_model = _hist_keep_years_filter(archive_path, models, last_n)
+
+        for model in models:
+            if model not in per_model:
+                print(f"  {model}/hist: no files found, skipping")
+                continue
+
+            info = per_model[model]
+            hist_dir = info['dir']
+            inputs = sorted(f for f in info['keep'] if 'avg' not in f)
+            if not inputs:
+                print(f"  {model}/hist: no non-avg files in last {last_n} year(s), skipping")
+                continue
+
+            stem = MODEL_STEM.get(model, model)
+            outfile = f"{case}.{stem}.h0.avg_last{last_n}yr.nc"
+            outpath = os.path.join(hist_dir, outfile)
+            input_paths = [os.path.join(hist_dir, f) for f in inputs]
+            cmd = ['ncra'] + input_paths + [outpath]
+
+            print(f"  {model}/hist: {len(inputs)} input file(s) -> {outfile}")
+            if not args.execute:
+                print(f"  [preview] would run: {' '.join(cmd)}")
+                continue
+
+            print(f"  Running ncra ({len(inputs)} file(s))...")
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+            except FileNotFoundError:
+                sys.exit("ERROR: ncra not found in PATH. Install NCO tools.")
+            if result.returncode != 0:
+                print(result.stderr, file=sys.stderr)
+                sys.exit(f"ERROR: ncra exited with code {result.returncode}")
+            print(f"  Written: {outpath}")
 
 
 # ---------------------------------------------------------------------------
@@ -1252,6 +1397,24 @@ def build_parser():
     _add_destructive_args(p_mvhist)
     _add_models_arg(p_mvhist)
 
+    # ---- avg-hist ----
+    p_avg = sub.add_parser(
+        'avg-hist',
+        help='Inspect or compute time-averaged history files using ncra',
+        description=cmd_avg_hist.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_avg.add_argument('cases', nargs='+',
+                       help='Case name(s) to process')
+    p_avg.add_argument('--execute', action='store_true',
+                       help='Actually run ncra (default is preview only)')
+    _add_models_arg(p_avg, help_prefix=f'Models to process (default: {", ".join(AVG_HIST_DEFAULT_MODELS)})')
+    mode = p_avg.add_mutually_exclusive_group()
+    mode.add_argument('--info', action='store_true',
+                      help='Print file count, year span, and size per model (read-only)')
+    mode.add_argument('--last', type=int, metavar='N',
+                      help='Average the N most recent model years using ncra')
+
     # ---- retire-case ----
     p_arc = sub.add_parser(
         'retire-case',
@@ -1296,6 +1459,7 @@ COMMANDS = {
     'purge-hist':      cmd_purge_hist,
     'purge-logs':      cmd_purge_logs,
     'move-hist':       cmd_move_hist,
+    'avg-hist':        cmd_avg_hist,
     'retire-case':     cmd_retire_case,
 }
 
