@@ -94,7 +94,7 @@ python manage.py move-hist my_case --models atm --execute
 #   --keep-years N     copy config + move N most recent hist years to long-term, then delete
 #   --keep-restarts    copy config + move most recent restart to long-term, then delete
 # --keep-years and --keep-restarts are combinable; --purge is mutually exclusive with both
-python manage.py retire my_case --purge --execute           # (retire-case also accepted)
+python manage.py retire my_case --purge --execute
 python manage.py retire my_case --keep-years 5 --keep-restarts --execute
 python manage.py retire my_case --keep-years 5 --execute
 
@@ -212,7 +212,7 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `case_sizes(case, paths)` — returns per-area byte counts: `casedir`, `bld`, `run`, `hist`, `logs`, `rest`, `archive_total`.
 - `restart_sets(case, paths)` — returns sorted list of `(date_str, path)` for dated subdirs in `archive/<case>/rest/`.
 - `list_files_with_size(directory)` — returns `(filenames, total_bytes)` for files directly in a directory (subdirectories ignored); used by hist/logs/move operations.
-- `_hist_keep_years_filter(archive_path, models, keep_n)` — partitions hist files into keep/delete lists based on the most-recent N model years; shared by `purge-hist` and `retire-case`.
+- `_hist_keep_years_filter(archive_path, models, keep_n)` — partitions hist files into keep/delete lists based on the most-recent N model years; shared by `purge-hist` and `retire`.
 - `save_usage_yaml(path, cases_data, generated_ts)` — writes `{case: {*_bytes, updated}}` records into `usage.yaml`, merging with any existing entries. `generated_ts` is written only when not `None` (full scan); partial scans pass `None` to preserve the existing top-level timestamp.
 - `load_usage_yaml(path)` — loads `usage.yaml`; exits with an error if the file is missing.
 - `cmd_report` — prints aligned disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL. Bare invocation scans all cases, prints the table, and saves to `usage.yaml`. Named-case invocation scans only those cases and merges into `usage.yaml`. `--cached` loads `usage.yaml` and prints without scanning disk; incompatible with explicit case names.
