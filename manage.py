@@ -875,23 +875,26 @@ def cmd_retire_case(args, paths):
     """
     Retire one or more cases from cesm_scratch. At least one intent flag required.
 
-    Intent flags:
+    Intent flags (at least one required):
 
-      --purge            Write case.yaml to long-term, then delete caseroot,
-                         rundir, and archive entirely. Mutually exclusive with
-                         --keep-years and --keep-restarts.
+      --keep-config      Copy SourceMods/, user_*, and env_* to long-term,
+                         then delete caseroot, rundir, and archive.
+                         Combinable with --keep-years and --keep-restarts.
 
-      --keep-years N     Copy config files (SourceMods, namelists, env) and
-                         case.yaml to long-term. Move hist files from the N
-                         most recent model years to long-term. Then delete
-                         caseroot, rundir, and archive.
+      --keep-years N     Move hist files from the N most recent model years
+                         to long-term, then delete caseroot, rundir, and archive.
+                         Combinable with --keep-config and --keep-restarts.
 
-      --keep-restarts    Copy config files and case.yaml to long-term. Move the
-                         most recent restart set to long-term. Then delete
-                         caseroot, rundir, and archive.
+      --keep-restarts    Move the most recent restart set to long-term, then
+                         delete caseroot, rundir, and archive.
+                         Combinable with --keep-config and --keep-years.
 
-    --keep-years and --keep-restarts may be combined. --purge is mutually
-    exclusive with both.
+      --purge            Write case.yaml to long-term only, then delete
+                         caseroot, rundir, and archive entirely.
+                         Mutually exclusive with all --keep-* flags.
+
+    --keep-config, --keep-years, and --keep-restarts may be freely combined.
+    --purge is mutually exclusive with all three.
 
     In all modes, case.yaml is written to long_term/<case>/case.yaml. If the
     case is found in --registry (default: cases.yaml), the full registry entry
@@ -900,9 +903,9 @@ def cmd_retire_case(args, paths):
 
     Long-term layout:
       long_term/<case>/case.yaml
-      long_term/<case>/SourceMods/          (unless --purge)
-      long_term/<case>/namelists/           (unless --purge)
-      long_term/<case>/env/                 (unless --purge)
+      long_term/<case>/SourceMods/          (--keep-config only)
+      long_term/<case>/namelists/           (--keep-config only)
+      long_term/<case>/env/                 (--keep-config only)
       long_term/<case>/<model>/hist/        (--keep-years only)
       long_term/<case>/rest/<date>/         (--keep-restarts only)
 
@@ -914,7 +917,17 @@ def cmd_retire_case(args, paths):
       - When --prefix is used, a single batch yes/no confirmation is shown
         for all matched cases before any action is taken.
 
-    Example (prefix mode):
+    Examples:
+      retire-case mycase --keep-config --execute
+          Save SourceMods/, user_*, and env_* only; delete everything from cesm_scratch.
+
+      retire-case mycase --keep-config --keep-years 1 --keep-restarts --execute
+          Save config files, 1 year of history, and most recent restart;
+          delete everything else from cesm_scratch.
+
+      retire-case mycase --purge --execute
+          Write case.yaml only; delete everything from cesm_scratch.
+
       retire-case --prefix hazyCHAMPS_case23 --purge --execute
           Retire all cases whose name starts with hazyCHAMPS_case23.
           Single yes/no confirmation shown for the full matched batch.
@@ -933,12 +946,13 @@ def cmd_retire_case(args, paths):
         sys.exit("ERROR: retire-case requires long_term path. "
                  "Set paths.long_term in config_registry.yaml or use --long-term.")
 
-    has_keep = args.keep_years is not None or args.keep_restarts
+    has_keep = args.keep_config or args.keep_years is not None or args.keep_restarts
     if args.purge and has_keep:
-        sys.exit("ERROR: --purge is mutually exclusive with --keep-years and --keep-restarts.")
+        sys.exit("ERROR: --purge is mutually exclusive with --keep-config, "
+                 "--keep-years, and --keep-restarts.")
     if not args.purge and not has_keep:
-        sys.exit("ERROR: retire-case requires at least one of --purge, --keep-years N, "
-                 "or --keep-restarts. State your intent explicitly.")
+        sys.exit("ERROR: retire-case requires at least one of --purge, --keep-config, "
+                 "--keep-years N, or --keep-restarts. State your intent explicitly.")
 
     cases_requested = args.cases
     prefix_filter = getattr(args, 'prefix', None)
@@ -1020,9 +1034,9 @@ def cmd_retire_case(args, paths):
             print(f"           A minimal case.yaml stub will be written. "
                   f"Run scan.py first to capture full metadata.")
 
-        # config copy (unless --purge)
+        # config copy (--keep-config only)
         config_actions = []
-        if not args.purge and casedir_path and os.path.isdir(casedir_path):
+        if args.keep_config and casedir_path and os.path.isdir(casedir_path):
             config_actions = _copy_case_config(casedir_path, lt_case_dir)
 
         # hist preservation
@@ -1251,14 +1265,19 @@ def build_parser():
                             'single batch confirmation (cannot combine with explicit case names)')
     p_arc.add_argument('--purge', action='store_true',
                        help='Write case.yaml only to long-term, then delete everything. '
-                            'Mutually exclusive with --keep-years and --keep-restarts.')
+                            'Mutually exclusive with all --keep-* flags.')
+    p_arc.add_argument('--keep-config', action='store_true', dest='keep_config',
+                       help='Copy SourceMods/, user_*, and env_* to long-term, then delete '
+                            'everything from cesm_scratch. Combinable with --keep-years and '
+                            '--keep-restarts.')
     p_arc.add_argument('--keep-years', type=int, metavar='N', default=None,
                        dest='keep_years',
-                       help='Copy config files to long-term and move hist files from the '
-                            'N most recent model years, then delete everything')
+                       help='Move hist files from the N most recent model years to long-term, '
+                            'then delete everything. Combinable with --keep-config and '
+                            '--keep-restarts.')
     p_arc.add_argument('--keep-restarts', action='store_true', dest='keep_restarts',
-                       help='Copy config files to long-term and move the most recent '
-                            'restart set, then delete everything')
+                       help='Move the most recent restart set to long-term, then delete '
+                            'everything. Combinable with --keep-config and --keep-years.')
     p_arc.add_argument('--registry', metavar='FILE', default=None,
                        help=f'Path to cases.yaml for case.yaml export '
                             f'(default: {DEFAULT_RETIRE_REGISTRY})')

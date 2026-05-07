@@ -274,28 +274,31 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 
 | Flag | What it does |
 |---|---|
-| `--keep-case` | Move the entire case tree (caseroot + rundir + archive) to long-term storage intact. No deletions. |
-| `--keep-years N` | Move hist files from the N most recent model years to long-term, then delete everything from cesm_scratch. |
-| `--keep-restarts` | Move the single most recent restart set to long-term, then delete everything from cesm_scratch. |
-| `--purge-only` | Delete everything. No preservation. Mutually exclusive with the other flags. |
+| `--keep-config` | Copy SourceMods/, user_*, and env_* to long-term, then delete everything from cesm_scratch. Combinable with `--keep-years` and `--keep-restarts`. |
+| `--keep-years N` | Move hist files from the N most recent model years to long-term, then delete everything from cesm_scratch. Combinable with `--keep-config` and `--keep-restarts`. |
+| `--keep-restarts` | Move the most recent restart set to long-term, then delete everything from cesm_scratch. Combinable with `--keep-config` and `--keep-years`. |
+| `--purge` | Write case.yaml only to long-term, then delete everything from cesm_scratch. Mutually exclusive with all `--keep-*` flags. |
 
-`--keep-years` and `--keep-restarts` may be combined with each other and with `--keep-case`. `--purge-only` is mutually exclusive with all three.
+`--keep-config`, `--keep-years`, and `--keep-restarts` may be freely combined. `--purge` is mutually exclusive with all three.
 
 ```bash
 # Preview (no --execute — always safe to run first)
-python manage.py retire-case my_case --keep-years 5 --keep-restarts
+python manage.py retire-case my_case --keep-config --keep-years 5 --keep-restarts
 
-# Move full case tree to long-term, no deletions
-python manage.py retire-case my_case --keep-case --execute
+# Save config files only, delete everything from cesm_scratch
+python manage.py retire-case my_case --keep-config --execute
+
+# Save config files, 1 year of history, and most recent restart
+python manage.py retire-case my_case --keep-config --keep-years 1 --keep-restarts --execute
 
 # Keep last 5 years of history + most recent restart, delete the rest
 python manage.py retire-case my_case --keep-years 5 --keep-restarts --execute
 
 # Delete everything (case has no long-term value)
-python manage.py retire-case my_case --purge-only --execute
+python manage.py retire-case my_case --purge --execute
 
 # With registry pre-flight check
-python manage.py retire-case my_case --purge-only --registry cases.yaml --execute
+python manage.py retire-case my_case --purge --registry cases.yaml --execute
 ```
 
 Run any subcommand with `--help` for full options.
