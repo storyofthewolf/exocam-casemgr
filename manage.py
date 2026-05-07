@@ -338,7 +338,7 @@ def cmd_report(args, paths):
 
       report                 Full disk scan of all cases; clobbers usage.yaml
       report my_case         Diagnostic scan of one case; prints only, no yaml write
-      report --name prox     Substring filter; prints only, no yaml write
+      report --prefix prox   Prefix filter; prints only, no yaml write
       report --cached        Print last saved usage.yaml without scanning disk
 
     Columns: CASE | CASEDIR | BLD | RUN | HIST | LOGS | REST | TOTAL
@@ -346,10 +346,10 @@ def cmd_report(args, paths):
     usage_path = getattr(args, 'usage_yaml', None) or DEFAULT_USAGE_YAML
     cached = getattr(args, 'cached', False)
     requested = getattr(args, 'cases', None) or []
-    name_filter = getattr(args, 'name', None)
+    prefix_filter = getattr(args, 'prefix', None)
 
-    if requested and name_filter:
-        sys.exit("ERROR: --name cannot be combined with explicit case names.")
+    if requested and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
     if cached and requested:
         sys.exit("ERROR: --cached cannot be combined with explicit case names.")
 
@@ -372,10 +372,10 @@ def cmd_report(args, paths):
         if missing:
             print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
         cases = [c for c in requested if c in all_cases]
-    elif name_filter:
-        cases = [c for c in all_cases if name_filter.lower() in c.lower()]
+    elif prefix_filter:
+        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
         if not cases:
-            print(f"No cases matching '{name_filter}'.")
+            print(f"No cases matching prefix '{prefix_filter}'.")
             return
     else:
         cases = all_cases
@@ -429,8 +429,8 @@ def cmd_report(args, paths):
           f"{fmt_size(grand_total):>{cw}}")
 
     # Bare invocation: clobber usage.yaml with the full snapshot.
-    # Named-case or --name filtered invocation: diagnostic print only, no yaml write.
-    if not requested and not name_filter:
+    # Named-case or --prefix filtered invocation: diagnostic print only, no yaml write.
+    if not requested and not prefix_filter:
         caseroot = paths.get('caseroot', '')
         no_caseroot = sum(1 for c in cases if not os.path.isdir(os.path.join(caseroot, c)))
         if no_caseroot:
@@ -911,6 +911,13 @@ def cmd_retire_case(args, paths):
       - Explicit case names required; no --all flag.
       - At least one intent flag required.
       - Each case requires individual yes/no confirmation.
+      - When --prefix is used, a single batch yes/no confirmation is shown
+        for all matched cases before any action is taken.
+
+    Example (prefix mode):
+      retire-case --prefix hazyCHAMPS_case23 --purge --execute
+          Retire all cases whose name starts with hazyCHAMPS_case23.
+          Single yes/no confirmation shown for the full matched batch.
 
     WARNING: deletions are permanent. Ensure cases.yaml is current before running.
     """
@@ -934,19 +941,62 @@ def cmd_retire_case(args, paths):
                  "or --keep-restarts. State your intent explicitly.")
 
     cases_requested = args.cases
-    if not cases_requested:
+    prefix_filter = getattr(args, 'prefix', None)
+
+    if cases_requested and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+    if not cases_requested and not prefix_filter:
         sys.exit("ERROR: retire-case requires explicit case name(s).")
 
     registry_path = getattr(args, 'registry', None) or DEFAULT_RETIRE_REGISTRY
 
     all_on_disk = discover_cases(paths)
-    missing = [c for c in cases_requested if c not in all_on_disk]
-    if missing:
-        print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
-    cases = [c for c in cases_requested if c in all_on_disk]
-    if not cases:
-        print("No cases found on disk.")
-        return
+
+    if prefix_filter:
+        cases = [c for c in all_on_disk if c.lower().startswith(prefix_filter.lower())]
+        if not cases:
+            print(f"No cases matching prefix '{prefix_filter}'.")
+            return
+    else:
+        missing = [c for c in cases_requested if c not in all_on_disk]
+        if missing:
+            print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
+        cases = [c for c in cases_requested if c in all_on_disk]
+        if not cases:
+            print("No cases found on disk.")
+            return
+
+    # In prefix mode, print all plans then do a single batch confirmation.
+    # batch_confirmed starts False; set to True after the user says yes (or
+    # when not in prefix mode, where per-case prompts are used instead).
+    batch_confirmed = False
+
+    if prefix_filter and args.execute:
+        # Pass 1: print all plans so the user sees the full batch before confirming.
+        combined_bytes = 0
+        for case in cases:
+            print(f"\n{'='*60}")
+            print(f"  CASE: {case}")
+            print(f"{'='*60}")
+            casedir_path = os.path.join(caseroot, case) if caseroot else ''
+            rundir_path  = os.path.join(rundir,   case) if rundir   else ''
+            archive_path = os.path.join(archive,  case) if archive  else ''
+            sz = case_sizes(case, paths)
+            total_on_disk = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
+            combined_bytes += total_on_disk
+            print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
+            print(f"  DELETE from cesm_scratch:")
+            for p in [casedir_path, rundir_path, archive_path]:
+                if p and os.path.exists(p):
+                    print(f"    {p}")
+        print(f"\n{'='*60}")
+        print(f"  BATCH: {len(cases)} case(s) matched prefix '{prefix_filter}'")
+        print(f"  Combined footprint: {fmt_size(combined_bytes)}")
+        answer = input(f"\n  Confirm retire-case for ALL {len(cases)} matched case(s)? [yes/no]: ").strip().lower()
+        if answer != 'yes':
+            print("  Aborted.")
+            return
+        batch_confirmed = True
 
     for case in cases:
         print(f"\n{'='*60}")
@@ -1023,10 +1073,11 @@ def cmd_retire_case(args, paths):
             print(f"\n  [preview] add --execute to perform these actions")
             continue
 
-        answer = input(f"\n  Confirm retire-case for '{case}'? [yes/no]: ").strip().lower()
-        if answer != 'yes':
-            print(f"  Skipped.")
-            continue
+        if not batch_confirmed:
+            answer = input(f"\n  Confirm retire-case for '{case}'? [yes/no]: ").strip().lower()
+            if answer != 'yes':
+                print(f"  Skipped.")
+                continue
 
         # Write case.yaml
         _write_case_yaml(case, lt_case_dir, registry_path)
@@ -1117,8 +1168,8 @@ def build_parser():
     )
     p_report.add_argument('cases', nargs='*',
                           help='Case name(s) to report (default: all discovered cases)')
-    p_report.add_argument('--name', metavar='STR', default=None,
-                          help='Case-insensitive substring filter; prints only, no yaml write '
+    p_report.add_argument('--prefix', metavar='STR', default=None,
+                          help='Case-insensitive prefix filter; prints only, no yaml write '
                                '(cannot combine with explicit case names)')
     p_report.add_argument('--cached', action='store_true',
                           help='Print last saved usage.yaml without scanning disk '
@@ -1195,6 +1246,9 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_destructive_args(p_arc)
+    p_arc.add_argument('--prefix', metavar='STR', default=None,
+                       help='Case-insensitive prefix filter; retire all matched cases with a '
+                            'single batch confirmation (cannot combine with explicit case names)')
     p_arc.add_argument('--purge', action='store_true',
                        help='Write case.yaml only to long-term, then delete everything. '
                             'Mutually exclusive with --keep-years and --keep-restarts.')
