@@ -431,8 +431,9 @@ def cmd_report(args, paths):
               f"{fmt_size(cd + bl + ru + hi + lo + re):>{cw}}")
 
     grand_total = sum(grand.values())
+    total_label = f"TOTAL ({len(cases_data)} cases)"
     print('-' * len(header))
-    print(f"{'TOTAL':<{col_w}}  "
+    print(f"{total_label:<{col_w}}  "
           f"{fmt_size(grand['casedir_bytes']):>{cw}}  "
           f"{fmt_size(grand['bld_bytes']):>{cw}}  "
           f"{fmt_size(grand['run_bytes']):>{cw}}  "
@@ -475,8 +476,9 @@ def _print_report_table(cases, cases_data):
               f"{fmt_size(total):>{cw}}")
 
     grand_total = sum(grand.values())
+    total_label = f"TOTAL ({len(cases)} cases)"
     print('-' * len(header))
-    print(f"{'TOTAL':<{col_w}}  "
+    print(f"{total_label:<{col_w}}  "
           f"{fmt_size(grand['casedir_bytes']):>{cw}}  "
           f"{fmt_size(grand['bld_bytes']):>{cw}}  "
           f"{fmt_size(grand['run_bytes']):>{cw}}  "
