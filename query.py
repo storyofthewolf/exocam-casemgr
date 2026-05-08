@@ -500,7 +500,7 @@ def main():
         cmd_show(args, load_registry_raw(args.registry))
     elif args.command == 'export':
         cmd_export(args, rows, args.config_registry)
-    print(f"\n(registry: {args.registry})")
+    print(f"\n(case information from: --registry {args.registry})")
 
 
 if __name__ == '__main__':
