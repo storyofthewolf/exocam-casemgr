@@ -75,22 +75,22 @@ python query.py export my_base_case -o clone.yaml \
 
 # Disk usage report across all cases (default when called with no args)
 # Scans disk and saves results to usage.yaml automatically
-python data.py
-python data.py report                   # same; optional explicit subcommand
-python data.py report my_case           # scan single case, print only (no yaml write)
+python manage.py
+python manage.py report                   # same; optional explicit subcommand
+python manage.py report my_case           # scan single case, print only (no yaml write)
 
 # Print last saved usage.yaml without touching disk
 # (incompatible with explicit case names)
-python data.py report --cached
+python manage.py report --cached
 
 # Purge/move commands — preview by default, --execute to act
 # All destructive subcommands require explicit case name(s) — no --all flag.
-python data.py purge-bld my_case --execute
-python data.py purge-bld my_case --logs-only --execute   # remove .o/.mod only
-python data.py purge-restarts my_case --keep 1 --execute
-python data.py purge-hist my_case --models atm --execute
-python data.py purge-logs my_case --execute
-python data.py move-hist my_case --models atm --execute
+python manage.py purge-bld my_case --execute
+python manage.py purge-bld my_case --logs-only --execute   # remove .o/.mod only
+python manage.py purge-restarts my_case --keep 1 --execute
+python manage.py purge-hist my_case --models atm --execute
+python manage.py purge-logs my_case --execute
+python manage.py move-hist my_case --models atm --execute
 
 # Retire a case — must state intent explicitly with one of these flags:
 #   --purge            write case.yaml only to long-term, then delete everything
@@ -99,19 +99,19 @@ python data.py move-hist my_case --models atm --execute
 #   --keep-restarts    move most recent restart to long-term, then delete everything
 # --keep-config, --keep-years, --keep-restarts are freely combinable; --purge is mutually exclusive with all
 # avg files (filenames containing "avg") are always moved to long-term unconditionally
-python data.py retire my_case --purge --execute
-python data.py retire my_case --keep-config --execute
-python data.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
+python manage.py retire my_case --purge --execute
+python manage.py retire my_case --keep-config --execute
+python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
 
 # --- TIME AVERAGING ---
 
 # Inspect history file coverage per model (non-avg files only; notes avg file presence)
-python data.py avg my_case --info
-python data.py avg my_case --info --models atm lnd
+python manage.py avg my_case --info
+python manage.py avg my_case --info --models atm lnd
 
 # Compute time average over last N years (preview by default, --execute to run ncra)
-python data.py avg my_case --last 10
-python data.py avg my_case --last 10 --models atm lnd --execute
+python manage.py avg my_case --last 10
+python manage.py avg my_case --last 10 --models atm lnd --execute
 
 # --- SOURCEMODS DIFF: check for custom Fortran before retiring ---
 
@@ -149,7 +149,7 @@ CASE directories on HPC
 
 cases/ + rundir/ + archive/ on HPC
        ↓
-  data.py                                   ← disk reporting, purge, move-hist, retire
+  manage.py                                   ← disk reporting, purge, move-hist, retire
 ```
 
 ### `parse_utils.py` — pure parsing primitives, no filesystem side effects
@@ -220,7 +220,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`.
 - The exported matrix always includes a `meta` block (`description`, `author`, `created`, `source_registry`) that `query.py export` auto-populates; `description` and `author` are written as empty strings for the user to fill in.
 
-### `data.py` — disk management tool
+### `manage.py` — disk management tool
 
 Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on disk — no registry required. All destructive subcommands are **non-destructive by default**; `--execute` is required to make changes, and each case confirms the action before acting.
 
@@ -391,7 +391,7 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 ## Design invariants — do not violate
 
 - `parse_utils.py` must remain free of filesystem side effects. It reads files via paths passed to it; it never discovers or writes files itself.
-- All destructive `data.py` operations require `--execute`. Without it, every command only prints what it would do.
+- All destructive `manage.py` operations require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations. Cases must be named explicitly.
 - `build.py` generates scripts but never executes them unless `--execute` is passed.
 - `scan.py` merge precedence: live inspection > archived (long_term) entries > existing registry.

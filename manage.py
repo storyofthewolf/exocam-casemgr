@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-data.py — ExoCAM data management tool
+manage.py — ExoCAM data management tool
 
 Inspect, manage, and purge GCM data across the three primary storage areas:
   cases/    CESM case directories (build scripts, SourceMods, namelists)
@@ -49,7 +49,7 @@ SAFETY
   report is read-only and safe to run bare — no case names means all cases.
 
 Run any subcommand with --help for full options, e.g.:
-  python data.py purge-bld --help
+  python manage.py purge-bld --help
 """
 
 import argparse
@@ -333,7 +333,7 @@ def save_usage_yaml(path, cases_data, generated_ts):
 def load_usage_yaml(path):
     """Load usage.yaml; exit with an error if the file is missing."""
     if not os.path.exists(path):
-        sys.exit(f"ERROR: {path} not found. Run 'data.py report' first to generate it.")
+        sys.exit(f"ERROR: {path} not found. Run 'manage.py report' first to generate it.")
     with open(path) as f:
         doc = yaml.safe_load(f) or {}
     return doc
@@ -1380,7 +1380,7 @@ def _add_models_arg(p, help_prefix='Restrict to these model components'):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog='data.py',
+        prog='manage.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

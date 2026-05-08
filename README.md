@@ -22,7 +22,7 @@ Python 3.8+.
 | `build.py` | Build script generator — validation, Fortran patching, shell script writer |
 | `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
-| `data.py` | Data management — disk usage reporting, purging, and moving data |
+| `manage.py` | Data management — disk usage reporting, purging, and moving data |
 | `query.py` | Registry search and experiment matrix export |
 | `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
 | `run_builds.sh` | Batch runner for all `*_build.sh` scripts in a directory |
@@ -242,21 +242,21 @@ Consistency warnings are generated for pressure mismatches, level mismatches, an
 
 ```bash
 # Show disk usage across cases/, rundir/, and archive/ (default when called with no args)
-python data.py
-python data.py report               # explicit
-python data.py report case1 case2   # specific cases only
+python manage.py
+python manage.py report               # explicit
+python manage.py report case1 case2   # specific cases only
 
 # Preview what each command would do (safe default — nothing is changed)
-python data.py purge-bld my_case
-python data.py purge-restarts my_case --keep 1
-python data.py purge-hist my_case --models atm lnd
-python data.py purge-logs my_case
-python data.py move-hist my_case --models atm
+python manage.py purge-bld my_case
+python manage.py purge-restarts my_case --keep 1
+python manage.py purge-hist my_case --models atm lnd
+python manage.py purge-logs my_case
+python manage.py move-hist my_case --models atm
 
 # Add --execute to actually perform the action (prompts yes/no per case)
-python data.py purge-bld my_case --execute
-python data.py purge-restarts my_case --keep 1 --execute
-python data.py move-hist my_case --models atm --execute
+python manage.py purge-bld my_case --execute
+python manage.py purge-restarts my_case --keep 1 --execute
+python manage.py move-hist my_case --models atm --execute
 ```
 
 All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes, and each case prompts for confirmation before acting. There is no `--all` flag — case names must always be listed explicitly.
@@ -287,22 +287,22 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 
 ```bash
 # Preview (no --execute — always safe to run first)
-python data.py retire my_case --keep-config --keep-years 5 --keep-restarts
+python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts
 
 # Save config files only, delete everything from cesm_scratch
-python data.py retire my_case --keep-config --execute
+python manage.py retire my_case --keep-config --execute
 
 # Save config files, 1 year of history, and most recent restart
-python data.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
+python manage.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
 
 # Keep last 5 years of history + most recent restart, delete the rest
-python data.py retire my_case --keep-years 5 --keep-restarts --execute
+python manage.py retire my_case --keep-years 5 --keep-restarts --execute
 
 # Delete everything (case has no long-term value)
-python data.py retire my_case --purge --execute
+python manage.py retire my_case --purge --execute
 
 # With registry pre-flight check
-python data.py retire my_case --purge --registry active.yaml --execute
+python manage.py retire my_case --purge --registry active.yaml --execute
 ```
 
 Run any subcommand with `--help` for full options.
