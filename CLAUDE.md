@@ -50,13 +50,16 @@ python scan.py my_case --archive --update
 
 # --- QUERYING: search and export from the registry ---
 
-# Search by name substring (case-insensitive), config type, exort package, or level count
-python query.py search --name thai
+# Search — all cases, by exact name, by prefix, or by metadata filters
+python query.py search
+python query.py search ExoCAM_thai_ben1_L51_n68equiv
+python query.py search --prefix ExoCAM_thai
 python query.py search --config-type cam_land_fv --nlev 51
 python query.py search --exort-pkg n68equiv
 
-# Print all parameters for a single case
+# Print all parameters for one or more cases
 python query.py show ExoCAM_thai_ben1_L51_n68equiv
+python query.py show --prefix ExoCAM_thai
 
 # Export one or more cases to a new experiment matrix
 # (required run fields missing from config_registry.yaml defaults
@@ -115,7 +118,8 @@ python manage.py avg my_case --last 10 --models atm lnd --execute
 
 # --- SOURCEMODS DIFF: check for custom Fortran before retiring ---
 
-python diff.py my_case                        # summary: IDENTICAL / MODIFIED / CASE ONLY per file
+python diff.py my_case                        # summary: MODIFIED / CASE ONLY per file (IDENTICAL suppressed)
+python diff.py my_case --verbose              # show all files including IDENTICAL matches
 python diff.py my_case --full physpkg.F90     # full diff for one file (or contents if CASE ONLY)
 python diff.py case1 --case2 case2            # case-vs-case summary (four categories)
 python diff.py case1 --case2 case2 --full physpkg.F90  # full diff between two cases
@@ -210,8 +214,8 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 
 - `load_registry(path)` — loads `active.yaml` (or `archived.yaml`) into flat dicts (one per case) for search/export.
 - `load_registry_raw(path)` — loads the registry preserving grouped structure; used by `show` to reproduce the exact registry format.
-- `cmd_search` — tabular listing filtered by `--name` (substring, case-insensitive), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE.
-- `cmd_show` — dumps one case's full grouped YAML, identical in format to the registry file.
+- `cmd_search` — tabular listing filtered by optional positional `cases` (exact names), `--prefix` (case-insensitive startswith), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). `cases` and `--prefix` are mutually exclusive. Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE.
+- `cmd_show` — dumps full grouped YAML for one or more matching cases. Accepts positional `cases` (exact names) or `--prefix`; mutually exclusive. Multiple matches are separated by `---`.
 - `cmd_export` — generates a ready-to-use `experiment_matrix.yaml` from one or more registry cases. For multiple cases, shared fields are factored into `base` automatically. `mach` and run defaults are populated from `config_registry.yaml` unless overridden via CLI flags. Required fields left blank are written as empty strings with a prominent `# FIXME` warning header prepended to the file.
 - `_row_to_base(row, bare=False)` — converts a flat registry row to a matrix base dict. `bare=True` strips atmosphere, geophysical, model_options, and special fields; used for clone exports where the clone source supplies those values. Bare mode is the default when `--clone` is set; `--full` overrides to include all scientific parameters.
 - `_BARE_STRIP_KEYS` — set of fields omitted from `base` in bare mode.
@@ -253,7 +257,7 @@ Compares a case's `SourceMods/` against either the ExoCAM reference source or an
 - `walk_sourcemods(sourcemods_root)` — walks each component directory recursively; returns `{component: {filename: abs_path}}`. Skips editor backup files (`~`). Shallowest occurrence wins on filename collision across subdirs.
 - `find_exocam_counterpart(filename, component, exocam_sm_root)` — checks for filename at the top level of the ExoCAM reference component dir; returns path or `None`. Only used in case-vs-ExoCAM mode.
 - `diff_counts(path_a, path_b)` — returns `(added, removed)` line counts of a vs b using `collections.Counter`. Pure Python, no subprocess.
-- `cmd_summary(args, paths)` — branches on `args.case2`. Case-vs-ExoCAM: five categories (`IDENTICAL`, `MODIFIED`, `RT IDENTICAL`, `RT MODIFIED`, `CASE ONLY`); ExoCAM match takes priority over RT match. Case-vs-case: four categories (`IDENTICAL`, `MODIFIED`, `CASE1 ONLY`, `CASE2 ONLY`); no `active.yaml` or ExoRT lookup. Always prints all five component sections. `exoplanet_mod.F90` always skipped. Ends with a one-line verdict.
+- `cmd_summary(args, paths)` — branches on `args.case2`. Case-vs-ExoCAM: five categories (`IDENTICAL`, `MODIFIED`, `RT IDENTICAL`, `RT MODIFIED`, `CASE ONLY`); ExoCAM match takes priority over RT match. Case-vs-case: four categories (`IDENTICAL`, `MODIFIED`, `CASE1 ONLY`, `CASE2 ONLY`); no `active.yaml` or ExoRT lookup. Always prints all component sections. `exoplanet_mod.F90` always skipped. Ends with a one-line verdict and `(registry: ...)` footer. By default, `IDENTICAL` and `RT IDENTICAL` lines are suppressed; pass `--verbose` to show them.
 - `cmd_full(args, paths)` — branches on `args.case2`. In case-vs-ExoCAM mode, resolves classification (ExoCAM → RT → CASE ONLY) and diffs against the appropriate reference or prints file contents. In case-vs-case mode, diffs the two case files or prints the one-sided file.
 - `COMPONENTS` — `['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']`; printed in this order.
 - `SKIP_FILES` — `{'exoplanet_mod.F90'}`; always skipped.
@@ -394,7 +398,7 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 - All destructive `manage.py` operations require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations. Cases must be named explicitly.
 - `build.py` generates scripts but never executes them unless `--execute` is passed.
-- `scan.py` merge precedence: live inspection > archived (long_term) entries > existing registry.
+- `scan.py --update` clobbers the registry with exactly the cases scanned in the current run (live rows + archive rows, live takes precedence on name collision). It does not merge with any pre-existing registry content.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
 
 ---

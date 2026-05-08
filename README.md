@@ -154,13 +154,15 @@ Then add per-case entries with only the parameters that differ from the clone so
 # List all cases
 python query.py search
 
-# Filter by metadata
-python query.py search --name thai
+# Filter by exact name, prefix, or metadata
+python query.py search ExoCAM_thai_ben1_L51_n68equiv
+python query.py search --prefix ExoCAM_thai
 python query.py search --config-type cam_land_fv --nlev 51
 python query.py search --exort-pkg n68equiv
 
-# Show all parameters for one case
+# Show all parameters for one or more cases
 python query.py show ExoCAM_thai_ben1_L51_n68equiv
+python query.py show --prefix ExoCAM_thai
 
 # Export a full matrix from one or more registry cases
 python query.py export case_a case_b -o sweep.yaml \

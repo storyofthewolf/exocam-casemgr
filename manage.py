@@ -1347,13 +1347,16 @@ def cmd_avg_hist(args, paths):
 
             print(f"  Running ncra ({len(inputs)} file(s))...")
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             except FileNotFoundError:
                 sys.exit("ERROR: ncra not found in PATH. Install NCO tools.")
             if result.returncode != 0:
                 print(result.stderr, file=sys.stderr)
                 sys.exit(f"ERROR: ncra exited with code {result.returncode}")
             print(f"  Written: {outpath}")
+
+    if not args.execute and last_n is not None:
+        print("\n[preview] add --execute to perform these actions")
 
 
 # ---------------------------------------------------------------------------
