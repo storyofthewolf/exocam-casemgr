@@ -955,17 +955,17 @@ def cmd_retire_case(args, paths):
         for all matched cases before any action is taken.
 
     Examples:
-      retire-case mycase --keep-config --execute
+      retire mycase --keep-config --execute
           Save SourceMods/, user_*, and env_* only; delete everything from cesm_scratch.
 
-      retire-case mycase --keep-config --keep-years 1 --keep-restarts --execute
+      retire mycase --keep-config --keep-years 1 --keep-restarts --execute
           Save config files, 1 year of history, and most recent restart;
           delete everything else from cesm_scratch.
 
-      retire-case mycase --purge --execute
+      retire mycase --purge --execute
           Write case.yaml only; delete everything from cesm_scratch.
 
-      retire-case --prefix hazyCHAMPS_case23 --purge --execute
+      retire --prefix hazyCHAMPS_case23 --purge --execute
           Retire all cases whose name starts with hazyCHAMPS_case23.
           Single yes/no confirmation shown for the full matched batch.
 
