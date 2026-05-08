@@ -1037,9 +1037,15 @@ def cmd_retire_case(args, paths):
             combined_bytes += total_on_disk
             print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
             print(f"  DELETE from cesm_scratch:")
-            for p in [casedir_path, rundir_path, archive_path]:
-                if p and os.path.exists(p):
+            for label, p in [('casedir', casedir_path),
+                             ('rundir',  rundir_path),
+                             ('archive', archive_path)]:
+                if not p:
+                    continue
+                if os.path.exists(p):
                     print(f"    {p}")
+                else:
+                    print(f"    {p}  (not found on disk)")
         print(f"\n{'='*60}")
         print(f"  BATCH: {len(cases)} case(s) matched prefix '{prefix_filter}'")
         print(f"  Combined footprint: {fmt_size(combined_bytes)}")
@@ -1097,6 +1103,9 @@ def cmd_retire_case(args, paths):
                 date_str, rest_path = sets[-1]
                 preserve_restart.append(
                     (rest_path, os.path.join(lt_case_dir, 'rest', date_str)))
+            else:
+                rest_dir = os.path.join(paths.get('archive', ''), case, 'rest')
+                print(f"  WARNING: --keep-restarts specified but no restart sets found in {rest_dir}")
 
         # avg file preservation (unconditional — move any "avg" files in hist/)
         preserve_avg = []  # (src, dst)
@@ -1136,9 +1145,15 @@ def cmd_retire_case(args, paths):
             for src, dst in preserve_avg:
                 print(f"    {src}  ->  {dst}")
         print(f"  DELETE from cesm_scratch:")
-        for p in [casedir_path, rundir_path, archive_path]:
-            if p and os.path.exists(p):
+        for label, p in [('casedir', casedir_path),
+                         ('rundir',  rundir_path),
+                         ('archive', archive_path)]:
+            if not p:
+                continue
+            if os.path.exists(p):
                 print(f"    {p}")
+            else:
+                print(f"    {p}  (not found on disk)")
 
         if not args.execute:
             print(f"\n  [preview] add --execute to perform these actions")
