@@ -11,6 +11,7 @@ Usage:
   python diff.py case1 --case2 case2                  # case vs case summary
   python diff.py case1 --case2 case2 --full physpkg.F90
   python diff.py my_case --config-registry /path/to/config_registry.yaml
+  python diff.py my_case --registry active.yaml
 """
 
 import argparse
@@ -48,7 +49,7 @@ def load_paths(config_registry):
 def load_case_meta(case, cases_yaml_path):
     """Return {'config_type': ..., 'exort_pkg': ...} for case from cases.yaml."""
     if not os.path.exists(cases_yaml_path):
-        sys.exit(f"ERROR: cases.yaml not found at {cases_yaml_path}.\n"
+        sys.exit(f"ERROR: {cases_yaml_path} not found.\n"
                  f"Run 'python scan.py' to generate it before using diff.py.")
     with open(cases_yaml_path) as f:
         data = yaml.safe_load(f) or {}
@@ -58,7 +59,7 @@ def load_case_meta(case, cases_yaml_path):
             exort_pkg = (meta.get('exort_pkg') or '').rstrip('*') or None
             return {'config_type': meta.get('config_type'),
                     'exort_pkg':   exort_pkg}
-    sys.exit(f"ERROR: case '{case}' not found in cases.yaml.\n"
+    sys.exit(f"ERROR: case '{case}' not found in {cases_yaml_path}.\n"
              f"Run 'python scan.py {case}' first to register it before diffing.")
 
 
@@ -168,10 +169,12 @@ def cmd_summary(args, paths):
                     ([f"{n_c2} case2-only"]  if n_c2  else []) + \
                     ([f"{n_eq} identical"]   if n_eq  else [])
             print(f"Summary: {', '.join(parts)}")
+        cases_yaml = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
+        print(f"\n(registry: {cases_yaml})")
     else:
         exocam_root = paths.get('exocam_root', '') or sys.exit(
             "ERROR: paths.exocam_root not set in config_registry.yaml")
-        cases_yaml  = paths.get('cases_yaml') or DEFAULT_CASES_YAML
+        cases_yaml  = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
         meta        = load_case_meta(args.case, cases_yaml)
         config_type = meta['config_type']
         exort_files = _load_exort_fileset(paths, meta['exort_pkg'])
@@ -219,6 +222,7 @@ def cmd_summary(args, paths):
                     ([f"{n_co} case-only"]         if n_co     else []) + \
                     ([f"{n_eq} identical"]         if n_eq     else [])
             print(f"Summary: {', '.join(parts)}  →  review before retiring")
+        print(f"\n(registry: {cases_yaml})")
 
 
 def cmd_full(args, paths):
@@ -246,10 +250,12 @@ def cmd_full(args, paths):
         else:
             print(f"CASE2 ONLY — {target} exists only in {args.case2}\n  {path2}\n")
             sys.stdout.write(open(path2).read())
+        cases_yaml = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
+        print(f"\n(registry: {cases_yaml})")
     else:
         exocam_root = paths.get('exocam_root', '') or sys.exit(
             "ERROR: paths.exocam_root not set in config_registry.yaml")
-        cases_yaml  = paths.get('cases_yaml') or DEFAULT_CASES_YAML
+        cases_yaml  = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
         meta        = load_case_meta(args.case, cases_yaml)
         config_type = meta['config_type']
         exort_files = _load_exort_fileset(paths, meta['exort_pkg'])
@@ -271,6 +277,7 @@ def cmd_full(args, paths):
         else:
             print(f"CASE ONLY — {target} has no ExoCAM or ExoRT counterpart\n  {path1}\n")
             sys.stdout.write(open(path1).read())
+        print(f"\n(registry: {cases_yaml})")
 
 
 def build_parser():
@@ -288,6 +295,10 @@ def build_parser():
     parser.add_argument('--config-registry', default=DEFAULT_CONFIG, dest='config_registry',
                         help='Path to config_registry.yaml '
                              '(default: config_registry.yaml next to this script)')
+    parser.add_argument('--registry', default=None, metavar='PATH',
+                        help='Path to cases registry yaml (e.g. active.yaml or archived.yaml). '
+                             'Overrides paths.cases_yaml from config_registry.yaml; '
+                             'falls back to cases.yaml next to this script.')
     return parser
 
 
