@@ -459,22 +459,10 @@ def main():
             archive_rows = scan_archive_entries(long_term)
             print(f"Archive scan: found {len(archive_rows)} case(s) in {long_term}")
 
-    # --- merge: live takes precedence over archived; both take precedence over existing ---
-    # Always load existing registry when the file is present (preserves merge precedence).
     if args.update:
-        existing = load_registry(args.registry) if os.path.exists(args.registry) else []
-        by_name = {r['case_name']: r for r in existing}
-
-        # archived entries fill in (overwrite existing if same name)
-        for r in archive_rows:
-            if r.get('case_name'):
-                by_name[r['case_name']] = r
-
-        # live entries take highest precedence
-        for r in live_rows:
-            by_name[r['case_name']] = r
-
-        rows = list(by_name.values())
+        rows = live_rows + [r for r in archive_rows
+                            if r.get('case_name') not in
+                            {lr['case_name'] for lr in live_rows}]
         registry_msg = write_registry(rows, args.registry)
     else:
         registry_msg = None
