@@ -88,6 +88,8 @@ REGISTRY_FIELDS = [f for _, fields in _REGISTRY_GROUPS for f in fields]
 
 
 def find_case_dirs(path):
+    if not os.path.isdir(path): 
+        return []
     marker = os.path.join('SourceMods', 'src.share', 'exoplanet_mod.F90')
     if os.path.exists(os.path.join(path, marker)):
         return [path]
