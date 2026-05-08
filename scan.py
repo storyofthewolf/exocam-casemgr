@@ -308,7 +308,7 @@ def write_registry(rows, path):
     with open(path, 'w') as f:
         f.write(_REGISTRY_HEADER)
         f.write(body)
-    print(f"Registry written: {path}  ({len(rows)} cases)")
+    return f"Registry written: {path}  ({len(rows)} cases)"
 
 
 def _load_caseroot(config_registry_path):
@@ -475,7 +475,9 @@ def main():
             by_name[r['case_name']] = r
 
         rows = list(by_name.values())
-        write_registry(rows, args.registry)
+        registry_msg = write_registry(rows, args.registry)
+    else:
+        registry_msg = None
 
     # print summary table
     if live_rows or archive_rows:
@@ -490,6 +492,12 @@ def main():
             warn_s = '; '.join(r['warnings']) if r.get('warnings') else ''
             print(f"{r['case_name']:<45} {str(r.get('config_type','')):<16} "
                   f"{pstd_s:>8} {str(r.get('nlev','?')):>5}  {warn_s[:40]}")
+        print('-' * 90)
+
+    if registry_msg:
+        print(registry_msg)
+    else:
+        print("Registry not updated, use --update to repopulate registry.")
 
 
 if __name__ == '__main__':
