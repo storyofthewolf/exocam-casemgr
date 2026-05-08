@@ -12,6 +12,7 @@ Usage:
   python diff.py case1 --case2 case2 --full physpkg.F90
   python diff.py my_case --config-registry /path/to/config_registry.yaml
   python diff.py my_case --registry active.yaml
+  python diff.py my_case --verbose
 """
 
 import argparse
@@ -152,7 +153,9 @@ def cmd_summary(args, paths):
                 in1, in2 = fname in f1, fname in f2
                 if in1 and in2:
                     if open(f1[fname],'rb').read() == open(f2[fname],'rb').read():
-                        print(f"  {'IDENTICAL':<14}  {fname}"); n_eq += 1
+                        if args.verbose:
+                            print(f"  {'IDENTICAL':<14}  {fname}")
+                        n_eq += 1
                     else:
                         ad, rm = diff_counts(f1[fname], f2[fname])
                         print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
@@ -199,14 +202,18 @@ def cmd_summary(args, paths):
                 exo_path = find_exocam_counterpart(fname, comp, exocam_sm)
                 if exo_path is not None:
                     if open(abs_path,'rb').read() == open(exo_path,'rb').read():
-                        print(f"  {'IDENTICAL':<14}  {fname}"); n_eq += 1
+                        if args.verbose:
+                            print(f"  {'IDENTICAL':<14}  {fname}")
+                        n_eq += 1
                     else:
                         ad, rm = diff_counts(abs_path, exo_path)
                         print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
                 elif fname in exort_files:
                     rt_path = exort_files[fname]
                     if open(abs_path,'rb').read() == open(rt_path,'rb').read():
-                        print(f"  {'RT IDENTICAL':<14}  {fname}"); n_rt_eq += 1
+                        if args.verbose:
+                            print(f"  {'RT IDENTICAL':<14}  {fname}")
+                        n_rt_eq += 1
                     else:
                         ad, rm = diff_counts(abs_path, rt_path)
                         print(f"  {'RT MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_rt_mod += 1
@@ -299,6 +306,9 @@ def build_parser():
                         help='Path to cases registry yaml (e.g. active.yaml or archived.yaml). '
                              'Overrides paths.cases_yaml from config_registry.yaml; '
                              'falls back to active.yaml next to this script.')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Show all files including IDENTICAL matches '
+                             '(default: show only differences)')
     return parser
 
 
