@@ -5,15 +5,18 @@ query.py — search cases.yaml and generate experiment matrices
 SUBCOMMANDS
 -----------
   search      List cases matching filter criteria (name, config_type, exort_pkg, nlev)
-  show        Print all parameters for a single case by exact name
+  show        Print all parameters for one or more cases by exact name or prefix
   export      Write an experiment_matrix.yaml from one or more registry cases
 
 Examples
 --------
+  python query.py search                                    # all cases
+  python query.py search ExoCAM_thai_ben1_L51_n68equiv     # exact name
+  python query.py search --prefix ExoCAM_thai              # prefix filter
   python query.py search --config-type cam_land_fv
   python query.py search --exort-pkg n68equiv --nlev 51
-  python query.py search --name thai              # substring match
-  python query.py show ExoCAM_thai_ben1_L51_n68equiv
+  python query.py show ExoCAM_thai_ben1_L51_n68equiv       # exact name
+  python query.py show --prefix ExoCAM_thai                # prefix filter
   python query.py export ExoCAM_thai_ben1_L51_n68equiv -o my_run.yaml
   python query.py export case_a case_b -o sweep.yaml
 """
@@ -62,8 +65,11 @@ def load_registry_raw(path):
 # Search helpers
 # ---------------------------------------------------------------------------
 
-def _match(row, name, config_type, exort_pkg, nlev):
-    if name and name.lower() not in (row.get('case_name') or '').lower():
+def _match(row, cases, prefix, config_type, exort_pkg, nlev):
+    case_name = row.get('case_name') or ''
+    if cases and case_name not in cases:
+        return False
+    if prefix and not case_name.lower().startswith(prefix.lower()):
         return False
     if config_type and row.get('config_type') != config_type:
         return False
@@ -74,13 +80,25 @@ def _match(row, name, config_type, exort_pkg, nlev):
     return True
 
 
+def _entry_match(entry, cases, prefix):
+    """Match a raw grouped registry entry against a cases set or prefix."""
+    case_name = (entry.get('meta') or {}).get('case_name') or ''
+    if cases and case_name not in cases:
+        return False
+    if prefix and not case_name.lower().startswith(prefix.lower()):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: search
 # ---------------------------------------------------------------------------
 
 def cmd_search(args, rows):
+    if args.cases and args.prefix:
+        sys.exit("ERROR: cannot combine explicit case names with --prefix")
     matches = [r for r in rows
-               if _match(r, args.name, args.config_type, args.exort_pkg, args.nlev)]
+               if _match(r, set(args.cases), args.prefix, args.config_type, args.exort_pkg, args.nlev)]
     if not matches:
         print("No cases found matching criteria.")
         return
@@ -108,12 +126,21 @@ def cmd_search(args, rows):
 # ---------------------------------------------------------------------------
 
 def cmd_show(args, raw_entries):
-    target = args.case_name
-    matches = [e for e in raw_entries if (e.get('meta') or {}).get('case_name') == target]
+    if args.cases and args.prefix:
+        sys.exit("ERROR: cannot combine explicit case names with --prefix")
+    cases_set = set(args.cases)
+    prefix = args.prefix
+    matches = [
+        e for e in raw_entries
+        if _entry_match(e, cases_set, prefix)
+    ]
     if not matches:
-        sys.exit(f"ERROR: case '{target}' not found in registry.")
-    print(yaml.dump({'cases': [matches[0]]}, Dumper=_NoAliasDumper,
-                    default_flow_style=False, sort_keys=False).rstrip())
+        sys.exit("ERROR: no cases found matching criteria.")
+    for i, entry in enumerate(matches):
+        if i > 0:
+            print('---')
+        print(yaml.dump({'cases': [entry]}, Dumper=_NoAliasDumper,
+                        default_flow_style=False, sort_keys=False).rstrip())
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +411,10 @@ def build_parser():
         help='List cases matching filter criteria',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_search.add_argument('--name', metavar='STR',
-                          help='Substring match on case name (case-insensitive)')
+    p_search.add_argument('cases', nargs='*', metavar='CASE_NAME',
+                          help='Exact case name(s) to match (optional)')
+    p_search.add_argument('--prefix', metavar='STR',
+                          help='Filter by case name prefix (case-insensitive)')
     p_search.add_argument('--config-type', dest='config_type', metavar='TYPE',
                           help='Exact match on config_type (e.g. cam_land_fv)')
     p_search.add_argument('--exort-pkg', dest='exort_pkg', metavar='PKG',
@@ -399,8 +428,11 @@ def build_parser():
         help='Print all parameters for one case by exact name',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_show.add_argument('case_name', metavar='CASE_NAME',
-                        help='Exact case name as stored in cases.yaml')
+    p_show.add_argument('cases', nargs='*', metavar='CASE_NAME',
+                        help='Exact case name(s) as stored in cases.yaml')
+    p_show.add_argument('--prefix', metavar='STR',
+                        help='Filter by case name prefix (case-insensitive; '
+                             'cannot combine with explicit case names)')
 
     # ---- export ----
     p_export = sub.add_parser(
