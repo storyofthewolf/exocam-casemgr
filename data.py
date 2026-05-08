@@ -930,7 +930,7 @@ def cmd_retire_case(args, paths):
     --purge is mutually exclusive with all three.
 
     In all modes, case.yaml is written to long_term/<case>/case.yaml. If the
-    case is found in --registry (default: cases.yaml), the full registry entry
+    case is found in --registry (default: active.yaml), the full registry entry
     is written; otherwise a minimal stub (case_name, retired_date) is written
     and a warning is printed.
 

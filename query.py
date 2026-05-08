@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-query.py — search cases.yaml and generate experiment matrices
+query.py — search active.yaml and generate experiment matrices
 
 SUBCOMMANDS
 -----------
@@ -33,7 +33,7 @@ _REGISTRY_GROUPS = [
     'meta', 'atmosphere', 'geophysical', 'model_options', 'special', 'diagnostics',
 ]
 
-DEFAULT_REGISTRY = 'cases.yaml'
+DEFAULT_REGISTRY = 'active.yaml'
 DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'config_registry.yaml')
 
@@ -42,7 +42,7 @@ DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # ---------------------------------------------------------------------------
 
 def load_registry(path):
-    """Load cases.yaml and return list of flat dicts (one per case)."""
+    """Load active.yaml and return list of flat dicts (one per case)."""
     with open(path) as f:
         data = yaml.safe_load(f) or {}
     rows = []
@@ -55,7 +55,7 @@ def load_registry(path):
 
 
 def load_registry_raw(path):
-    """Load cases.yaml and return list of raw grouped entry dicts (preserves group structure)."""
+    """Load active.yaml and return list of raw grouped entry dicts (preserves group structure)."""
     with open(path) as f:
         data = yaml.safe_load(f) or {}
     return data.get('cases', [])
@@ -401,7 +401,7 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--registry', default=DEFAULT_REGISTRY, metavar='PATH',
-                        help=f'Path to cases.yaml (default: {DEFAULT_REGISTRY})')
+                        help=f'Path to active.yaml (default: {DEFAULT_REGISTRY})')
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND')
 
@@ -429,7 +429,7 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_show.add_argument('cases', nargs='*', metavar='CASE_NAME',
-                        help='Exact case name(s) as stored in cases.yaml')
+                        help='Exact case name(s) as stored in active.yaml')
     p_show.add_argument('--prefix', metavar='STR',
                         help='Filter by case name prefix (case-insensitive; '
                              'cannot combine with explicit case names)')

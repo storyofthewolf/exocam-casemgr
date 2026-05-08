@@ -24,7 +24,7 @@ from collections import Counter
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
 DEFAULT_CASES_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                  'cases.yaml')
+                                  'active.yaml')
 
 COMPONENTS = ['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']
 SKIP_FILES = {'exoplanet_mod.F90'}
@@ -47,7 +47,7 @@ def load_paths(config_registry):
 
 
 def load_case_meta(case, cases_yaml_path):
-    """Return {'config_type': ..., 'exort_pkg': ...} for case from cases.yaml."""
+    """Return {'config_type': ..., 'exort_pkg': ...} for case from active.yaml."""
     if not os.path.exists(cases_yaml_path):
         sys.exit(f"ERROR: {cases_yaml_path} not found.\n"
                  f"Run 'python scan.py' to generate it before using diff.py.")
@@ -82,7 +82,7 @@ def _load_exort_fileset(paths, exort_pkg):
         print("WARNING: paths.exort_root not set in config_registry.yaml; RT file detection disabled.")
         return {}
     if not exort_pkg:
-        print("WARNING: exort_pkg not found in cases.yaml for this case; RT file detection disabled.")
+        print("WARNING: exort_pkg not found in active.yaml for this case; RT file detection disabled.")
         return {}
     fileset = build_exort_fileset(exort_root, exort_pkg)
     if not fileset:
@@ -298,7 +298,7 @@ def build_parser():
     parser.add_argument('--registry', default=None, metavar='PATH',
                         help='Path to cases registry yaml (e.g. active.yaml or archived.yaml). '
                              'Overrides paths.cases_yaml from config_registry.yaml; '
-                             'falls back to cases.yaml next to this script.')
+                             'falls back to active.yaml next to this script.')
     return parser
 
 
