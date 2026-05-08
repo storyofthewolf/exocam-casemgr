@@ -61,6 +61,9 @@ import subprocess
 import sys
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from scan import inspect_case, _rows_to_ordered, find_case_dirs
+
 # ---------------------------------------------------------------------------
 # Paths and config
 # ---------------------------------------------------------------------------
@@ -805,26 +808,48 @@ def _load_registry_entry(case, registry_path):
     return None
 
 
-def _write_case_yaml(case, lt_case_dir, registry_path):
-    """Write case.yaml into lt_case_dir.
+def _scan_source(case, casedir_path, registry_path):
+    """Determine which tier will be used to source case.yaml content (no writes).
 
-    Uses the full registry entry when available; falls back to a minimal stub.
-    Returns True if the full entry was found, False if stub was written.
+    Returns 'live', 'registry', or 'stub'.
     """
-    import datetime as _dt
+    if casedir_path and find_case_dirs(casedir_path):
+        return 'live'
+    if _load_registry_entry(case, registry_path) is not None:
+        return 'registry'
+    return 'stub'
+
+
+def _write_case_yaml(case, lt_case_dir, casedir_path, registry_path):
+    """Write case.yaml into lt_case_dir using a three-tier fallback.
+
+    Tier 1 (live): casedir_path exists and is a valid ExoCAM case — inspect_case() is called.
+    Tier 2 (registry): fall back to the entry in active.yaml via _load_registry_entry().
+    Tier 3 (stub): write minimal {case_name, retired_date}.
+
+    Returns 'live', 'registry', or 'stub'.
+    """
     os.makedirs(lt_case_dir, exist_ok=True)
     dst = os.path.join(lt_case_dir, 'case.yaml')
+
+    if casedir_path and find_case_dirs(casedir_path):
+        row = inspect_case(casedir_path)
+        doc = _rows_to_ordered([row])
+        with open(dst, 'w') as f:
+            yaml.dump(doc, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        return 'live'
+
     entry = _load_registry_entry(case, registry_path)
     if entry is not None:
         with open(dst, 'w') as f:
             yaml.dump({'cases': [entry]}, f,
                       default_flow_style=False, allow_unicode=True, sort_keys=False)
-        return True
-    else:
-        stub = {'case_name': case, 'retired_date': _dt.date.today().isoformat()}
-        with open(dst, 'w') as f:
-            yaml.dump(stub, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        return False
+        return 'registry'
+
+    stub = {'case_name': case, 'retired_date': datetime.date.today().isoformat()}
+    with open(dst, 'w') as f:
+        yaml.dump(stub, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    return 'stub'
 
 
 def _copy_case_config(casedir_path, lt_case_dir):
@@ -944,7 +969,7 @@ def cmd_retire_case(args, paths):
           Retire all cases whose name starts with hazyCHAMPS_case23.
           Single yes/no confirmation shown for the full matched batch.
 
-    WARNING: deletions are permanent. Ensure cases.yaml is current before running.
+    WARNING: deletions are permanent.
     """
     caseroot  = paths.get('caseroot', '')
     rundir    = paths.get('rundir',   '')
@@ -1039,12 +1064,11 @@ def cmd_retire_case(args, paths):
 
         # --- build plan ---
 
-        # case.yaml
-        entry_found = _load_registry_entry(case, registry_path) is not None
-        if not entry_found:
-            print(f"  WARNING: '{case}' not found in registry {registry_path}.")
-            print(f"           A minimal case.yaml stub will be written. "
-                  f"Run scan.py first to capture full metadata.")
+        # case.yaml source tier
+        yaml_source = _scan_source(case, casedir_path, registry_path)
+        if yaml_source == 'stub':
+            print(f"  WARNING: '{case}' casedir not found and not in registry {registry_path}.")
+            print(f"           A minimal case.yaml stub will be written.")
 
         # config copy (--keep-config only)
         config_actions = []
@@ -1087,9 +1111,14 @@ def cmd_retire_case(args, paths):
                     ))
 
         # --- print plan ---
+        yaml_source_label = {
+            'live':     'live scan',
+            'registry': 'registry (active.yaml)',
+            'stub':     'minimal stub',
+        }[yaml_source]
         print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
         print(f"  COPY to long-term: {lt_case_dir}/case.yaml "
-              f"({'full registry entry' if entry_found else 'minimal stub'})")
+              f"(source: {yaml_source_label})")
         if config_actions:
             print(f"  COPY to long-term: SourceMods/, namelists/, env/ "
                   f"({len(config_actions)} item(s))")
@@ -1122,8 +1151,14 @@ def cmd_retire_case(args, paths):
                 continue
 
         # Write case.yaml
-        _write_case_yaml(case, lt_case_dir, registry_path)
+        actual_source = _write_case_yaml(case, lt_case_dir, casedir_path, registry_path)
+        actual_source_label = {
+            'live':     'live scan',
+            'registry': 'registry (active.yaml)',
+            'stub':     'minimal stub',
+        }[actual_source]
         print(f"  Written: {lt_case_dir}/case.yaml")
+        print(f"  case.yaml written from: {actual_source_label}")
 
         # Copy config files (unless --purge)
         if config_actions:
