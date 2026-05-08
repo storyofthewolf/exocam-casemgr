@@ -1094,6 +1094,9 @@ def cmd_retire_case(args, paths):
                         src = os.path.join(info['dir'], f)
                         dst = os.path.join(lt_case_dir, model, 'hist', f)
                         preserve_hist.append((src, dst))
+            if not per_model:
+                hist_dir = os.path.join(archive_path)
+                print(f"  WARNING: --keep-years specified but no history files found in {hist_dir}")
 
         # restart preservation
         preserve_restart = []  # (src_dir, dst_dir)
