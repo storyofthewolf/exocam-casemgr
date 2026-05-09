@@ -160,9 +160,9 @@ python query.py search --prefix ExoCAM_thai
 python query.py search --config-type cam_land_fv --nlev 51
 python query.py search --exort-pkg n68equiv
 
-# Show all parameters for one or more cases
+# Show all parameters for one or more cases (exact names required)
 python query.py show ExoCAM_thai_ben1_L51_n68equiv
-python query.py show --prefix ExoCAM_thai
+python query.py show case_a case_b
 
 # Export a full matrix from one or more registry cases
 python query.py export case_a case_b -o sweep.yaml \
