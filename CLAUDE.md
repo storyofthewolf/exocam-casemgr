@@ -57,9 +57,9 @@ python query.py search --prefix ExoCAM_thai
 python query.py search --config-type cam_land_fv --nlev 51
 python query.py search --exort-pkg n68equiv
 
-# Print all parameters for one or more cases
+# Print all parameters for one or more cases (exact names required)
 python query.py show ExoCAM_thai_ben1_L51_n68equiv
-python query.py show --prefix ExoCAM_thai
+python query.py show case_a case_b
 
 # Export one or more cases to a new experiment matrix
 # (required run fields missing from config_registry.yaml defaults
@@ -215,7 +215,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `load_registry(path)` — loads `active.yaml` (or `archived.yaml`) into flat dicts (one per case) for search/export.
 - `load_registry_raw(path)` — loads the registry preserving grouped structure; used by `show` to reproduce the exact registry format.
 - `cmd_search` — tabular listing filtered by optional positional `cases` (exact names), `--prefix` (case-insensitive startswith), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). `cases` and `--prefix` are mutually exclusive. Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE. A CONFIG column is appended (showing `yes` or `-`) when at least one result row contains `config_saved` — present when searching `archived.yaml`, absent when searching `active.yaml`.
-- `cmd_show` — dumps full grouped YAML for one or more matching cases. Accepts positional `cases` (exact names) or `--prefix`; mutually exclusive. Multiple matches are separated by `---`.
+- `cmd_show` — dumps full grouped YAML for one or more cases by exact name (one or more required). If any name is not found in the registry, prints `ERROR: case '<name>' not found in registry.` for each missing name and exits. Multiple results are separated by `---`.
 - `cmd_export` — generates a ready-to-use `experiment_matrix.yaml` from one or more registry cases. For multiple cases, shared fields are factored into `base` automatically. `mach` and run defaults are populated from `config_registry.yaml` unless overridden via CLI flags. Required fields left blank are written as empty strings with a prominent `# FIXME` warning header prepended to the file.
 - `_row_to_base(row, bare=False)` — converts a flat registry row to a matrix base dict. `bare=True` strips atmosphere, geophysical, model_options, and special fields; used for clone exports where the clone source supplies those values. Bare mode is the default when `--clone` is set; `--full` overrides to include all scientific parameters.
 - `_BARE_STRIP_KEYS` — set of fields omitted from `base` in bare mode.

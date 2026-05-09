@@ -136,16 +136,14 @@ def cmd_search(args, rows):
 # ---------------------------------------------------------------------------
 
 def cmd_show(args, raw_entries):
-    if args.cases and args.prefix:
-        sys.exit("ERROR: cannot combine explicit case names with --prefix")
+    known = {(e.get('meta') or {}).get('case_name') for e in raw_entries}
+    errors = [n for n in args.cases if n not in known]
+    for name in errors:
+        print(f"ERROR: case '{name}' not found in registry.")
+    if errors:
+        sys.exit(1)
     cases_set = set(args.cases)
-    prefix = args.prefix
-    matches = [
-        e for e in raw_entries
-        if _entry_match(e, cases_set, prefix)
-    ]
-    if not matches:
-        sys.exit("ERROR: no cases found matching criteria.")
+    matches = [e for e in raw_entries if _entry_match(e, cases_set, None)]
     for i, entry in enumerate(matches):
         if i > 0:
             print('---')
@@ -444,11 +442,10 @@ def build_parser():
         help='Print all parameters for one case by exact name',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_show.add_argument('cases', nargs='*', metavar='CASE_NAME',
-                        help='Exact case name(s) as stored in active.yaml')
-    p_show.add_argument('--prefix', metavar='STR',
-                        help='Filter by case name prefix (case-insensitive; '
-                             'cannot combine with explicit case names)')
+    p_show.add_argument('cases', nargs='+', metavar='CASE_NAME',
+                        help="Exact case name(s) as stored in the registry. "
+                             "Use 'query.py search [--prefix STR] [--nlev N] "
+                             "[--config-type TYPE] [--exort-pkg PKG]' to find case names.")
 
     # ---- export ----
     p_export = sub.add_parser(
