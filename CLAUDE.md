@@ -204,7 +204,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `_rows_to_ordered(rows)` — converts flat row dicts to the grouped YAML structure defined by `_REGISTRY_GROUPS`.
 - `write_registry(rows, path)` — writes grouped YAML via `_rows_to_ordered`, prepending a `# Auto-generated cache` comment header.
 - `load_registry(path)` — reads grouped YAML and flattens groups back to plain dicts for internal use.
-- `scan_archive_entries(long_term_path)` — walks `long_term/` for subdirectories containing `case.yaml`; reads each as a pre-captured registry entry without touching any Fortran or namelist files. Returns flat row dicts. Handles both full registry-format entries (`{'cases': [...]}`) and minimal stubs (`{'case_name': ..., 'retired_date': ...}`).
+- `scan_archive_entries(long_term_path)` — walks `long_term/` for subdirectories containing `case.yaml`; reads each as a pre-captured registry entry without touching any Fortran or namelist files. Returns flat row dicts. Handles both full registry-format entries (`{'cases': [...]}`) and minimal stubs (`{'case_name': ..., 'retired_date': ...}`). Sets `config_saved` (bool) on every row by checking whether `SourceMods/` exists in the case's long-term directory.
 - `--archive` flag — when passed, calls `scan_archive_entries` using `long_term` from `config_registry.yaml`. May be used alone (no live case paths) or combined with live paths and `--update`; live inspection always takes precedence over archived entries on name collision; archived entries take precedence over existing registry entries.
 - `_REGISTRY_GROUPS` — list of `(group_name, [field_names])` tuples defining group names and field ordering for YAML output.
 - `SOLAR_NW_MAP` — expected `nw` dimension per `exort_pkg`: `{n68equiv: 68, n84equiv: 84, n28archean: 28, n42h2o: 42}`.
@@ -214,14 +214,14 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 
 - `load_registry(path)` — loads `active.yaml` (or `archived.yaml`) into flat dicts (one per case) for search/export.
 - `load_registry_raw(path)` — loads the registry preserving grouped structure; used by `show` to reproduce the exact registry format.
-- `cmd_search` — tabular listing filtered by optional positional `cases` (exact names), `--prefix` (case-insensitive startswith), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). `cases` and `--prefix` are mutually exclusive. Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE.
+- `cmd_search` — tabular listing filtered by optional positional `cases` (exact names), `--prefix` (case-insensitive startswith), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). `cases` and `--prefix` are mutually exclusive. Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE. A CONFIG column is appended (showing `yes` or `-`) when at least one result row contains `config_saved` — present when searching `archived.yaml`, absent when searching `active.yaml`.
 - `cmd_show` — dumps full grouped YAML for one or more matching cases. Accepts positional `cases` (exact names) or `--prefix`; mutually exclusive. Multiple matches are separated by `---`.
 - `cmd_export` — generates a ready-to-use `experiment_matrix.yaml` from one or more registry cases. For multiple cases, shared fields are factored into `base` automatically. `mach` and run defaults are populated from `config_registry.yaml` unless overridden via CLI flags. Required fields left blank are written as empty strings with a prominent `# FIXME` warning header prepended to the file.
 - `_row_to_base(row, bare=False)` — converts a flat registry row to a matrix base dict. `bare=True` strips atmosphere, geophysical, model_options, and special fields; used for clone exports where the clone source supplies those values. Bare mode is the default when `--clone` is set; `--full` overrides to include all scientific parameters.
 - `_BARE_STRIP_KEYS` — set of fields omitted from `base` in bare mode.
 - Clone export behavior: `--clone` sets `bare=True` by default (minimal base, case stubs ready for per-case deltas). `--full` overrides to include all scientific parameters. Without `--clone`, full output is always produced.
 - Key renames from registry to matrix: `clm_finidat` → `finidat`, `clm_fsurdat` → `fsurdat`, `ncdata` → `ncdata_override`.
-- Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`.
+- Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`, `config_saved`.
 - The exported matrix always includes a `meta` block (`description`, `author`, `created`, `source_registry`) that `query.py export` auto-populates; `description` and `author` are written as empty strings for the user to fill in.
 
 ### `manage.py` — disk management tool

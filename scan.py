@@ -79,7 +79,7 @@ _REGISTRY_GROUPS = [
         'carma_params', 'volc_params',
     ]),
     ('diagnostics', [
-        'warnings',
+        'warnings', 'config_saved',
     ]),
 ]
 
@@ -350,6 +350,8 @@ def scan_archive_entries(long_term_path):
         except (OSError, yaml.YAMLError) as e:
             print(f"WARNING: could not read {case_yaml}: {e}", file=sys.stderr)
             continue
+        config_saved = os.path.isdir(os.path.join(long_term_path, name, 'SourceMods'))
+
         # Full registry entry: {'cases': [entry]} where entry has group sub-dicts
         if 'cases' in data:
             for entry in data['cases']:
@@ -358,9 +360,11 @@ def scan_archive_entries(long_term_path):
                     if isinstance(val, dict):
                         row.update(val)
                 if row:
+                    row['config_saved'] = config_saved
                     rows.append(row)
         # Minimal stub: flat dict with case_name etc.
         elif 'case_name' in data:
+            data['config_saved'] = config_saved
             rows.append(data)
         else:
             print(f"WARNING: unrecognised case.yaml format in {case_yaml}", file=sys.stderr)

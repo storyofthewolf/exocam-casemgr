@@ -109,16 +109,23 @@ def cmd_search(args, rows):
     ct_w     = max(len(r.get('config_type', '') or '') for r in matches)
     exort_w  = max(len(r.get('exort_pkg', '') or '') for r in matches)
 
+    show_config_saved = any('config_saved' in r for r in matches)
+
     header = (f"{'CASE':<{name_w}}  {'CONFIG_TYPE':<{ct_w}}  "
-              f"{'EXORT_PKG':<{exort_w}}  {'NLEV':>4}  {'INSPECT_DATE'}")
+              f"{'EXORT_PKG':<{exort_w}}  {'NLEV':>4}  {'INSPECT_DATE'}"
+              + (f"  {'CONFIG'}" if show_config_saved else ""))
     print(header)
     print('-' * len(header))
     for r in matches:
+        config_col = ''
+        if show_config_saved:
+            config_col = f"  {'yes' if r.get('config_saved') else '-'}"
         print(f"{r.get('case_name',''):<{name_w}}  "
               f"{r.get('config_type',''):<{ct_w}}  "
               f"{r.get('exort_pkg',''):<{exort_w}}  "
               f"{str(r.get('nlev','') or ''):>4}  "
-              f"{r.get('inspect_date','')}")
+              f"{r.get('inspect_date','')}"
+              f"{config_col}")
     print(f"\n{len(matches)} case(s) found.")
 
 
@@ -193,6 +200,7 @@ _SKIP_KEYS = {
     'exo_sday_expr',
     'exo_pstd_computed_bar',
     'warnings',
+    'config_saved',
 }
 
 # Registry key -> matrix key renames
