@@ -1017,44 +1017,12 @@ def cmd_retire_case(args, paths):
             print("No cases found on disk.")
             return
 
-    # In prefix mode, print all plans then do a single batch confirmation.
-    # batch_confirmed starts False; set to True after the user says yes (or
-    # when not in prefix mode, where per-case prompts are used instead).
-    batch_confirmed = False
+    # In prefix mode, build all plans first, print them all, then confirm once.
+    # In non-prefix mode, confirm per-case after printing each plan.
+    # plans[case] caches the built plan so the execute pass doesn't rebuild.
+    plans = {}
 
-    if prefix_filter and args.execute:
-        # Pass 1: print all plans so the user sees the full batch before confirming.
-        combined_bytes = 0
-        for case in cases:
-            print(f"\n{'='*60}")
-            print(f"  CASE: {case}")
-            print(f"{'='*60}")
-            casedir_path = os.path.join(caseroot, case) if caseroot else ''
-            rundir_path  = os.path.join(rundir,   case) if rundir   else ''
-            archive_path = os.path.join(archive,  case) if archive  else ''
-            sz = case_sizes(case, paths)
-            total_on_disk = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
-            combined_bytes += total_on_disk
-            print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
-            print(f"  DELETE from cesm_scratch:")
-            for label, p in [('casedir', casedir_path),
-                             ('rundir',  rundir_path),
-                             ('archive', archive_path)]:
-                if not p:
-                    continue
-                if os.path.exists(p):
-                    print(f"    {p}")
-                else:
-                    print(f"    {p}  (not found on disk)")
-        print(f"\n{'='*60}")
-        print(f"  BATCH: {len(cases)} case(s) matched prefix '{prefix_filter}'")
-        print(f"  Combined footprint: {fmt_size(combined_bytes)}")
-        answer = input(f"\n  Confirm retire-case for ALL {len(cases)} matched case(s)? [yes/no]: ").strip().lower()
-        if answer != 'yes':
-            print("  Aborted.")
-            return
-        batch_confirmed = True
-
+    # Pass 1: build and print all plans.
     for case in cases:
         print(f"\n{'='*60}")
         print(f"  CASE: {case}")
@@ -1162,7 +1130,47 @@ def cmd_retire_case(args, paths):
             print(f"\n  [preview] add --execute to perform these actions")
             continue
 
-        if not batch_confirmed:
+        plans[case] = dict(
+            casedir_path=casedir_path,
+            rundir_path=rundir_path,
+            archive_path=archive_path,
+            lt_case_dir=lt_case_dir,
+            total_on_disk=total_on_disk,
+            yaml_source=yaml_source,
+            config_actions=config_actions,
+            preserve_hist=preserve_hist,
+            preserve_restart=preserve_restart,
+            preserve_avg=preserve_avg,
+        )
+
+    if not args.execute:
+        return
+
+    # In prefix mode, show batch summary and confirm once for all cases.
+    if prefix_filter:
+        combined_bytes = sum(p['total_on_disk'] for p in plans.values())
+        print(f"\n{'='*60}")
+        print(f"  BATCH: {len(plans)} case(s) matched prefix '{prefix_filter}'")
+        print(f"  Combined footprint: {fmt_size(combined_bytes)}")
+        answer = input(f"\n  Confirm retire-case for ALL {len(plans)} matched case(s)? [yes/no]: ").strip().lower()
+        if answer != 'yes':
+            print("  Aborted.")
+            return
+
+    # Pass 2: execute using cached plans.
+    for case in list(plans.keys()):
+        p = plans[case]
+        casedir_path   = p['casedir_path']
+        rundir_path    = p['rundir_path']
+        archive_path   = p['archive_path']
+        lt_case_dir    = p['lt_case_dir']
+        yaml_source    = p['yaml_source']
+        config_actions = p['config_actions']
+        preserve_hist  = p['preserve_hist']
+        preserve_restart = p['preserve_restart']
+        preserve_avg   = p['preserve_avg']
+
+        if not prefix_filter:
             answer = input(f"\n  Confirm retire-case for '{case}'? [yes/no]: ").strip().lower()
             if answer != 'yes':
                 print(f"  Skipped.")
@@ -1207,11 +1215,11 @@ def cmd_retire_case(args, paths):
         # Delete from cesm_scratch
         deleted_bytes = 0
         print(f"  Deleting from cesm_scratch...")
-        for p in [casedir_path, rundir_path, archive_path]:
-            if p and os.path.exists(p):
-                deleted_bytes += dir_size_bytes(p)
-                shutil.rmtree(p)
-                print(f"    deleted {p}")
+        for p_path in [casedir_path, rundir_path, archive_path]:
+            if p_path and os.path.exists(p_path):
+                deleted_bytes += dir_size_bytes(p_path)
+                shutil.rmtree(p_path)
+                print(f"    deleted {p_path}")
 
         # Tally what landed in long-term
         kept_bytes = dir_size_bytes(lt_case_dir)
