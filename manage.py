@@ -1304,6 +1304,13 @@ def cmd_avg_hist(args, paths):
                     span = "years unknown"
                 avg_note = ", avg file present" if any('avg' in f for f in files) else ""
                 print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
+            sets = restart_sets(case, paths)
+            rest_count = len(sets)
+            if rest_count:
+                rest_total = sum(dir_size_bytes(s[1]) for s in sets)
+                print(f"  rest:      {rest_count:>4} folders present  ({fmt_size(rest_total)})")
+            else:
+                print(f"  rest:      {0:>4} folders present")
         return
 
     # --- --last N mode ---
