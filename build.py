@@ -664,14 +664,29 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
 
 def main():
     parser = argparse.ArgumentParser(description='Generate ExoCAM build shell scripts from experiment matrix')
-    parser.add_argument('matrix', help='experiment_matrix.yaml')
+    parser.add_argument('matrix', nargs='?', help='experiment_matrix.yaml')
     parser.add_argument('--outdir', default='build_scripts', help='Output directory for scripts (default: build_scripts/)')
     parser.add_argument('--execute', action='store_true',
                         help='Execute generated scripts via bash (default is dry-run)')
+    parser.add_argument('--list', action='store_true',
+                        help='List available blueprints and exit')
     args = parser.parse_args()
 
+    blueprints_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'blueprints')
+
+    if args.list:
+        yamls = sorted(f for f in os.listdir(blueprints_dir)
+                       if f.endswith('.yaml')) if os.path.isdir(blueprints_dir) else []
+        if yamls:
+            print('\n'.join(yamls))
+        else:
+            print(f"No .yaml files found in {blueprints_dir}")
+        sys.exit(0)
+
+    if not args.matrix:
+        parser.error("the following arguments are required: matrix")
+
     if not os.path.exists(args.matrix):
-        blueprints_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'blueprints')
         candidate = os.path.join(blueprints_dir, args.matrix)
         if os.path.exists(candidate):
             args.matrix = candidate
