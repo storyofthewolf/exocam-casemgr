@@ -19,6 +19,7 @@ Examples
   python query.py show --prefix ExoCAM_thai                # prefix filter
   python query.py export ExoCAM_thai_ben1_L51_n68equiv -o my_run.yaml
   python query.py export case_a case_b -o sweep.yaml
+  python query.py export my_base_case -o clone.yaml --clone
 """
 
 import argparse
@@ -179,19 +180,6 @@ _BASE_FIELD_ORDER = [
     'carma_params', 'volc_params',
 ]
 
-# Fields stripped from base in --bare mode (atmosphere, geophysical, model options, special)
-_BARE_STRIP_KEYS = {
-    'exo_co2bar', 'exo_ch4bar', 'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar',
-    'exo_h2bar', 'exo_o2bar', 'exo_scon', 'exo_solar_file',
-    'exo_surface_gravity', 'exo_planet_radius',
-    'exo_ndays', 'exo_porb', 'exo_sday', 'exo_eccen', 'exo_obliq',
-    'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
-    'do_exo_gw', 'do_exo_simplevolc', 'exo_convect_plim', 'exo_rad_step',
-    'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
-    'finidat', 'fsurdat', 'som_pop_frc_file', 'ncdata_override',
-    'carma_params', 'volc_params',
-}
-
 # Registry keys not forwarded to the matrix
 _SKIP_KEYS = {
     'case_name', 'casedir', 'inspect_date',
@@ -213,29 +201,22 @@ _KEY_RENAMES = {
 _KEY_RENAMES_REV = {v: k for k, v in _KEY_RENAMES.items()}
 
 
-def _row_to_base(row, bare=False):
-    """Convert a flat registry row to a matrix base dict.
-
-    bare=True strips atmosphere, geophysical, model_options, and special fields,
-    leaving only CESM config and run/machine fields.
-    """
-    skip = _SKIP_KEYS | (_BARE_STRIP_KEYS if bare else set())
+def _row_to_base(row):
+    """Convert a flat registry row to a matrix base dict."""
     base = {}
     # Build in _BASE_FIELD_ORDER first (controls key order in output)
     seen = set()
     for field in _BASE_FIELD_ORDER:
-        if bare and field in _BARE_STRIP_KEYS:
-            continue
         reg_key = _KEY_RENAMES_REV.get(field, field)
-        if reg_key in row and row[reg_key] is not None and reg_key not in skip:
+        if reg_key in row and row[reg_key] is not None and reg_key not in _SKIP_KEYS:
             base[field] = row[reg_key]
             seen.add(reg_key)
-        elif field in row and row[field] is not None and field not in skip:
+        elif field in row and row[field] is not None and field not in _SKIP_KEYS:
             base[field] = row[field]
             seen.add(field)
     # Append any remaining keys not in the ordered list
     for k, v in row.items():
-        if k in skip or k in seen or v is None:
+        if k in _SKIP_KEYS or k in seen or v is None:
             continue
         out_key = _KEY_RENAMES.get(k, k)
         base[out_key] = v
@@ -266,21 +247,31 @@ def cmd_export(args, rows, config_registry_path):
             sys.exit(f"ERROR: case '{name}' not found in registry.")
         matched[name] = hits[0]
 
-    # bare mode: default True when --clone is set, False otherwise; --full overrides
-    clone = getattr(args, 'clone', None)
-    full  = getattr(args, 'full',  False)
-    bare  = bool(clone) and not full
+    clone = args.clone
+
+    # --clone is only valid against active cases
+    if clone and os.path.basename(args.registry) == 'archived.yaml':
+        sys.exit("ERROR: --clone requires an active registry; archived.yaml cases cannot be cloned.")
+
+    # For --clone, all positional cases must resolve to a single clone source
+    if clone:
+        unique_sources = set(case_names)
+        if len(unique_sources) > 1:
+            sys.exit(
+                "ERROR: --clone requires all positional cases to share the same source, "
+                f"but got: {', '.join(sorted(unique_sources))}"
+            )
+        clone_source = case_names[0]
 
     if len(matched) == 1:
         # Single case: put everything in base, one stub entry in cases
         row  = next(iter(matched.values()))
-        name = next(iter(matched.keys()))
-        base = _row_to_base(row, bare=bare)
-        cases_list = [{'name': name}]
+        base = _row_to_base(row)
+        cases_list = [{'name': ''}]
     else:
         # Multiple cases: compute common base, per-case overrides
-        all_rows = list(matched.values())
-        all_bases = [_row_to_base(r, bare=bare) for r in all_rows]
+        all_rows  = list(matched.values())
+        all_bases = [_row_to_base(r) for r in all_rows]
 
         # Keys with identical values across all cases go in base
         all_keys = set(k for b in all_bases for k in b)
@@ -292,16 +283,16 @@ def cmd_export(args, rows, config_registry_path):
 
         # Per-case: only keys that differ from base
         cases_list = []
-        for name, b in zip(case_names, all_bases):
-            entry = {'name': name}
+        for b in all_bases:
+            entry = {'name': ''}
             for k, v in b.items():
                 if k not in base or base[k] != v:
                     entry[k] = v
             cases_list.append(entry)
 
-    # --- inject clone source into base if provided ---
+    # --- inject clone source into base if requested ---
     if clone:
-        base['clone'] = clone
+        base['clone'] = clone_source
 
     # --- inject required run/machine fields into base ---
     # CLI flags take priority; registry defaults fill in what's still missing.
@@ -395,13 +386,14 @@ class _NoAliasDumper(yaml.Dumper):
 
 
 def _dump_matrix(matrix):
-    return yaml.dump(
+    text = yaml.dump(
         matrix,
         Dumper=_NoAliasDumper,
         default_flow_style=False,
         sort_keys=False,
         allow_unicode=True,
     )
+    return text.replace("name: ''\n", "name: ''  # FIXME: set new case name\n")
 
 
 # ---------------------------------------------------------------------------
@@ -457,11 +449,9 @@ def build_parser():
                           help='Exact case name(s) to export')
     p_export.add_argument('-o', '--output', metavar='PATH',
                           help='Output file path (default: print to stdout)')
-    p_export.add_argument('--clone', metavar='CASE_NAME',
-                          help='Source case to clone; written as clone: in base')
-    p_export.add_argument('--full', action='store_true',
-                          help='When used with --clone, include all scientific parameters in '
-                               'base instead of the default bare (clone-source-inherits) output')
+    p_export.add_argument('--clone', action='store_true',
+                          help='Write clone: <source_case> into base; the positional case '
+                               'argument(s) must all be the same case (the clone source)')
     p_export.add_argument('--config-registry', dest='config_registry',
                           default=DEFAULT_CONFIG, metavar='PATH',
                           help='config_registry path written into the matrix '
