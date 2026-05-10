@@ -15,8 +15,8 @@ machine: discover
 defaults:
   resubmit:    1
   stop_option: nyears
-  stop_n:      20
-  rest_n:      5
+  stop_n:      10
+  rest_n:      10
   ntasks:      126
   account:     s2427
 
@@ -25,7 +25,7 @@ paths:
   caseroot:     /gpfsm/dnb33/etwolf/cesm_scratch/cases
   rundir:       /gpfsm/dnb33/etwolf/cesm_scratch/rundir
   archive:      /gpfsm/dnb33/etwolf/cesm_scratch/archive
-  long_term:    /gpfsm/dnb07/projects/p54/users/etwolf
+  long_term:    /gpfsm/dnb07/projects/p54/users/etwolf/exocam-archive
   exocam_root:  /gpfsm/dnb33/etwolf/models/ExoCAM
   exort_root:   /gpfsm/dnb33/etwolf/models/ExoRT
 
