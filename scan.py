@@ -24,7 +24,8 @@ import yaml
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import (
     parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_docn_som,
-    parse_cam_config_opts, compute_pstd_bar, pressure_str_to_bar, read_solar_nw
+    parse_cam_config_opts, parse_run_type_fields,
+    compute_pstd_bar, pressure_str_to_bar, read_solar_nw
 )
 
 SOLAR_STEM_MAP = {
@@ -59,6 +60,7 @@ _REGISTRY_GROUPS = [
         'ncdata', 'ncdata_pressure_str', 'ncdata_levels',
         'clm_finidat', 'clm_fsurdat',
         'som_pop_frc_file',
+        'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename',
     ]),
     ('atmosphere', [
         'exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',
@@ -190,6 +192,11 @@ def inspect_case(casedir):
             row['exort_pkg'] = 'custom_src'
 
     row['cloud_scheme'] = cam.get('cloud_scheme')
+
+    # env_run.xml — RUN_TYPE and branch/hybrid reference fields (independent read)
+    env_run_path = os.path.join(casedir, 'env_run.xml')
+    run_fields = parse_run_type_fields(env_run_path)
+    row.update(run_fields)
 
     warnings = check_consistency(row)
     row['warnings'] = warnings or None

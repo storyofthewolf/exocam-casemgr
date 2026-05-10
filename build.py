@@ -169,6 +169,12 @@ def validate_case(spec, registry):
                 f"exort_pkg='{exort_pkg}' (expected stem '{stem}')"
             )
 
+    # branch/hybrid: run_refcase and run_refdate required
+    if spec.get('run_type') in ('branch', 'hybrid'):
+        for field in ('run_refcase', 'run_refdate'):
+            if not spec.get(field):
+                errors.append(f"missing required field for run_type={spec['run_type']}: {field}")
+
     # synchronous rotation consistency
     if str(spec.get('do_exo_synchronous', 'false')).lower() == 'true':
         sday = spec.get('exo_sday')
@@ -386,6 +392,55 @@ def _heredoc_exoplanet_mod(exoplanet_mod_content):
     return lines
 
 
+def _branch_var_block(spec):
+    """Return shell variable lines for branch/hybrid cases (RUN_REFCASE, RUN_REFDATE, RUN_REFDIR)."""
+    return [
+        f"RUN_REFCASE={spec['run_refcase']}",
+        f"RUN_REFDATE={spec['run_refdate']}",
+        "# Set RUN_REFDIR to the location of the reference restart files:",
+        "#   active refcase:   ${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}",
+        "#   retired refcase:  ${LONG_TERM}/${RUN_REFCASE}/rest/${RUN_REFDATE}",
+        "RUN_REFDIR=${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}",
+    ]
+
+
+def _build_branch_pre_setup(spec):
+    """Lines to insert before cesm_setup for branch/hybrid cases."""
+    if spec.get('run_type') not in ('branch', 'hybrid'):
+        return []
+    return [
+        "# -----------------------------------------------------------",
+        "# cesm_setup requires RUN_TYPE=startup; switch to branch after",
+        "# -----------------------------------------------------------",
+        "./xmlchange RUN_TYPE=startup",
+    ]
+
+
+def _build_branch_post_setup(spec, paths):
+    """Lines to insert after cesm_setup (and SBATCH patches) for branch/hybrid cases."""
+    run_type = spec.get('run_type')
+    if run_type not in ('branch', 'hybrid'):
+        return []
+    retain = spec.get('brnch_retain_casename', 'false').upper()
+    rundir = paths.get('rundir', 'EDIT_ME')
+    return [
+        "",
+        "# -----------------------------------------------------------",
+        "# copy restart files to rundir",
+        "# -----------------------------------------------------------",
+        f"cp ${{RUN_REFDIR}}/* {rundir}/${{CASE}}/",
+        "",
+        "# -----------------------------------------------------------",
+        "# apply branch/hybrid configuration",
+        "# -----------------------------------------------------------",
+        f"./xmlchange RUN_TYPE={run_type}",
+        "./xmlchange CONTINUE_RUN=FALSE",
+        f"./xmlchange BRNCH_RETAIN_CASENAME={retain}",
+        "./xmlchange RUN_REFCASE=${RUN_REFCASE}",
+        "./xmlchange RUN_REFDATE=${RUN_REFDATE}",
+    ]
+
+
 def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_mod_content):
     """Write <outdir>/<case_name>_build.sh. Return the script path."""
     paths = dict(registry.get('paths', {}))
@@ -433,7 +488,11 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"CASEROOT={paths.get('caseroot', 'EDIT_ME')}",
         f"EXOCAM={paths.get('exocam_root', 'EDIT_ME')}",
         f"EXORT={paths.get('exort_root', 'EDIT_ME')}",
+        f"RUNDIR={paths.get('rundir', 'EDIT_ME')}",
+        f"ARCHIVE={paths.get('archive', 'EDIT_ME')}",
+        f"LONG_TERM={paths.get('long_term', 'EDIT_ME')}",
         f"CONFIG_TYPE={config_type}",
+        *(_branch_var_block(spec) if spec.get('run_type') in ('branch', 'hybrid') else []),
         "",
         "# -----------------------------------------------------------",
         "# STEP 1: create case",
@@ -489,19 +548,16 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
          + (f" {cloud_opts}" if cloud_opts else "")
          + f" -usr_src ${{EXORT}}/3dmodels/src.cam.{exort_pkg}\""),
         "",
+        *_build_branch_pre_setup(spec),
         "# -----------------------------------------------------------",
         "# STEP 6: cesm_setup",
         "# -----------------------------------------------------------",
         "./cesm_setup",
         *_build_run_script_block(spec),
+        *_build_branch_post_setup(spec, paths),
         "",
         "# -----------------------------------------------------------",
-        "# STEP 7: branch restart files (uncomment if needed)",
-        "# -----------------------------------------------------------",
-        "# cp /path/to/restart/files ${CASEROOT}/${CASE}/run/",
-        "",
-        "# -----------------------------------------------------------",
-        "# STEP 8: build  (submission is always manual)",
+        "# STEP 7: build  (submission is always manual)",
         "# -----------------------------------------------------------",
         "./${CASE}.build",
         "",
@@ -561,6 +617,10 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"CASEROOT={paths.get('caseroot', 'EDIT_ME')}",
         f"EXOCAM={paths.get('exocam_root', 'EDIT_ME')}",
         f"EXORT={paths.get('exort_root', 'EDIT_ME')}",
+        f"RUNDIR={paths.get('rundir', 'EDIT_ME')}",
+        f"ARCHIVE={paths.get('archive', 'EDIT_ME')}",
+        f"LONG_TERM={paths.get('long_term', 'EDIT_ME')}",
+        *(_branch_var_block(spec) if spec.get('run_type') in ('branch', 'hybrid') else []),
         "",
         "# -----------------------------------------------------------",
         "# STEP 1: create clone",
@@ -622,19 +682,16 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
 
     lines += [
         "",
+        *_build_branch_pre_setup(spec),
         "# -----------------------------------------------------------",
         "# STEP 5: cesm_setup",
         "# -----------------------------------------------------------",
         "./cesm_setup",
         *_build_run_script_block(spec),
+        *_build_branch_post_setup(spec, paths),
         "",
         "# -----------------------------------------------------------",
-        "# STEP 6: branch restart files (uncomment if needed)",
-        "# -----------------------------------------------------------",
-        "# cp /path/to/restart/files ${CASEROOT}/${CASE}/run/",
-        "",
-        "# -----------------------------------------------------------",
-        "# STEP 7: build  (submission is always manual)",
+        "# STEP 6: build  (submission is always manual)",
         "# -----------------------------------------------------------",
         "./${CASE}.build",
         "",

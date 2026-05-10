@@ -67,12 +67,10 @@ python query.py show case_a case_b
 python query.py export case_a case_b -o sweep.yaml \
     --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
 
-# Export with a clone source — produces a bare matrix (scientific params stripped,
-# inherited from clone source). Use --full to include all scientific params.
+# Export with a clone source — produces a sparse matrix (scientific params stripped,
+# inherited from clone source). Per-case name stubs written as ''  # FIXME: set new case name
 python query.py export my_base_case -o clone.yaml \
-    --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
-python query.py export my_base_case -o clone.yaml \
-    --clone my_base_case --full --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
+    --clone --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
 
 # --- DISK MANAGEMENT ---
 
@@ -167,20 +165,25 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 - `parse_cam_config_opts(xmlpath)` — reads `env_build.xml` (falls back to `env_run.xml` if absent) for `-nlev`, `-usr_src` (exort_pkg), cloud scheme.
 - `compute_pstd_bar(params)` — derives total surface pressure from gas bar values. Returns `(pstd_bar, n2bar_computed)` tuple. N2 is implicit for ≤1 bar atmospheres (fills to 1.0); for higher pressures, expects an explicit float `exo_n2bar` in params.
 - `pressure_str_to_bar(s)` — converts pressure strings like `'1bar'` → `1.0`, `'0.1bar'` → `0.1`. Used by `check_consistency` to compare computed pstd against IC file pressure.
+- `parse_run_type_fields(xmlpath)` — reads `env_run.xml` for `RUN_TYPE`, `RUN_REFCASE`, `RUN_REFDATE`, and `BRNCH_RETAIN_CASENAME`. Returns dict with lowercase keys; `run_type` defaults to `'startup'`, others to `None`. `brnch_retain_casename` stored as lowercase string (`'true'`/`'false'`). Falls back to line scan if ElementTree parse fails.
 - `read_solar_nw(path)` — reads `nw` dimension from a NetCDF solar file using `netCDF4`. Returns `None` if the library is absent or the file is inaccessible. Used for solar file / exort_pkg consistency checking in `scan.py`.
 
 ### `build.py` — validation and shell script generation
 
 - `resolve_case(base, overrides)` — merges base + per-case dict.
-- `validate_case(spec, registry)` — returns list of error strings; checks required fields, IC file availability, solar/exort consistency, synchronous rotation math. Clone cases (`clone` present) use `REQUIRED_FIELDS_CLONE` (relaxed — config fields are inherited from source case).
+- `validate_case(spec, registry)` — returns list of error strings; checks required fields, IC file availability, solar/exort consistency, synchronous rotation math. Clone cases (`clone` present) use `REQUIRED_FIELDS_CLONE` (relaxed — config fields are inherited from source case). Branch/hybrid cases must supply `run_refcase` and `run_refdate`.
 - `render_exoplanet_mod(template_path, spec)` — regex-patches active Fortran parameter lines for all names in `EXO_PARAMS`. When `exo_n2bar_explicit` is set, also patches the `exo_n2bar` line with the explicit numeric value (high-pressure cases); otherwise leaves the N2 expression line unchanged for the Fortran compiler to evaluate.
 - `_heredoc_exoplanet_mod(exoplanet_mod_content)` — returns shell lines that write `exoplanet_mod.F90` inline via a quoted heredoc (`<< 'EXOPLANET_MOD_EOF'`). If `exoplanet_mod_content` is `None` (template not found), emits comment lines directing manual installation instead. Quoted delimiter suppresses bash variable expansion inside the Fortran content.
-- `generate_shell_script(...)` — writes the `create_newcase` + `cesm_setup` + build script. Each script is fully self-contained: the rendered `exoplanet_mod.F90` is embedded inline via heredoc (no staging directory). Config-specific shell commands emitted:
+- `generate_shell_script(...)` — writes the `create_newcase` + `cesm_setup` + build script. Each script is fully self-contained: the rendered `exoplanet_mod.F90` is embedded inline via heredoc (no staging directory). Script declares `RUNDIR`, `ARCHIVE`, and `LONG_TERM` shell variables from registry paths. Config-specific shell commands emitted:
   - All configs: `sed` to update `ncdata` in `user_nl_cam`; `echo >>` for `carma_params`/`volc_params`.
   - All configs: `sed` to patch `#SBATCH --account` and `-J` in `${CASE}.run` after `cesm_setup` (if `account`/`job_name` present in spec).
   - Land/mixed: `sed` for `finidat`/`fsurdat` in `user_nl_clm`.
   - Aqua/mixed: `sed` for `pop_frc*` path in `user_docn.streams.txt.som`.
-- `generate_clone_script(...)` — same as above but uses `create_clone -clone $CLONE_OF -case $CASE` for Step 1, skips the SourceMods/namelist copy step (Step 2 of newcase), and makes IC file lookup and `CAM_CONFIG_OPTS` conditional on `config_type`/`exort_pkg`/`nlev` being present. `exoplanet_mod.F90` is also embedded inline via heredoc.
+  - Branch/hybrid: see below.
+- `generate_clone_script(...)` — same as above but uses `create_clone -clone $CLONE_OF -case $CASE` for Step 1, skips the SourceMods/namelist copy step (Step 2 of newcase), and makes IC file lookup conditional on `ncdata` being explicitly set in the spec. `exoplanet_mod.F90` is also embedded inline via heredoc.
+- `_build_branch_pre_setup(spec)` — if `run_type` is `branch` or `hybrid`, emits `./xmlchange RUN_TYPE=startup` before `cesm_setup`. CESM requires `RUN_TYPE=startup` during `cesm_setup` when the rundir does not yet exist; the actual run type is applied afterward.
+- `_build_branch_post_setup(spec, paths)` — if `run_type` is `branch` or `hybrid`, emits: copy restart files from `$RUN_REFDIR` to rundir, then `xmlchange` calls to set `RUN_TYPE`, `CONTINUE_RUN=FALSE`, `BRNCH_RETAIN_CASENAME`, `RUN_REFCASE`, and `RUN_REFDATE`. `RUN_REFDIR` defaults to `${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}` with a comment directing the user to update it for retired refcases.
+- `_branch_var_block(spec)` — emits shell variable declarations for `RUN_REFCASE` and `RUN_REFDATE` at the top of branch/hybrid scripts.
 - `_build_nl_append_block(spec)` — `echo >>` lines for carma/volc namelist params.
 - `_build_clm_update_block(spec, paths)` — `sed` lines for CLM land files.
 - `_build_docn_update_block(spec)` — `sed` lines for SOM ocean forcing file.
@@ -193,7 +196,7 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 
 Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`), extracts scientific metadata, writes a grouped YAML registry. Bare case names are resolved relative to `caseroot` from `config_registry.yaml`.
 
-- `inspect_case(casedir)` — collects all metadata into a flat row dict. Reads `exoplanet_mod.F90`, `user_nl_cam`, optionally `user_nl_clm` and `user_docn.streams.txt.som`, and `env_build.xml` (falling back to `env_run.xml`). `config_type` is inferred from `SourceMods/` subdirectory structure before the config-conditional parse calls.
+- `inspect_case(casedir)` — collects all metadata into a flat row dict. Reads `exoplanet_mod.F90`, `user_nl_cam`, optionally `user_nl_clm` and `user_docn.streams.txt.som`, `env_build.xml` (falling back to `env_run.xml` for CAM_CONFIG_OPTS), and `env_run.xml` (for run type fields). `config_type` is inferred from `SourceMods/` subdirectory structure before the config-conditional parse calls.
 - `_infer_config_type(casedir)` — decision tree based on SourceMods subdirectory presence:
   - `src.cice` + `src.clm` present → `cam_mixed_fv`
   - `src.cice` only → `cam_aqua_fv`
@@ -218,9 +221,9 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `cmd_search` — tabular listing filtered by optional positional `cases` (exact names), `--prefix` (case-insensitive startswith), `--config-type` (exact), `--exort-pkg` (exact), `--nlev` (exact integer). `cases` and `--prefix` are mutually exclusive. Columns: CASE, CONFIG_TYPE, EXORT_PKG, NLEV, INSPECT_DATE. A CONFIG column is appended (showing `yes` or `-`) when at least one result row contains `config_saved` — present when searching `archived.yaml`, absent when searching `active.yaml`.
 - `cmd_show` — dumps full grouped YAML for one or more cases by exact name (one or more required). If any name is not found in the registry, prints `ERROR: case '<name>' not found in registry.` for each missing name and exits. Multiple results are separated by `---`.
 - `cmd_export` — generates a ready-to-use `experiment_matrix.yaml` from one or more registry cases. For multiple cases, shared fields are factored into `base` automatically. `mach` and run defaults are populated from `config_registry.yaml` unless overridden via CLI flags. Required fields left blank are written as empty strings with a prominent `# FIXME` warning header prepended to the file.
-- `_row_to_base(row, bare=False)` — converts a flat registry row to a matrix base dict. `bare=True` strips atmosphere, geophysical, model_options, and special fields; used for clone exports where the clone source supplies those values. Bare mode is the default when `--clone` is set; `--full` overrides to include all scientific parameters.
-- `_BARE_STRIP_KEYS` — set of fields omitted from `base` in bare mode.
-- Clone export behavior: `--clone` sets `bare=True` by default (minimal base, case stubs ready for per-case deltas). `--full` overrides to include all scientific parameters. Without `--clone`, full output is always produced.
+- `_row_to_base(row)` — converts a flat registry row to a matrix base dict.
+- `_CLONE_BASE_FIELDS` — allowlist of fields included in clone-mode base: `clone`, `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`, `account`, `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`. All other fields are omitted (inherited from clone source).
+- Clone export behavior: `--clone` (boolean `store_true`) produces a sparse base filtered to `_CLONE_BASE_FIELDS`. Per-case name stubs are written as `''  # FIXME: set new case name`. Without `--clone`, full output is always produced.
 - Key renames from registry to matrix: `clm_finidat` → `finidat`, `clm_fsurdat` → `fsurdat`.
 - Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`, `config_saved`.
 - The exported matrix always includes a `meta` block (`description`, `author`, `created`, `source_registry`) that `query.py export` auto-populates; `description` and `author` are written as empty strings for the user to fill in.
@@ -288,7 +291,7 @@ Loops over all `*_build.sh` files in a directory, runs each with `bash`, reports
 
 ```yaml
 cases:
-- meta:          # case identity, CESM config, IC file info, CLM files, SOM file
+- meta:          # case identity, CESM config, IC file info, CLM files, SOM file, run_type fields
   atmosphere:    # gas bars, pstd, scon, solar file
   geophysical:   # ndays, porb, sday, gravity, radius, eccen, obliq
   model_options: # do_exo_* flags, exo_convect_plim, exo_rad_step, rt flags
@@ -321,6 +324,10 @@ Special case keys:
 - `account` — `#SBATCH --account` written to `${CASE}.run` (typically in `base`)
 - `job_name` — `#SBATCH -J` written to `${CASE}.run` (typically per-case)
 - `carma_params`, `volc_params` — nested dicts appended to `user_nl_cam` via `echo >>`
+- `run_type` — CESM run type: `startup` (default), `branch`, or `hybrid`. Branch/hybrid cases require `run_refcase` and `run_refdate`. The generated script handles the cesm_setup workaround automatically (sets `startup` before setup, switches back to `branch`/`hybrid` after copying restart files).
+- `run_refcase` — name of the reference case to branch/hybridize from. Required when `run_type` is `branch` or `hybrid`.
+- `run_refdate` — reference date string (e.g. `0021-01-01`) matching the restart set to use. Required when `run_type` is `branch` or `hybrid`.
+- `brnch_retain_casename` — `'true'` or `'false'`; passed to `BRNCH_RETAIN_CASENAME` xmlchange in branch/hybrid scripts. Defaults to `'false'`.
 
 ---
 
@@ -391,7 +398,7 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 
 ### Extending `query.py export` output fields
 1. Add the registry key to `_BASE_FIELD_ORDER` in `query.py` (controls output key order).
-2. If it should be excluded from bare/clone exports, add it to `_BARE_STRIP_KEYS`.
+2. If it should be included in clone-mode sparse exports, add it to `_CLONE_BASE_FIELDS`.
 3. If the registry uses a different key name than the matrix, add a rename entry to `_KEY_RENAMES`.
 
 ---
@@ -409,9 +416,9 @@ Both are nested dicts in the experiment matrix spec and in the YAML registry. `_
 
 ## Known limitations
 
-### Branch runs not implemented (build.py)
+### Pre-existing registry rows lack run_type (scan.py)
 
-`RUN_TYPE=branch` — starting a case from a specific restart file rather than initial conditions — has not been implemented. Branch runs require setting `RUN_TYPE`, `RUN_REFCASE`, and `RUN_REFDATE` via xmlchange, and staging the restart files. Currently, restarting from a specific point must be handled manually after the build script runs.
+Cases that were scanned into `active.yaml` or `archived.yaml` before `run_type` support was added will not have `run_type`, `run_refcase`, `run_refdate`, or `brnch_retain_casename` fields. When `query.py export` encounters such rows, it defaults `run_type` to `'startup'` for backward compatibility. Re-scan the case with `scan.py` to populate the run type fields from the live `env_run.xml`.
 
 ### Custom RT packages not supported in `create_newcase` builds (build.py)
 

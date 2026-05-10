@@ -236,6 +236,48 @@ def _find_cam_config_opts(xmlpath):
     return None
 
 
+def parse_run_type_fields(xmlpath):
+    """
+    Parse env_run.xml for RUN_TYPE, RUN_REFCASE, RUN_REFDATE, BRNCH_RETAIN_CASENAME.
+    Returns dict with lowercase keys. run_type defaults to 'startup'; others default to None.
+    brnch_retain_casename is stored as a lowercase string ('true' or 'false'), not a bool.
+    """
+    fields = {
+        'run_type':              'startup',
+        'run_refcase':           None,
+        'run_refdate':           None,
+        'brnch_retain_casename': None,
+    }
+    id_map = {
+        'RUN_TYPE':              'run_type',
+        'RUN_REFCASE':           'run_refcase',
+        'RUN_REFDATE':           'run_refdate',
+        'BRNCH_RETAIN_CASENAME': 'brnch_retain_casename',
+    }
+    if not os.path.exists(xmlpath):
+        return fields
+    try:
+        tree = ET.parse(xmlpath)
+        for entry in tree.iter('entry'):
+            eid = entry.get('id')
+            if eid in id_map:
+                val = entry.findtext('value') or entry.get('value') or (entry.text or '').strip()
+                if val:
+                    key = id_map[eid]
+                    fields[key] = val.lower() if eid == 'BRNCH_RETAIN_CASENAME' else val
+    except ET.ParseError:
+        # fallback: line scan
+        with open(xmlpath) as f:
+            for line in f:
+                for xml_id, key in id_map.items():
+                    if xml_id in line:
+                        m = re.search(r'value="([^"]+)"', line)
+                        if m:
+                            val = m.group(1)
+                            fields[key] = val.lower() if xml_id == 'BRNCH_RETAIN_CASENAME' else val
+    return fields
+
+
 def compute_pstd_bar(params):
     """
     Compute total surface pressure in bar from gas bar parameters.
