@@ -180,6 +180,12 @@ _BASE_FIELD_ORDER = [
     'carma_params', 'volc_params',
 ]
 
+# Fields included in a clone export base (explicit allowlist — all others omitted)
+_CLONE_BASE_FIELDS = {
+    'clone', 'config_type', 'exort_pkg', 'nlev',
+    'mach', 'stop_option', 'stop_n', 'rest_n', 'resubmit', 'ntasks', 'account',
+}
+
 # Registry keys not forwarded to the matrix
 _SKIP_KEYS = {
     'case_name', 'casedir', 'inspect_date',
@@ -293,6 +299,8 @@ def cmd_export(args, rows, config_registry_path):
     # --- inject clone source into base if requested ---
     if clone:
         base['clone'] = clone_source
+        # Restrict base to the clone allowlist — scientific params are inherited
+        base = {k: v for k, v in base.items() if k in _CLONE_BASE_FIELDS}
 
     # --- inject required run/machine fields into base ---
     # CLI flags take priority; registry defaults fill in what's still missing.

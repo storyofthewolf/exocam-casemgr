@@ -534,10 +534,8 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     cloud_opts  = '-chem none -microphys mg1' if spec.get('cloud_scheme') == 'mg' else ''
     pstd        = compute_pstd_from_spec(spec) if config_type else None
 
+    # solar_file: only override if explicitly set in spec — never construct a default for clones
     solar_file = spec.get('exo_solar_file', '')
-    if not solar_file and exort_pkg:
-        stem = SOLAR_FILE_STEMS.get(exort_pkg, exort_pkg)
-        solar_file = f"{paths.get('exort_root','$EXORT')}/data/solar/G2V_SUN_{stem}.nc"
 
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
     script_path = os.path.join(outdir, f"{case_name}_build.sh")
