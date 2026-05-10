@@ -530,8 +530,6 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     config_type = spec.get('config_type', '')
     exort_pkg   = spec.get('exort_pkg', '')
     nlev        = spec.get('nlev', '?')
-    phys        = registry.get('cesm_config', {}).get(config_type, {}).get('phys', 'cam4')
-    cloud_opts  = '-chem none -microphys mg1' if spec.get('cloud_scheme') == 'mg' else ''
     pstd        = compute_pstd_from_spec(spec) if config_type else None
 
     # solar_file: only override if explicitly set in spec — never construct a default for clones
@@ -621,16 +619,6 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"./xmlchange REST_N={spec['rest_n']}",
         f"./xmlchange RESUBMIT={spec['resubmit']}",
     ]
-
-    if exort_pkg and nlev != '?':
-        lines += [
-            (f"./xmlchange CAM_CONFIG_OPTS="
-             f"\"-nlev {nlev} -phys {phys}"
-             + (f" {cloud_opts}" if cloud_opts else "")
-             + f" -usr_src ${{EXORT}}/3dmodels/src.cam.{exort_pkg}\""),
-        ]
-    else:
-        lines += ["# CAM_CONFIG_OPTS inherited from clone source — update if needed"]
 
     lines += [
         "",
