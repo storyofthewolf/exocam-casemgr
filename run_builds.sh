@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run all *_build.sh scripts in the given directory (default: scripts/).
+# Run all *_build.sh scripts in the given directory (default: build_scripts/).
 #
 # Usage:
 #   bash run_builds.sh [scripts_dir]
@@ -7,7 +7,7 @@
 # Each script is run sequentially. A failed build is reported but does not
 # stop the remaining builds. Logs are written by each build script itself.
 
-SCRIPTS_DIR=${1:-scripts}
+SCRIPTS_DIR=${1:-build_scripts}
 
 if [ ! -d "$SCRIPTS_DIR" ]; then
     echo "ERROR: directory not found: $SCRIPTS_DIR"

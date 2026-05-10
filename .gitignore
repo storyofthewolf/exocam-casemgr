@@ -6,7 +6,6 @@ __pycache__
 *~
 .DS_Store
 
-staging/
 *.sh
 *.yaml
 
@@ -20,3 +19,9 @@ cases.yaml
 
 # keep run_builds.sh to loop over build files
 !run_builds.sh
+
+build_scripts/*
+!build_scripts/README
+
+blueprints/*
+!blueprints/README

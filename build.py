@@ -665,7 +665,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
 def main():
     parser = argparse.ArgumentParser(description='Generate ExoCAM build shell scripts from experiment matrix')
     parser.add_argument('matrix', help='experiment_matrix.yaml')
-    parser.add_argument('--outdir', default='scripts', help='Output directory for scripts (default: scripts/)')
+    parser.add_argument('--outdir', default='build_scripts', help='Output directory for scripts (default: build_scripts/)')
     parser.add_argument('--execute', action='store_true',
                         help='Execute generated scripts via bash (default is dry-run)')
     args = parser.parse_args()
