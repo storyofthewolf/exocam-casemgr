@@ -139,8 +139,8 @@ experiment_matrix.yaml
        ↓
   build.py
        ↓
-  scripts/<case>_build.sh                     ← shell script: create_newcase/create_clone + build
-  scripts/staging/<case>/exoplanet_mod.F90    ← patched Fortran parameter file
+  scripts/<case>_build.sh                     ← self-contained shell script: create_newcase/create_clone + build
+                                               (rendered exoplanet_mod.F90 embedded as inline heredoc)
 
 CASE directories on HPC
        ↓
@@ -174,12 +174,13 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 - `resolve_case(base, overrides)` — merges base + per-case dict.
 - `validate_case(spec, registry)` — returns list of error strings; checks required fields, IC file availability, solar/exort consistency, synchronous rotation math. Clone cases (`clone` present) use `REQUIRED_FIELDS_CLONE` (relaxed — config fields are inherited from source case).
 - `render_exoplanet_mod(template_path, spec)` — regex-patches active Fortran parameter lines for all names in `EXO_PARAMS`. When `exo_n2bar_explicit` is set, also patches the `exo_n2bar` line with the explicit numeric value (high-pressure cases); otherwise leaves the N2 expression line unchanged for the Fortran compiler to evaluate.
-- `generate_shell_script(...)` — writes the `create_newcase` + `cesm_setup` + build script. Config-specific shell commands emitted:
+- `_heredoc_exoplanet_mod(exoplanet_mod_content)` — returns shell lines that write `exoplanet_mod.F90` inline via a quoted heredoc (`<< 'EXOPLANET_MOD_EOF'`). If `exoplanet_mod_content` is `None` (template not found), emits comment lines directing manual installation instead. Quoted delimiter suppresses bash variable expansion inside the Fortran content.
+- `generate_shell_script(...)` — writes the `create_newcase` + `cesm_setup` + build script. Each script is fully self-contained: the rendered `exoplanet_mod.F90` is embedded inline via heredoc (no staging directory). Config-specific shell commands emitted:
   - All configs: `sed` to update `ncdata` in `user_nl_cam`; `echo >>` for `carma_params`/`volc_params`.
   - All configs: `sed` to patch `#SBATCH --account` and `-J` in `${CASE}.run` after `cesm_setup` (if `account`/`job_name` present in spec).
   - Land/mixed: `sed` for `finidat`/`fsurdat` in `user_nl_clm`.
   - Aqua/mixed: `sed` for `pop_frc*` path in `user_docn.streams.txt.som`.
-- `generate_clone_script(...)` — same as above but uses `create_clone -clone $CLONE_OF -case $CASE` for Step 1, skips the SourceMods/namelist copy step (Step 2 of newcase), and makes IC file lookup and `CAM_CONFIG_OPTS` conditional on `config_type`/`exort_pkg`/`nlev` being present.
+- `generate_clone_script(...)` — same as above but uses `create_clone -clone $CLONE_OF -case $CASE` for Step 1, skips the SourceMods/namelist copy step (Step 2 of newcase), and makes IC file lookup and `CAM_CONFIG_OPTS` conditional on `config_type`/`exort_pkg`/`nlev` being present. `exoplanet_mod.F90` is also embedded inline via heredoc.
 - `_build_nl_append_block(spec)` — `echo >>` lines for carma/volc namelist params.
 - `_build_clm_update_block(spec, paths)` — `sed` lines for CLM land files.
 - `_build_docn_update_block(spec)` — `sed` lines for SOM ocean forcing file.

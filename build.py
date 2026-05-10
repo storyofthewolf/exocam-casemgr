@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 ExoCAM build script generator. Reads an experiment matrix YAML and a config
-registry YAML, validates each case, writes one shell script per case plus a
-staged exoplanet_mod.F90.
+registry YAML, validates each case, and writes one self-contained shell script
+per case. Each script embeds the rendered exoplanet_mod.F90 as an inline
+heredoc so no external staging directory is required.
 
 Usage:
   python build.py experiment_matrix.yaml [--outdir scripts/] [--execute]
@@ -368,7 +369,24 @@ def _build_docn_update_block(spec):
     ]
 
 
-def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_dir):
+def _heredoc_exoplanet_mod(exoplanet_mod_content):
+    """
+    Return shell lines that write exoplanet_mod.F90 inline via heredoc,
+    or a comment if the content is None (template was not found).
+    """
+    if exoplanet_mod_content is None:
+        return [
+            "# WARNING: exoplanet_mod.F90 template not found at generation time.",
+            "# Install it manually before building:",
+            "# cp /path/to/exoplanet_mod.F90 SourceMods/src.share/exoplanet_mod.F90",
+        ]
+    lines = ["cat > SourceMods/src.share/exoplanet_mod.F90 << 'EXOPLANET_MOD_EOF'"]
+    lines.extend(exoplanet_mod_content.splitlines())
+    lines.append("EXOPLANET_MOD_EOF")
+    return lines
+
+
+def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_mod_content):
     """Write <outdir>/<case_name>_build.sh. Return the script path."""
     paths = dict(registry.get('paths', {}))
     # per-matrix path overrides (passed in via spec)
@@ -415,7 +433,6 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         f"CASEROOT={paths.get('caseroot', 'EDIT_ME')}",
         f"EXOCAM={paths.get('exocam_root', 'EDIT_ME')}",
         f"EXORT={paths.get('exort_root', 'EDIT_ME')}",
-        f"STAGING={os.path.abspath(staging_dir)}",
         f"CONFIG_TYPE={config_type}",
         "",
         "# -----------------------------------------------------------",
@@ -437,7 +454,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
         "# -----------------------------------------------------------",
         "# STEP 3: install modified exoplanet_mod.F90 and update paths",
         "# -----------------------------------------------------------",
-        "cp ${STAGING}/exoplanet_mod.F90 SourceMods/src.share/exoplanet_mod.F90",
+        *_heredoc_exoplanet_mod(exoplanet_mod_content),
         "",
         "# Update ncdata path in user_nl_cam",
         f"sed -i \"s|ncdata = '.*'|ncdata = '{ic_path}'|\" user_nl_cam",
@@ -498,7 +515,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, staging_di
     return script_path
 
 
-def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_dir):
+def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_mod_content):
     """
     Write <outdir>/<case_name>_build.sh using create_clone instead of create_newcase.
     Steps 3-8 are identical to generate_shell_script; Steps 1-2 are replaced by
@@ -548,7 +565,6 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         f"CASEROOT={paths.get('caseroot', 'EDIT_ME')}",
         f"EXOCAM={paths.get('exocam_root', 'EDIT_ME')}",
         f"EXORT={paths.get('exort_root', 'EDIT_ME')}",
-        f"STAGING={os.path.abspath(staging_dir)}",
         "",
         "# -----------------------------------------------------------",
         "# STEP 1: create clone",
@@ -560,7 +576,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, staging_di
         "# STEP 2: install modified exoplanet_mod.F90 and update paths",
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
-        "cp ${STAGING}/exoplanet_mod.F90 SourceMods/src.share/exoplanet_mod.F90",
+        *_heredoc_exoplanet_mod(exoplanet_mod_content),
     ]
 
     if ic_file:
@@ -714,11 +730,7 @@ def main():
             except ValueError:
                 pass  # clone without IC override — ncdata sed step skipped
 
-        # staging dir for this case's exoplanet_mod.F90
-        staging_dir = os.path.join(args.outdir, 'staging', case_name)
-        os.makedirs(staging_dir, exist_ok=True)
-
-        # find and render exoplanet_mod.F90 template
+        # find and render exoplanet_mod.F90 template into memory
         config_type = spec.get('config_type', '')
         src_config = config_type.replace('_ne5', '').replace('_ne16', '')
         if is_clone:
@@ -738,22 +750,20 @@ def main():
             template_path = None
 
         if template_path and os.path.exists(template_path):
-            content = render_exoplanet_mod(template_path, spec)
-            staged_path = os.path.join(staging_dir, 'exoplanet_mod.F90')
-            with open(staged_path, 'w') as f:
-                f.write(content)
+            exoplanet_mod_content = render_exoplanet_mod(template_path, spec)
         else:
             src_label = spec.get('clone') if is_clone else (config_type or 'unknown')
             print(f"  WARNING: template exoplanet_mod.F90 not found for {src_label}; "
-                  f"staging dir will be empty — edit manually")
+                  f"script will contain a placeholder comment — install manually")
+            exoplanet_mod_content = None
 
         if is_clone:
             script_path = generate_clone_script(
-                case_name, spec, registry, ic_file, args.outdir, staging_dir
+                case_name, spec, registry, ic_file, args.outdir, exoplanet_mod_content
             )
         else:
             script_path = generate_shell_script(
-                case_name, spec, registry, ic_file, args.outdir, staging_dir
+                case_name, spec, registry, ic_file, args.outdir, exoplanet_mod_content
             )
         generated.append((case_name, script_path))
         print(f"Generated: {script_path}")
