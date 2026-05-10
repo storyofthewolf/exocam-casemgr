@@ -201,7 +201,6 @@ _SKIP_KEYS = {
 _KEY_RENAMES = {
     'clm_finidat': 'finidat',
     'clm_fsurdat': 'fsurdat',
-    'ncdata':      'ncdata_override',
 }
 # Reverse: matrix key -> registry key (for ordered field lookup)
 _KEY_RENAMES_REV = {v: k for k, v in _KEY_RENAMES.items()}

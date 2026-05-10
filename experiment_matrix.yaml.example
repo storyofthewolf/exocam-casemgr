@@ -201,7 +201,7 @@ cases:
     exo_n2bar_explicit:  0.19
     exo_o2bar:           0.0
     nlev:                51
-    ncdata_override: ic_1bar_L51_zmean_ic.nc
+    ncdata: ic_1bar_L51_zmean_ic.nc
 
   # Land planet example (cam_land_fv config)
   - name: land_modern_earth

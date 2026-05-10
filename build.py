@@ -108,8 +108,8 @@ def find_ic_file(spec, registry):
     Look up IC filename in registry.ic_files[config_type][pressure_str][nlev].
     Returns (ic_filename, pressure_str) or raises ValueError.
     """
-    if 'ncdata_override' in spec:
-        return spec['ncdata_override'], None
+    if 'ncdata' in spec:
+        return spec['ncdata'], None
 
     config_type = spec['config_type']
     nlev = int(spec['nlev'])
@@ -120,7 +120,7 @@ def find_ic_file(spec, registry):
     if pressure_str not in ic_table:
         raise ValueError(
             f"No IC file entry for {config_type} / {pressure_str} in config_registry.yaml. "
-            f"Add it or use ncdata_override."
+            f"Add it or use ncdata."
         )
     level_table = ic_table[pressure_str]
     if nlev not in level_table:
