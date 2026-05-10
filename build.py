@@ -730,15 +730,12 @@ def main():
 
         is_clone = bool(spec.get('clone'))
 
-        # IC file: required for newcase; optional for clone (only if config_type+nlev present)
+        # IC file: required for newcase; for clone, only if ncdata is explicitly in spec
         ic_file = None
         if not is_clone:
             ic_file, _ = find_ic_file(spec, registry)
-        elif spec.get('config_type') and spec.get('nlev'):
-            try:
-                ic_file, _ = find_ic_file(spec, registry)
-            except ValueError:
-                pass  # clone without IC override — ncdata sed step skipped
+        elif spec.get('ncdata'):
+            ic_file, _ = find_ic_file(spec, registry)
 
         # find and render exoplanet_mod.F90 template into memory
         config_type = spec.get('config_type', '')
