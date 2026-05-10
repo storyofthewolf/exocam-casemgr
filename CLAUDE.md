@@ -247,20 +247,23 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
 - `HIST_MODELS` — `ARCHIVE_MODELS` minus `'rest'`; the components with `hist/` and `logs/` subdirs.
 
-### `diff.py` — SourceMods diff tool
+### `diff.py` — SourceMods and namelist diff tool
 
-Compares a case's `SourceMods/` against either the ExoCAM reference source or another case. The ExoCAM reference path is `{exocam_root}/cesm1.2.1/configs/{config_type}/SourceMods/` where `config_type` is looked up from `active.yaml`. RT files are detected by matching against the ExoRT package directory and reported as separate categories. Used before retiring to determine whether custom Fortran is worth preserving.
+Compares a case's `SourceMods/` and namelist files against either the ExoCAM reference source or another case. ExoCAM reference paths: `{exocam_root}/cesm1.2.1/configs/{config_type}/SourceMods/` for Fortran files; `{exocam_root}/cesm1.2.1/configs/{config_type}/namelist_files/` for namelists. `config_type` is looked up from `active.yaml`. RT files are detected by matching against the ExoRT package directory and reported as separate categories. Used before retiring to determine whether custom Fortran or namelists are worth preserving.
 
 - `load_case_meta(case, cases_yaml_path)` — reads `active.yaml`, matches on `meta.case_name`, returns `{'config_type': ..., 'exort_pkg': ...}` with the `*` suffix stripped from `exort_pkg`. Exits with a clear error if `active.yaml` is missing (directs user to run `scan.py`).
 - `build_exort_fileset(exort_root, exort_pkg)` — returns `{filename: filepath}` for all files in `exort_root/3dmodels/src.cam.{exort_pkg}/`. Returns empty dict if directory does not exist.
 - `_load_exort_fileset(paths, exort_pkg)` — wraps `build_exort_fileset` with three warning paths: `exort_root` not configured, `exort_pkg` missing from active.yaml, or package directory not on disk. Returns `{}` (RT detection disabled) in all three cases.
 - `walk_sourcemods(sourcemods_root)` — walks each component directory recursively; returns `{component: {filename: abs_path}}`. Skips editor backup files (`~`). Shallowest occurrence wins on filename collision across subdirs.
+- `walk_namelists(casedir)` — returns `{filename: abs_path}` for whichever files in `NAMELIST_FILES` exist directly in the case directory.
+- `_print_namelist_section(nl1, nl2, label1, label2, verbose)` — prints the namelist diff block for case-vs-case mode; returns `(n_mod, n_c1, n_c2, n_eq)` counts folded into the overall summary.
 - `find_exocam_counterpart(filename, component, exocam_sm_root)` — checks for filename at the top level of the ExoCAM reference component dir; returns path or `None`. Only used in case-vs-ExoCAM mode.
 - `diff_counts(path_a, path_b)` — returns `(added, removed)` line counts of a vs b using `collections.Counter`. Pure Python, no subprocess.
-- `cmd_summary(args, paths)` — branches on `args.case2`. Case-vs-ExoCAM: five categories (`IDENTICAL`, `MODIFIED`, `RT IDENTICAL`, `RT MODIFIED`, `CASE ONLY`); ExoCAM match takes priority over RT match. Case-vs-case: four categories (`IDENTICAL`, `MODIFIED`, `CASE1 ONLY`, `CASE2 ONLY`); no `active.yaml` or ExoRT lookup. Always prints all component sections. `exoplanet_mod.F90` always skipped. Ends with a one-line verdict and `(registry: ...)` footer. By default, `IDENTICAL` and `RT IDENTICAL` lines are suppressed; pass `--verbose` to show them.
-- `cmd_full(args, paths)` — branches on `args.case2`. In case-vs-ExoCAM mode, resolves classification (ExoCAM → RT → CASE ONLY) and diffs against the appropriate reference or prints file contents. In case-vs-case mode, diffs the two case files or prints the one-sided file.
+- `cmd_summary(args, paths)` — branches on `args.case2`. Case-vs-ExoCAM: five categories for SourceMods (`IDENTICAL`, `MODIFIED`, `RT IDENTICAL`, `RT MODIFIED`, `CASE ONLY`); ExoCAM match takes priority over RT match. Namelists use three categories (`IDENTICAL`, `MODIFIED`, `CASE ONLY`) diffed against `namelist_files/` reference. Case-vs-case: four categories (`IDENTICAL`, `MODIFIED`, `CASE1 ONLY`, `CASE2 ONLY`) for both SourceMods and namelists; no `active.yaml` or ExoRT lookup. Always prints all component sections then a `namelists` section. `exoplanet_mod.F90` always skipped. Ends with a one-line verdict and `(registry: ...)` footer. By default, `IDENTICAL` and `RT IDENTICAL` lines are suppressed; pass `--verbose` to show them.
+- `cmd_full(args, paths)` — branches on `args.case2`. Resolves `--full` target against SourceMods first, then namelists. In case-vs-ExoCAM mode, namelist targets diff against `namelist_files/` reference or print contents if `CASE ONLY`; SourceMods targets resolve classification (ExoCAM → RT → CASE ONLY) and diff against the appropriate reference. In case-vs-case mode, diffs the two files or prints the one-sided file.
 - `COMPONENTS` — `['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']`; printed in this order.
 - `SKIP_FILES` — `{'exoplanet_mod.F90'}`; always skipped.
+- `NAMELIST_FILES` — `['user_nl_cam', 'user_nl_clm', 'user_nl_cice', 'user_docn.streams.txt.som', 'user_nl_cpl', 'user_nl_docn', 'user_nl_rtm']`; checked in the case directory root.
 
 ### `config_registry.yaml` — machine-specific, must be edited per user
 

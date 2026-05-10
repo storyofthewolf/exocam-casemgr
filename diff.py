@@ -30,6 +30,16 @@ DEFAULT_CASES_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 COMPONENTS = ['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']
 SKIP_FILES = {'exoplanet_mod.F90'}
 
+NAMELIST_FILES = [
+    'user_nl_cam',
+    'user_nl_clm',
+    'user_nl_cice',
+    'user_docn.streams.txt.som',
+    'user_nl_cpl',
+    'user_nl_docn',
+    'user_nl_rtm',
+]
+
 
 def fmt_size(nbytes):
     for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
@@ -128,15 +138,64 @@ def _sm_root(caseroot, case):
     return sm
 
 
+def _case_dir(caseroot, case):
+    d = os.path.join(caseroot, case)
+    if not os.path.isdir(d):
+        sys.exit(f"ERROR: case not found: {d}")
+    return d
+
+
+def walk_namelists(casedir):
+    """Return {filename: abs_path} for namelist files that exist in casedir."""
+    result = {}
+    for fname in NAMELIST_FILES:
+        p = os.path.join(casedir, fname)
+        if os.path.isfile(p):
+            result[fname] = p
+    return result
+
+
+def _print_namelist_section(nl1, nl2, label1, label2, verbose):
+    """Print namelist diff section; nl1/nl2 are {filename: path} dicts. Returns counts."""
+    names = sorted(set(nl1) | set(nl2))
+    if not names:
+        print("  (no namelist files found)\n")
+        return 0, 0, 0, 0
+    n_mod = n_c1 = n_c2 = n_eq = 0
+    for fname in names:
+        in1, in2 = fname in nl1, fname in nl2
+        if in1 and in2:
+            if open(nl1[fname], 'rb').read() == open(nl2[fname], 'rb').read():
+                if verbose:
+                    print(f"  {'IDENTICAL':<14}  {fname}")
+                n_eq += 1
+            else:
+                ad, rm = diff_counts(nl1[fname], nl2[fname])
+                print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)")
+                n_mod += 1
+        elif in1:
+            print(f"  {label1+' ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(nl1[fname]))})")
+            n_c1 += 1
+        else:
+            print(f"  {label2+' ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(nl2[fname]))})")
+            n_c2 += 1
+    print()
+    return n_mod, n_c1, n_c2, n_eq
+
+
 def cmd_summary(args, paths):
     caseroot = paths.get('caseroot', '') or sys.exit(
         "ERROR: paths.caseroot not set in config_registry.yaml")
     case1_sm = _sm_root(caseroot, args.case)
 
     if args.case2:
-        case2_sm = _sm_root(caseroot, args.case2)
-        files1   = walk_sourcemods(case1_sm)
-        files2   = walk_sourcemods(case2_sm)
+        case2_sm  = _sm_root(caseroot, args.case2)
+        case1_dir = _case_dir(caseroot, args.case)
+        case2_dir = _case_dir(caseroot, args.case2)
+        files1    = walk_sourcemods(case1_sm)
+        files2    = walk_sourcemods(case2_sm)
+        nl1       = walk_namelists(case1_dir)
+        nl2       = walk_namelists(case2_dir)
         print(f"Comparing: {args.case}  vs  {args.case2}\n")
         n_mod = n_c1 = n_c2 = n_eq = 0
         for comp in COMPONENTS:
@@ -164,8 +223,11 @@ def cmd_summary(args, paths):
                 else:
                     print(f"  {'CASE2 ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(f2[fname]))})"); n_c2 += 1
             print()
+        print("namelists")
+        nl_mod, nl_c1, nl_c2, nl_eq = _print_namelist_section(nl1, nl2, 'CASE1', 'CASE2', args.verbose)
+        n_mod += nl_mod; n_c1 += nl_c1; n_c2 += nl_c2; n_eq += nl_eq
         if n_mod == 0 and n_c1 == 0 and n_c2 == 0:
-            print("Summary: all identical  →  SourceMods are equivalent")
+            print("Summary: all identical  →  SourceMods and namelists are equivalent")
         else:
             parts = ([f"{n_mod} modified"]   if n_mod else []) + \
                     ([f"{n_c1} case1-only"]  if n_c1  else []) + \
@@ -185,6 +247,8 @@ def cmd_summary(args, paths):
                                    config_type, 'SourceMods')
         if not os.path.isdir(exocam_sm):
             sys.exit(f"ERROR: ExoCAM reference SourceMods not found: {exocam_sm}")
+        case1_dir = _case_dir(caseroot, args.case)
+        nl1       = walk_namelists(case1_dir)
         files = walk_sourcemods(case1_sm)
         print(f"Comparing: {args.case}  vs  ExoCAM source")
         print(f"Excluding: exoplanet_mod.F90  (captured by scan.py)\n")
@@ -220,6 +284,24 @@ def cmd_summary(args, paths):
                 else:
                     print(f"  {'CASE ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(abs_path))})"); n_co += 1
             print()
+        nl_ref_dir = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
+                                   config_type, 'namelist_files')
+        print("namelists")
+        if nl1:
+            for fname, abs_path in sorted(nl1.items()):
+                ref_path = os.path.join(nl_ref_dir, fname)
+                if os.path.isfile(ref_path):
+                    if open(abs_path, 'rb').read() == open(ref_path, 'rb').read():
+                        if args.verbose:
+                            print(f"  {'IDENTICAL':<14}  {fname}")
+                    else:
+                        ad, rm = diff_counts(abs_path, ref_path)
+                        print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)")
+                else:
+                    print(f"  {'CASE ONLY':<14}  {fname:<40}  ({fmt_size(os.path.getsize(abs_path))})")
+        else:
+            print("  (no namelist files found)")
+        print()
         if n_mod == 0 and n_rt_mod == 0 and n_co == 0:
             print("Summary: all identical  →  safe to retire without preserving SourceMods")
         else:
@@ -235,17 +317,25 @@ def cmd_summary(args, paths):
 def cmd_full(args, paths):
     caseroot = paths.get('caseroot', '') or sys.exit(
         "ERROR: paths.caseroot not set in config_registry.yaml")
-    case1_sm = _sm_root(caseroot, args.case)
-    files1   = walk_sourcemods(case1_sm)
-    target   = args.full
-    path1    = next((files1[c][target] for c in COMPONENTS if target in files1[c]), None)
+    case1_sm  = _sm_root(caseroot, args.case)
+    case1_dir = _case_dir(caseroot, args.case)
+    files1    = walk_sourcemods(case1_sm)
+    nl1       = walk_namelists(case1_dir)
+    target    = args.full
+    path1     = next((files1[c][target] for c in COMPONENTS if target in files1[c]), None)
+    if path1 is None:
+        path1 = nl1.get(target)
 
     if args.case2:
-        case2_sm = _sm_root(caseroot, args.case2)
-        files2   = walk_sourcemods(case2_sm)
-        path2    = next((files2[c][target] for c in COMPONENTS if target in files2[c]), None)
+        case2_sm  = _sm_root(caseroot, args.case2)
+        case2_dir = _case_dir(caseroot, args.case2)
+        files2    = walk_sourcemods(case2_sm)
+        nl2       = walk_namelists(case2_dir)
+        path2     = next((files2[c][target] for c in COMPONENTS if target in files2[c]), None)
+        if path2 is None:
+            path2 = nl2.get(target)
         if path1 is None and path2 is None:
-            sys.exit(f"ERROR: '{target}' not found in SourceMods of "
+            sys.exit(f"ERROR: '{target}' not found in SourceMods or namelists of "
                      f"'{args.case}' or '{args.case2}'")
         if path1 and path2:
             r = subprocess.run(['diff', path1, path2])
@@ -269,7 +359,20 @@ def cmd_full(args, paths):
         exocam_sm   = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
                                    config_type, 'SourceMods')
         if path1 is None:
-            sys.exit(f"ERROR: '{target}' not found in SourceMods of case '{args.case}'")
+            sys.exit(f"ERROR: '{target}' not found in SourceMods or namelists of case '{args.case}'")
+        if target in nl1:
+            nl_ref_dir = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
+                                      config_type, 'namelist_files')
+            ref_path = os.path.join(nl_ref_dir, target)
+            if os.path.isfile(ref_path):
+                r = subprocess.run(['diff', ref_path, path1])
+                if r.returncode == 0:
+                    print("(files are identical)")
+            else:
+                print(f"CASE ONLY — {target} has no ExoCAM namelist reference\n  {path1}\n")
+                sys.stdout.write(open(path1).read())
+            print(f"\n(registry: {cases_yaml})")
+            return
         found_comp = next(c for c in COMPONENTS if target in files1[c])
         exo_path   = find_exocam_counterpart(target, found_comp, exocam_sm)
         if exo_path is not None:
