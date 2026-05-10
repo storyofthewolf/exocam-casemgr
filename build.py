@@ -670,6 +670,15 @@ def main():
                         help='Execute generated scripts via bash (default is dry-run)')
     args = parser.parse_args()
 
+    if not os.path.exists(args.matrix):
+        blueprints_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'blueprints')
+        candidate = os.path.join(blueprints_dir, args.matrix)
+        if os.path.exists(candidate):
+            args.matrix = candidate
+        else:
+            sys.exit(f"matrix file not found: {args.matrix}\n"
+                     f"  also checked: {candidate}")
+
     matrix = load_yaml(args.matrix)
 
     registry_path = matrix.get('config_registry')
