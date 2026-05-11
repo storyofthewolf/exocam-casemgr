@@ -432,11 +432,11 @@ def _build_usr_src_fix_block():
     into the clone source's SourceMods and create_clone inherited that -usr_src
     path verbatim.
 
-    xmlquery --value returns the bare value string with no 'key = ' prefix,
-    avoiding the parse error that occurs when the full xmlquery output is passed
-    to xmlchange. The new path is assembled in a shell variable (NEW_CAM_OPTS)
-    so that xmlchange receives a plain expanded string rather than shell variable
-    references, which xmlchange does not expand.
+    xmlquery returns 'env_build.xml: CAM_CONFIG_OPTS = <value>'; we strip the
+    prefix with sed 's/^[^=]*= //' to get the bare value. The new path is
+    assembled into NEW_USR_SRC before being substituted into NEW_CAM_OPTS via
+    sed with double quotes, so the shell expands ${NEW_USR_SRC} at runtime
+    before sed sees it. xmlchange then receives a fully-expanded plain string.
     """
     return [
         "",
@@ -444,11 +444,15 @@ def _build_usr_src_fix_block():
         "# Fix stale -usr_src in CAM_CONFIG_OPTS (custom RT clone)",
         "# create_clone inherited -usr_src pointing to the source case;",
         "# update it to point to this case's own SourceMods directory.",
+        "# xmlquery output format: 'env_build.xml: CAM_CONFIG_OPTS = <value>'",
+        "# We strip everything up to and including the first ' = ' to get the",
+        "# bare value, then use sed to swap the -usr_src path.",
         "# -----------------------------------------------------------",
-        "OLD_USR_SRC=$(./xmlquery --value CAM_CONFIG_OPTS | grep -oP '(?<=-usr_src )\\S+')",
-        "USR_SRC_DIR=$(basename ${OLD_USR_SRC})",
+        "OLD_CAM_OPTS=$(./xmlquery CAM_CONFIG_OPTS | sed 's/^[^=]*= //')",
+        "OLD_USR_SRC=$(echo \"${OLD_CAM_OPTS}\" | grep -oP '(?<=-usr_src )\\S+')",
+        "USR_SRC_DIR=$(basename \"${OLD_USR_SRC}\")",
         "NEW_USR_SRC=${CASEROOT}/${CASE}/SourceMods/src.cam/${USR_SRC_DIR}",
-        "NEW_CAM_OPTS=$(./xmlquery --value CAM_CONFIG_OPTS | sed \"s|-usr_src [^ ]*|-usr_src ${NEW_USR_SRC}|\")",
+        "NEW_CAM_OPTS=$(echo \"${OLD_CAM_OPTS}\" | sed \"s|-usr_src [^ ]*|-usr_src ${NEW_USR_SRC}|\")",
         "./xmlchange CAM_CONFIG_OPTS=\"${NEW_CAM_OPTS}\"",
     ]
 
