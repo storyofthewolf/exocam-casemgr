@@ -260,7 +260,7 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty. Uses `shutil.move` — no intermediate copy, peak disk usage stays flat.
 - `cmd_retire_case` — retires a case from cesm_scratch (`retire` subcommand). Three tiers: (1) **bare retire** (no flags) — writes `case.yaml` tombstone to long-term then deletes everything; (2) **`--keep-*`** — `case.yaml` is written implicitly plus selected artifacts (`--keep-config` copies SourceMods/, user_*, env_*; `--keep-years N` moves N most recent hist years; `--keep-restarts` moves most recent restart); `--keep-*` flags are freely combinable; (3) **`--purge`** — complete erasure, nothing is written to long-term, prominent warnings shown in both preview and at the confirmation prompt; mutually exclusive with all `--keep-*` flags. Avg files (filenames containing `"avg"`) in any `archive/<case>/<model>/hist/` are always moved to long-term unconditionally (except under `--purge`). `case.yaml` is sourced from a live scan, then `--registry` (default: `active.yaml`), then a minimal stub. All `--execute` invocations require a yes/no confirmation per case. `--prefix STR` matches cases by prefix and shows a single batch confirmation.
-- `cmd_avg_hist` — `avg` subcommand. Inspects or computes time-averaged history files. `--info` prints file count, year span, and total size per model (non-avg files only; avg-file presence noted), followed by a `rest:` row showing restart folder count and total size from `restart_sets()`. `--last N` selects the N most recent model years via `_hist_keep_years_filter`, excludes avg files from inputs, and runs `ncra` to produce `<case>.<stem>.h0.avg_last{N}yr.nc` in the same hist directory. Default models: `atm`, `lnd`, `ice`. `--prefix STR` selects cases by prefix. `--execute` required to actually run ncra.
+- `cmd_avg_hist` — `avg` subcommand. Inspects or computes time-averaged history files. `--info` prints file count, year span, and total size per model (non-avg files only; avg-file presence noted), followed by a `rest:` row showing restart folder count and total size from `restart_sets()`. `--last N` selects the N most recent model years via `_hist_keep_years_filter`, excludes avg files from inputs, and runs `ncra` to produce `<case>.<stem>.h0.avg_last{N}yr.nc` in the same hist directory. Default models: `atm`, `lnd`, `ice`. `--prefix STR` selects cases by prefix. `--execute` required to actually run ncra. **Note:** `avg` is a candidate to move to a hypothetical `runmgr.py` — it invokes external science tools (ncra) rather than managing disk layout, which is a different concern from the purge/retire/report operations in `manage.py`.
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.
 - `HIST_MODELS` — `ARCHIVE_MODELS` minus `'rest'`; the components with `hist/` and `logs/` subdirs.
@@ -293,9 +293,9 @@ Holds:
 - `ic_files` — IC file lookup table keyed by `config_type → pressure_str → nlev`. Filename only — the full path is prepended as `{exocam_root}/cesm1.2.1/initial_files/<config_type>/`.
 - `solar_file_stems` — filename stem expected per `exort_pkg`; fallback for when NetCDF read is unavailable.
 
-### `run_builds.sh` — batch runner
+### `run_builds.sh` — legacy batch runner
 
-Loops over all `*_build.sh` files in a directory, runs each with `bash`, reports pass/fail per case, and prints a summary. A failed build does not abort remaining cases.
+Loops over all `*_build.sh` files in a directory, runs each with `bash`, reports pass/fail per case, and prints a summary. A failed build does not abort remaining cases. **Superseded by `build.py make`**, which provides the same functionality with prefix filtering, structured log files in `logs/`, and a confirmation prompt. `run_builds.sh` is retained for backward compatibility.
 
 ---
 
@@ -425,7 +425,7 @@ All three are optional nested dicts in the experiment matrix spec. `nl_cam_param
 - `parse_utils.py` must remain free of filesystem side effects. It reads files via paths passed to it; it never discovers or writes files itself.
 - All destructive `manage.py` operations require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations. Cases must be named explicitly.
-- `build.py` generates scripts but never executes them unless `--execute` is passed.
+- `build.py generate` generates scripts but never executes them. Use `build.py make` to run them (with confirmation prompt).
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run (live rows + archive rows, live takes precedence on name collision). It does not merge with any pre-existing registry content.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
 
@@ -462,3 +462,38 @@ valid directory under `{exort_root}/3dmodels/`.
 
 Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml` to
 support non-standard package directory paths without code changes.
+
+### `build.py` module docstring is stale
+
+The module-level docstring at the top of `build.py` still references the old
+`python build.py experiment_matrix.yaml [--outdir scripts/] [--execute]` CLI.
+The actual CLI is now subcommand-based (`generate` / `make`). The docstring
+should be updated to match.
+
+---
+
+## Session handoff — 2026-05-11
+
+### Work completed this session
+
+**`build.py`:**
+- Refactored CLI to argparse subcommands: `generate` (script generation) and `make` (execution).
+- `--scripts-dir DIR` replaces `--outdir`; top-level flag applies to both subcommands.
+- `generate --list` lists blueprints. `make --prefix PREFIX` filters scripts by case-insensitive prefix.
+- `make` globs `*_build.sh`, prompts for confirmation, runs each, captures logs to `logs/<case>.build.log`, prints per-case OK/FAILED, exits non-zero on any failure.
+- Added `_build_nl_upsert_block` / `_nl_upsert_lines`: clone-mode namelist upsert (grep/sed/echo) to avoid duplicate entries when `create_clone` copies `user_nl_cam` verbatim.
+- Added `nl_cam_params` as a third namelist group alongside `carma_params` / `volc_params` (append in newcase, upsert in clone).
+- Added `_build_usr_src_fix_block`: emitted in clone scripts when `exort_pkg` ends with `*`; reads `-usr_src` via `xmlquery` at shell runtime and rewrites `CAM_CONFIG_OPTS` to point to the new case's own `SourceMods/src.cam/`.
+- Fixed `_build_run_script_block`: both `--account` and `-J` now use upsert idiom (grep/sed/echo) so directives are written even when absent from the CESM-generated run script.
+
+**`manage.py`:**
+- Refactored `retire` subcommand to three tiers: bare (tombstone only), `--keep-*` (case.yaml implicit + artifacts), `--purge` (complete erasure, nothing written).
+- Bare retire is now valid with no flags required.
+- `--purge` emits prominent `*** WARNING: COMPLETE ERASURE ***` in both preview and at confirmation.
+- Avg file preservation skipped under `--purge`.
+- All `--execute` retire paths now require a yes/no confirmation (bare retire previously had none).
+
+### Good starting points for next session
+- Update the stale module docstring in `build.py` (see Known Limitations above).
+- `nl_cam_params` is recognized by `build.py` but not yet scanned into the registry by `scan.py` — if scan support is desired, add it to `_REGISTRY_GROUPS` and `inspect_case()`.
+- Consider whether `manage.py avg` should move to a new `runmgr.py` (noted in `cmd_avg_hist` entry above).

@@ -25,7 +25,7 @@ Python 3.8+.
 | `manage.py` | Data management — disk usage reporting, purging, and moving data |
 | `query.py` | Registry search and experiment matrix export |
 | `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
-| `run_builds.sh` | Batch runner for all `*_build.sh` scripts in a directory |
+| `run_builds.sh` | Legacy batch runner for `*_build.sh` scripts (superseded by `build.py make`) |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
 | `experiment_matrix.yaml.example` | Annotated template for writing experiment matrices |
 
@@ -76,39 +76,44 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 ### 3. Generate build scripts
 
 ```bash
-python build.py my_runs.yaml --outdir scripts/
+python build.py generate my_runs.yaml
+```
+
+Scripts are written to `build_scripts/` by default. Use `--scripts-dir` to change the output directory:
+
+```bash
+python build.py --scripts-dir scripts/ generate my_runs.yaml
 ```
 
 This validates every case and writes one self-contained script per case:
-- `scripts/<case>_build.sh` — complete CESM `create_newcase` + `cesm_setup` + build script with the rendered `exoplanet_mod.F90` embedded inline as a heredoc (no staging directory needed)
+- `build_scripts/<case>_build.sh` — complete CESM `create_newcase` + `cesm_setup` + build script with the rendered `exoplanet_mod.F90` embedded inline as a heredoc (no staging directory needed)
 
 The build script handles all config-specific file path updates:
-- All configs: `user_nl_cam` (ncdata via `sed`; carma/volc params appended via `echo >>`)
+- All configs: `user_nl_cam` (ncdata via `sed`; carma/volc/nl_cam params written via append or upsert)
 - All configs: `${CASE}.run` SBATCH directives (`--account`, `-J`) patched after `cesm_setup`
 - Land/mixed: `user_nl_clm` (finidat, fsurdat)
 - Aqua/mixed: `user_docn.streams.txt.som` (pop_frc file path and name)
 
-**Review the generated scripts before running.** To also execute the builds immediately:
+**Review the generated scripts before running.** To list available blueprint matrices:
 
 ```bash
-python build.py my_runs.yaml --outdir scripts/ --execute
+python build.py generate --list
 ```
 
-Build output is tee'd to `scripts/<case>.build.log`. Job submission (`.run`) is always manual.
-
-To run a single build script:
+To run all generated scripts (prompts for confirmation; logs written to `build_scripts/logs/`):
 
 ```bash
-bash scripts/my_case_build.sh
+python build.py make
+python build.py make --prefix ExoCAM_thai   # filter by case name prefix
 ```
 
-To run all build scripts in a directory in sequence:
+To run a single build script directly:
 
 ```bash
-bash run_builds.sh scripts/
+bash build_scripts/my_case_build.sh
 ```
 
-`run_builds.sh` reports pass/fail for each case and prints a summary at the end. A failed build does not abort the remaining cases.
+Job submission (`.run`) is always manual.
 
 #### Clone mode
 
@@ -268,39 +273,35 @@ All destructive subcommands are **non-destructive by default**. `--execute` is r
 | `purge-logs` | Delete log files from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`. Both locations safe to purge after a run. `--no-archive-logs` / `--no-case-logs` skip one side. |
 | `move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
 | `avg` | Inspect or compute time-averaged history files using ncra (NCO). |
-| `retire` | Retire a completed case. Requires an explicit intent flag (see below). |
+| `retire` | Retire a completed case (three tiers — see below). |
 
 #### Retiring a case with `retire`
 
-`retire` is the end-of-life command for a case. It requires at least one intent flag so the operation is always deliberate. Avg files (filenames containing `"avg"`) are always moved to long-term unconditionally.
+`retire` is the end-of-life command for a case. Three tiers of increasing preservation:
 
-| Flag | What it does |
-|---|---|
-| `--keep-config` | Copy SourceMods/, user_*, and env_* to long-term, then delete everything from cesm_scratch. Combinable with `--keep-years` and `--keep-restarts`. |
-| `--keep-years N` | Move hist files from the N most recent model years to long-term, then delete everything from cesm_scratch. Combinable with `--keep-config` and `--keep-restarts`. |
-| `--keep-restarts` | Move the most recent restart set to long-term, then delete everything from cesm_scratch. Combinable with `--keep-config` and `--keep-years`. |
-| `--purge` | Write case.yaml only to long-term, then delete everything from cesm_scratch. Mutually exclusive with all `--keep-*` flags. |
+| Tier | Invocation | What is written to long-term |
+|---|---|---|
+| Tombstone | bare (no flags) | `case.yaml` only |
+| Preserve artifacts | `--keep-*` flags | `case.yaml` (implicit) + selected files |
+| Complete erasure | `--purge` | **Nothing** — no record written |
 
-`--keep-config`, `--keep-years`, and `--keep-restarts` may be freely combined. `--purge` is mutually exclusive with all three.
+`--keep-config`, `--keep-years N`, and `--keep-restarts` may be freely combined. `--purge` is mutually exclusive with all three. Avg files (filenames containing `"avg"`) are always moved to long-term unconditionally (except under `--purge`). All `retire --execute` invocations prompt for confirmation.
 
 ```bash
 # Preview (no --execute — always safe to run first)
 python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts
 
-# Save config files only, delete everything from cesm_scratch
+# Tier 1: tombstone only (case.yaml written, everything deleted)
+python manage.py retire my_case --execute
+
+# Tier 2: save config files only
 python manage.py retire my_case --keep-config --execute
 
-# Save config files, 1 year of history, and most recent restart
+# Tier 2: save config files, 1 year of history, and most recent restart
 python manage.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
 
-# Keep last 5 years of history + most recent restart, delete the rest
-python manage.py retire my_case --keep-years 5 --keep-restarts --execute
-
-# Delete everything (case has no long-term value)
+# Tier 3: complete erasure (prominent warning shown before confirmation)
 python manage.py retire my_case --purge --execute
-
-# With registry pre-flight check
-python manage.py retire my_case --purge --registry active.yaml --execute
 ```
 
 Run any subcommand with `--help` for full options.
