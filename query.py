@@ -388,10 +388,11 @@ def cmd_export(args, rows, config_registry_path):
         print("  (output above printed to stdout — use -o FILE to write blueprint)",
               file=sys.stderr)
 
-    # Warn about exort_pkg '*' suffix after output so the warning is visible at the end
+    # Warn about exort_pkg '*' suffix after output so the warning is visible at the end.
+    # Suppressed in clone mode — RT source is inherited from the clone source, not via -usr_src.
     for name, row in matched.items():
         pkg = row.get('exort_pkg', '') or ''
-        if pkg.endswith('*'):
+        if pkg.endswith('*') and not clone:
             print(
                 f"\nWARNING: case '{name}' has exort_pkg='{pkg}'\n"
                 f"  The '*' indicates RT source was copied into SourceMods of the originating case\n"
