@@ -464,7 +464,7 @@ def _build_branch_post_setup(spec, paths):
         "# -----------------------------------------------------------",
         "# copy restart files to rundir",
         "# -----------------------------------------------------------",
-        f"cp ${{RUN_REFDIR}}/* {rundir}/${{CASE}}/",
+        f"cp ${{RUN_REFDIR}}/* {rundir}/${{CASE}}/run",
         "",
         "# -----------------------------------------------------------",
         "# apply branch/hybrid configuration",
