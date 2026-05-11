@@ -100,16 +100,19 @@ python manage.py purge-hist my_case --models atm --execute
 python manage.py purge-logs my_case --execute
 python manage.py move-hist my_case --models atm --execute
 
-# Retire a case — must state intent explicitly with one of these flags:
-#   --purge            write case.yaml only to long-term, then delete everything
-#   --keep-config      copy SourceMods/, user_*, env_* to long-term, then delete everything
-#   --keep-years N     move N most recent hist years to long-term, then delete everything
-#   --keep-restarts    move most recent restart to long-term, then delete everything
-# --keep-config, --keep-years, --keep-restarts are freely combinable; --purge is mutually exclusive with all
+# Retire a case — three tiers:
+#   bare retire        write case.yaml tombstone only, then delete everything
+#   --keep-*           case.yaml written implicitly + selected artifacts preserved
+#   --purge            COMPLETE ERASURE: no case.yaml, no config, nothing written to long-term
+#
+# --keep-config, --keep-years, --keep-restarts are freely combinable
+# --purge is mutually exclusive with all --keep-* flags
 # avg files (filenames containing "avg") are always moved to long-term unconditionally
-python manage.py retire my_case --purge --execute
+# All retire invocations require --execute and prompt for yes/no confirmation
+python manage.py retire my_case --execute                                         # tombstone only
 python manage.py retire my_case --keep-config --execute
 python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
+python manage.py retire my_case --purge --execute                                 # complete erasure
 
 # --- TIME AVERAGING ---
 
@@ -256,7 +259,7 @@ Discovers cases by scanning `caseroot`, `rundir`, and `archive` directories on d
 - `cmd_purge_hist` — deletes `archive/<case>/<model>/hist/` contents. `--models` restricts components. Requires `--keep-years N` or `--models` to prevent accidental total deletion.
 - `cmd_purge_logs` — deletes log files from both `archive/<case>/<model>/logs/` and `$CASE/logs/`. `--no-archive-logs`/`--no-case-logs` skip one side. `--models` restricts archive-side components.
 - `cmd_move_hist` — moves hist files to `long_term/<case>/<model>/hist/`, leaving source dir empty. Uses `shutil.move` — no intermediate copy, peak disk usage stays flat.
-- `cmd_retire_case` — retires a case from cesm_scratch (`retire` subcommand). Requires at least one intent flag: `--purge` (write `case.yaml` to long-term only, then delete everything), `--keep-config` (copy SourceMods/, user_*, env_* to long-term, then delete everything), `--keep-years N` (move N most recent hist years to long-term, then delete), or `--keep-restarts` (move most recent restart to long-term, then delete). `--keep-config`, `--keep-years`, and `--keep-restarts` are freely combinable; `--purge` is mutually exclusive with all three. Avg files (filenames containing `"avg"`) in any `archive/<case>/<model>/hist/` are always moved to long-term unconditionally. `case.yaml` is always written from `--registry` (default: `active.yaml`); falls back to a minimal stub if the case is not found in the registry. `--prefix STR` matches cases by case-insensitive prefix and shows a single batch confirmation instead of per-case prompts.
+- `cmd_retire_case` — retires a case from cesm_scratch (`retire` subcommand). Three tiers: (1) **bare retire** (no flags) — writes `case.yaml` tombstone to long-term then deletes everything; (2) **`--keep-*`** — `case.yaml` is written implicitly plus selected artifacts (`--keep-config` copies SourceMods/, user_*, env_*; `--keep-years N` moves N most recent hist years; `--keep-restarts` moves most recent restart); `--keep-*` flags are freely combinable; (3) **`--purge`** — complete erasure, nothing is written to long-term, prominent warnings shown in both preview and at the confirmation prompt; mutually exclusive with all `--keep-*` flags. Avg files (filenames containing `"avg"`) in any `archive/<case>/<model>/hist/` are always moved to long-term unconditionally (except under `--purge`). `case.yaml` is sourced from a live scan, then `--registry` (default: `active.yaml`), then a minimal stub. All `--execute` invocations require a yes/no confirmation per case. `--prefix STR` matches cases by prefix and shows a single batch confirmation.
 - `cmd_avg_hist` — `avg` subcommand. Inspects or computes time-averaged history files. `--info` prints file count, year span, and total size per model (non-avg files only; avg-file presence noted), followed by a `rest:` row showing restart folder count and total size from `restart_sets()`. `--last N` selects the N most recent model years via `_hist_keep_years_filter`, excludes avg files from inputs, and runs `ncra` to produce `<case>.<stem>.h0.avg_last{N}yr.nc` in the same hist directory. Default models: `atm`, `lnd`, `ice`. `--prefix STR` selects cases by prefix. `--execute` required to actually run ncra.
 - `_require_cases(all_cases, args)` — validates that explicit case names were provided; exits with an error if none given. No `--all` flag — bulk operations must list cases explicitly.
 - `ARCHIVE_MODELS` — `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`.

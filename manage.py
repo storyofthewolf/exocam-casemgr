@@ -28,8 +28,11 @@ SUBCOMMANDS
   purge-logs          Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
   move-hist           Move history files to long-term storage
   avg                 Inspect or compute time-averaged history files using ncra
-  retire              Retire a case: copy config/data to long-term, then delete
-                      from cesm_scratch
+  retire              Retire a case to long-term storage, then delete from
+                      cesm_scratch. Three tiers:
+                        bare        write case.yaml tombstone only
+                        --keep-*    case.yaml + selected artifacts
+                        --purge     COMPLETE ERASURE (no record written)
 
 SAFETY
 ------
@@ -40,11 +43,9 @@ SAFETY
   purge-hist additionally requires --keep-years N or --models to prevent
   accidental deletion of all history files.
 
-  retire requires one of --purge, --keep-years N, or --keep-restarts to
-  force stating intent explicitly. --purge saves only case.yaml and deletes
-  everything; without --purge, SourceMods, namelists, and env files are also
-  copied to long-term. --purge is mutually exclusive with --keep-years and
-  --keep-restarts.
+  retire --purge is complete erasure and writes nothing to long-term.
+  Prominent warnings are shown in both preview and at the confirmation prompt.
+  --purge is mutually exclusive with all --keep-* flags.
 
   report is read-only and safe to run bare — no case names means all cases.
 
@@ -906,37 +907,30 @@ def _execute_copy_case_config(actions):
 
 def cmd_retire_case(args, paths):
     """
-    Retire one or more cases from cesm_scratch. At least one intent flag required.
+    Retire one or more cases from cesm_scratch. Three retirement tiers:
 
-    Intent flags (at least one required):
+    Tier 1 — bare retire (no flags):
+      Write case.yaml tombstone to long-term, then delete everything.
+      Use for completed cases where no files need to be preserved.
 
-      --keep-config      Copy SourceMods/, user_*, and env_* to long-term,
-                         then delete caseroot, rundir, and archive.
-                         Combinable with --keep-years and --keep-restarts.
+    Tier 2 — --keep-* flags (one or more):
+      case.yaml is always written implicitly. Additionally preserve:
+        --keep-config      Copy SourceMods/, user_*, and env_* to long-term.
+        --keep-years N     Move hist files from the N most recent model years.
+        --keep-restarts    Move the most recent restart set.
+      --keep-* flags are freely combinable. Then delete everything from cesm_scratch.
 
-      --keep-years N     Move hist files from the N most recent model years
-                         to long-term, then delete caseroot, rundir, and archive.
-                         Combinable with --keep-config and --keep-restarts.
+    Tier 3 — --purge:
+      COMPLETE ERASURE. No case.yaml, no config, no data — nothing is preserved
+      in long-term storage. Use only when you are certain no record is needed.
+      Mutually exclusive with all --keep-* flags.
 
-      --keep-restarts    Move the most recent restart set to long-term, then
-                         delete caseroot, rundir, and archive.
-                         Combinable with --keep-config and --keep-years.
-
-      --purge            Write case.yaml to long-term only, then delete
-                         caseroot, rundir, and archive entirely.
-                         Mutually exclusive with all --keep-* flags.
-
-    --keep-config, --keep-years, and --keep-restarts may be freely combined.
-    --purge is mutually exclusive with all three.
-
-    In all modes, case.yaml is written to long_term/<case>/case.yaml. If the
-    case is found in --registry (default: active.yaml), the full registry entry
-    is written; otherwise a minimal stub (case_name, retired_date) is written
-    and a warning is printed.
+    In all modes except --purge, case.yaml is written to long_term/<case>/case.yaml.
+    If the case is found in --registry (default: active.yaml), the full registry
+    entry is written; otherwise a minimal stub (case_name, retired_date) is written.
 
     Avg files (filenames containing "avg") found in any archive/<case>/<model>/hist/
-    are always moved to long-term storage regardless of which intent flags are used.
-    This preserves previously computed time averages unconditionally.
+    are always moved to long-term storage regardless of which flags are used.
 
     Long-term layout:
       long_term/<case>/case.yaml
@@ -949,21 +943,23 @@ def cmd_retire_case(args, paths):
     SAFEGUARDS:
       - --execute required; default is preview only.
       - Explicit case names required; no --all flag.
-      - At least one intent flag required.
-      - Each case requires individual yes/no confirmation.
+      - Each case requires individual yes/no confirmation before execution.
       - When --prefix is used, a single batch yes/no confirmation is shown
         for all matched cases before any action is taken.
 
     Examples:
+      retire mycase --execute
+          Write case.yaml tombstone only; delete everything from cesm_scratch.
+
       retire mycase --keep-config --execute
-          Save SourceMods/, user_*, and env_* only; delete everything from cesm_scratch.
+          Save SourceMods/, user_*, and env_* (plus case.yaml); delete everything.
 
       retire mycase --keep-config --keep-years 1 --keep-restarts --execute
           Save config files, 1 year of history, and most recent restart;
           delete everything else from cesm_scratch.
 
       retire mycase --purge --execute
-          Write case.yaml only; delete everything from cesm_scratch.
+          COMPLETE ERASURE: delete everything, write nothing to long-term.
 
       retire --prefix hazyCHAMPS_case23 --purge --execute
           Retire all cases whose name starts with hazyCHAMPS_case23.
@@ -987,9 +983,6 @@ def cmd_retire_case(args, paths):
     if args.purge and has_keep:
         sys.exit("ERROR: --purge is mutually exclusive with --keep-config, "
                  "--keep-years, and --keep-restarts.")
-    if not args.purge and not has_keep:
-        sys.exit("ERROR: retire-case requires at least one of --purge, --keep-config, "
-                 "--keep-years N, or --keep-restarts. State your intent explicitly.")
 
     cases_requested = args.cases
     prefix_filter = getattr(args, 'prefix', None)
@@ -1038,11 +1031,18 @@ def cmd_retire_case(args, paths):
 
         # --- build plan ---
 
-        # case.yaml source tier
-        yaml_source = _scan_source(case, casedir_path, registry_path)
-        if yaml_source == 'stub':
-            print(f"  WARNING: '{case}' casedir not found and not in registry {registry_path}.")
-            print(f"           A minimal case.yaml stub will be written.")
+        if args.purge:
+            print(f"\n  *** WARNING: --purge ***")
+            print(f"  *** COMPLETE ERASURE — no case.yaml, no config, nothing will be")
+            print(f"  *** preserved in long-term storage. This is irreversible.")
+
+        # case.yaml source tier (skipped for --purge)
+        yaml_source = None
+        if not args.purge:
+            yaml_source = _scan_source(case, casedir_path, registry_path)
+            if yaml_source == 'stub':
+                print(f"  WARNING: '{case}' casedir not found and not in registry {registry_path}.")
+                print(f"           A minimal case.yaml stub will be written.")
 
         # config copy (--keep-config only)
         config_actions = []
@@ -1078,9 +1078,9 @@ def cmd_retire_case(args, paths):
                 rest_dir = os.path.join(paths.get('archive', ''), case, 'rest')
                 print(f"  WARNING: --keep-restarts specified but no restart sets found in {rest_dir}")
 
-        # avg file preservation (unconditional — move any "avg" files in hist/)
+        # avg file preservation (skipped under --purge; otherwise unconditional)
         preserve_avg = []  # (src, dst)
-        for model in HIST_MODELS:
+        for model in (HIST_MODELS if not args.purge else []):
             hist_dir = os.path.join(archive_path, model, 'hist')
             files, _ = list_files_with_size(hist_dir)
             for f in files:
@@ -1095,10 +1095,13 @@ def cmd_retire_case(args, paths):
             'live':     'live scan',
             'registry': 'registry (active.yaml)',
             'stub':     'minimal stub',
-        }[yaml_source]
+        }.get(yaml_source, '')
         print(f"\n  Total on cesm_scratch: {fmt_size(total_on_disk)}")
-        print(f"  COPY to long-term: {lt_case_dir}/case.yaml "
-              f"(source: {yaml_source_label})")
+        if args.purge:
+            print(f"  NO files will be written to long-term.")
+        else:
+            print(f"  COPY to long-term: {lt_case_dir}/case.yaml "
+                  f"(source: {yaml_source_label})")
         if config_actions:
             print(f"  COPY to long-term: SourceMods/, namelists/, env/ "
                   f"({len(config_actions)} item(s))")
@@ -1152,6 +1155,9 @@ def cmd_retire_case(args, paths):
         print(f"\n{'='*60}")
         print(f"  BATCH: {len(plans)} case(s) matched prefix '{prefix_filter}'")
         print(f"  Combined footprint: {fmt_size(combined_bytes)}")
+        if args.purge:
+            print(f"\n  *** WARNING: --purge — COMPLETE ERASURE ***")
+            print(f"  *** Nothing will be written to long-term. This is irreversible.")
         answer = input(f"\n  Confirm retire-case for ALL {len(plans)} matched case(s)? [yes/no]: ").strip().lower()
         if answer != 'yes':
             print("  Aborted.")
@@ -1171,22 +1177,26 @@ def cmd_retire_case(args, paths):
         preserve_avg   = p['preserve_avg']
 
         if not prefix_filter:
+            if args.purge:
+                print(f"\n  *** WARNING: --purge — COMPLETE ERASURE ***")
+                print(f"  *** Nothing will be written to long-term. This is irreversible.")
             answer = input(f"\n  Confirm retire-case for '{case}'? [yes/no]: ").strip().lower()
             if answer != 'yes':
                 print(f"  Skipped.")
                 continue
 
-        # Write case.yaml
-        actual_source = _write_case_yaml(case, lt_case_dir, casedir_path, registry_path)
-        actual_source_label = {
-            'live':     'live scan',
-            'registry': 'registry (active.yaml)',
-            'stub':     'minimal stub',
-        }[actual_source]
-        print(f"  Written: {lt_case_dir}/case.yaml")
-        print(f"  case.yaml written from: {actual_source_label}")
+        # Write case.yaml (skipped for --purge)
+        if not args.purge:
+            actual_source = _write_case_yaml(case, lt_case_dir, casedir_path, registry_path)
+            actual_source_label = {
+                'live':     'live scan',
+                'registry': 'registry (active.yaml)',
+                'stub':     'minimal stub',
+            }[actual_source]
+            print(f"  Written: {lt_case_dir}/case.yaml")
+            print(f"  case.yaml written from: {actual_source_label}")
 
-        # Copy config files (unless --purge)
+        # Copy config files (--keep-config only)
         if config_actions:
             print(f"  Copying SourceMods/, namelists/, env/...")
             _execute_copy_case_config(config_actions)
@@ -1516,7 +1526,7 @@ def build_parser():
     # ---- retire ----
     p_arc = sub.add_parser(
         'retire',
-        help='Retire a case: copy config/data to long-term, then delete from cesm_scratch',
+        help='Retire a case: write tombstone/data to long-term, then delete from cesm_scratch',
         description=cmd_retire_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1525,20 +1535,20 @@ def build_parser():
                        help='Case-insensitive prefix filter; retire all matched cases with a '
                             'single batch confirmation (cannot combine with explicit case names)')
     p_arc.add_argument('--purge', action='store_true',
-                       help='Write case.yaml only to long-term, then delete everything. '
-                            'Mutually exclusive with all --keep-* flags.')
+                       help='COMPLETE ERASURE: delete everything from cesm_scratch and write '
+                            'nothing to long-term. Mutually exclusive with all --keep-* flags.')
     p_arc.add_argument('--keep-config', action='store_true', dest='keep_config',
-                       help='Copy SourceMods/, user_*, and env_* to long-term, then delete '
-                            'everything from cesm_scratch. Combinable with --keep-years and '
+                       help='Copy SourceMods/, user_*, and env_* to long-term (case.yaml is '
+                            'always written implicitly). Combinable with --keep-years and '
                             '--keep-restarts.')
     p_arc.add_argument('--keep-years', type=int, metavar='N', default=None,
                        dest='keep_years',
-                       help='Move hist files from the N most recent model years to long-term, '
-                            'then delete everything. Combinable with --keep-config and '
+                       help='Move hist files from the N most recent model years to long-term '
+                            '(case.yaml always written). Combinable with --keep-config and '
                             '--keep-restarts.')
     p_arc.add_argument('--keep-restarts', action='store_true', dest='keep_restarts',
-                       help='Move the most recent restart set to long-term, then delete '
-                            'everything. Combinable with --keep-config and --keep-years.')
+                       help='Move the most recent restart set to long-term (case.yaml always '
+                            'written). Combinable with --keep-config and --keep-years.')
     p_arc.add_argument('--registry', metavar='FILE', default=None,
                        help=f'Path to active.yaml for case.yaml export '
                             f'(default: {DEFAULT_RETIRE_REGISTRY})')
