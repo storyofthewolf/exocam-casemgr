@@ -817,16 +817,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     return script_path
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Generate ExoCAM build shell scripts from experiment matrix')
-    parser.add_argument('matrix', nargs='?', help='experiment_matrix.yaml')
-    parser.add_argument('--outdir', default='build_scripts', help='Output directory for scripts (default: build_scripts/)')
-    parser.add_argument('--execute', action='store_true',
-                        help='Execute generated scripts via bash (default is dry-run)')
-    parser.add_argument('--list', action='store_true',
-                        help='List available blueprints and exit')
-    args = parser.parse_args()
-
+def cmd_generate(args):
     blueprints_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'blueprints')
 
     if args.list:
@@ -839,7 +830,7 @@ def main():
         sys.exit(0)
 
     if not args.matrix:
-        parser.error("the following arguments are required: matrix")
+        sys.exit("error: the following arguments are required: matrix")
 
     if not os.path.exists(args.matrix):
         candidate = os.path.join(blueprints_dir, args.matrix)
@@ -870,7 +861,8 @@ def main():
 
     cases = matrix.get('cases', [])
 
-    os.makedirs(args.outdir, exist_ok=True)
+    scripts_dir = args.scripts_dir
+    os.makedirs(scripts_dir, exist_ok=True)
 
     # find exoplanet_mod.F90 template from registry exocam_root
     exocam_root = paths_override.get('exocam_root') or registry.get('paths', {}).get('exocam_root', '')
@@ -935,42 +927,102 @@ def main():
 
         if is_clone:
             script_path = generate_clone_script(
-                case_name, spec, registry, ic_file, args.outdir, exoplanet_mod_content
+                case_name, spec, registry, ic_file, scripts_dir, exoplanet_mod_content
             )
         else:
             script_path = generate_shell_script(
-                case_name, spec, registry, ic_file, args.outdir, exoplanet_mod_content
+                case_name, spec, registry, ic_file, scripts_dir, exoplanet_mod_content
             )
         generated.append((case_name, script_path))
         print(f"Generated: {script_path}")
 
     print(f"\n{len(generated)} script(s) generated, {errors_total} case(s) skipped due to errors.")
 
-    if not args.execute:
-        print("\nDry-run complete. To execute a script:")
-        for name, path in generated:
-            print(f"  bash {path}")
-        return
 
-    # execute mode
-    for case_name, script_path in generated:
-        log_path = os.path.join(args.outdir, f"{case_name}.build.log")
-        print(f"\nExecuting: {script_path}")
-        print(f"  Log: {log_path}")
-        with open(log_path, 'w') as log:
-            result = subprocess.run(
-                ['bash', script_path],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True
-            )
-            log.write(result.stdout)
-            # also echo to terminal
-            for line in result.stdout.splitlines():
-                print(f"  {line}")
-        if result.returncode != 0:
-            print(f"  FAILED (exit {result.returncode}) — see {log_path}")
+def cmd_make(args):
+    import glob
+
+    scripts_dir = args.scripts_dir
+    pattern = os.path.join(scripts_dir, '*_build.sh')
+    all_scripts = sorted(glob.glob(pattern))
+
+    if args.prefix:
+        prefix_lower = args.prefix.lower()
+        all_scripts = [s for s in all_scripts
+                       if os.path.basename(s).lower().startswith(prefix_lower)]
+
+    if not all_scripts:
+        sys.exit(f"No matching *_build.sh scripts found in {scripts_dir}")
+
+    print("Scripts to run:")
+    for s in all_scripts:
+        print(f"  {os.path.basename(s)}")
+    print()
+
+    try:
+        answer = input("Run these scripts? [yes/no]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit("Aborted.")
+    if answer not in ('yes', 'y'):
+        sys.exit("Aborted.")
+
+    logs_dir = os.path.join(scripts_dir, 'logs')
+    os.makedirs(logs_dir, exist_ok=True)
+
+    passed = []
+    failed = []
+
+    for script_path in all_scripts:
+        basename = os.path.basename(script_path)
+        # strip _build.sh suffix to get case name
+        case_name = basename[:-len('_build.sh')]
+        log_path = os.path.join(logs_dir, f"{case_name}.build.log")
+        print(f"Building: {case_name} ... ", end='', flush=True)
+        result = subprocess.run(
+            ['bash', script_path],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True
+        )
+        with open(log_path, 'w') as f:
+            f.write(result.stdout)
+        if result.returncode == 0:
+            print("OK")
+            passed.append(case_name)
         else:
-            print(f"  OK")
+            print(f"FAILED (see {log_path})")
+            failed.append(case_name)
+
+    print(f"\n{len(passed)} passed, {len(failed)} failed.")
+    if failed:
+        for name in failed:
+            print(f"  FAILED: {name}")
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='ExoCAM build script generator and runner')
+    parser.add_argument('--scripts-dir', default='build_scripts',
+                        metavar='DIR',
+                        help='Directory for generated scripts and logs (default: build_scripts/)')
+    sub = parser.add_subparsers(dest='command', metavar='COMMAND')
+    sub.required = True
+
+    p_gen = sub.add_parser('generate', help='Generate build scripts from an experiment matrix')
+    p_gen.add_argument('matrix', nargs='?', help='experiment_matrix.yaml')
+    p_gen.add_argument('--list', action='store_true',
+                       help='List available blueprints and exit')
+
+    p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
+    p_make.add_argument('--prefix', metavar='PREFIX',
+                        help='Only run scripts whose filename starts with PREFIX (case-insensitive)')
+
+    args = parser.parse_args()
+
+    if args.command == 'generate':
+        cmd_generate(args)
+    elif args.command == 'make':
+        cmd_make(args)
 
 
 if __name__ == '__main__':

@@ -13,17 +13,24 @@ The target runtime environment is NASA Discover (SLURM HPC). Build scripts are g
 ```bash
 # --- SETUP: building new cases ---
 
-# Generate build scripts (preview only — no execution)
-python build.py experiment_matrix.yaml --outdir scripts/
+# Generate build scripts into build_scripts/ (default scripts dir)
+python build.py generate experiment_matrix.yaml
 
-# Generate AND execute builds
-python build.py experiment_matrix.yaml --outdir scripts/ --execute
+# Generate into a custom scripts dir
+python build.py --scripts-dir scripts/ generate experiment_matrix.yaml
 
-# Run a single generated build script
-bash scripts/my_case_build.sh
+# List available blueprint matrices (blueprints/ directory)
+python build.py generate --list
 
-# Run all build scripts in a directory
-bash run_builds.sh scripts/
+# Run all generated *_build.sh scripts in scripts-dir (prompts for confirmation)
+python build.py make
+python build.py --scripts-dir scripts/ make
+
+# Run only scripts matching a prefix
+python build.py make --prefix ExoCAM_thai
+
+# Run a single generated build script directly
+bash build_scripts/my_case_build.sh
 
 # --- INSPECTION: scanning cases into a registry ---
 
