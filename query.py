@@ -25,6 +25,7 @@ Examples
 import argparse
 import datetime
 import os
+import re
 import sys
 
 import yaml
@@ -410,9 +411,24 @@ class _NoAliasDumper(yaml.Dumper):
         return True
 
 
+def _fmt_float_yaml(value):
+    """
+    Format a float so it round-trips cleanly through PyYAML without !!float tags.
+    PyYAML's plain-float resolver requires a decimal point AND a sign in the exponent
+    (e.g. '2.0e+10', not '2e10' or '2.0e10'). We use %e to guarantee both, then strip
+    trailing zeros after the decimal (keeping at least one digit).
+    Threshold: scientific notation when |v| >= 1e6 or |v| < 1e-4 (nonzero),
+    or when repr() already uses 'e' notation.
+    """
+    s = f'{value:.6e}'                            # '2.000000e+10'
+    s = re.sub(r'(\.\d*?)0+(e)', r'\1\2', s)     # '2.e+10'
+    s = re.sub(r'\.(e)', r'.0\1', s)             # '2.0e+10'
+    return s
+
+
 def _float_representer(dumper, value):
-    if 'e' in repr(value) or abs(value) >= 1e6 or (value != 0 and abs(value) < 1e-3):
-        s = f'{value:.6g}'
+    if 'e' in repr(value) or abs(value) >= 1e6 or (value != 0 and abs(value) < 1e-4):
+        s = _fmt_float_yaml(value)
     else:
         s = repr(value)
     return dumper.represent_scalar('tag:yaml.org,2002:float', s)
