@@ -254,6 +254,19 @@ def cmd_export(args, rows, config_registry_path):
             sys.exit(f"ERROR: case '{name}' not found in registry.")
         matched[name] = hits[0]
 
+    # Warn about exort_pkg values with '*' suffix (custom RT — cannot use create_newcase)
+    for name, row in matched.items():
+        pkg = row.get('exort_pkg', '') or ''
+        if pkg.endswith('*'):
+            print(
+                f"WARNING: case '{name}' has exort_pkg='{pkg}'\n"
+                f"  The '*' indicates RT source was copied into SourceMods of the originating case\n"
+                f"  rather than referenced via -usr_src. create_newcase cannot replicate this.\n"
+                f"  Use --clone against the originating case instead of exporting a newcase matrix.\n"
+                f"  The exported matrix will contain exort_pkg='{pkg}' — edit before use.",
+                file=sys.stderr,
+            )
+
     clone = args.clone
 
     # --clone is only valid against active cases

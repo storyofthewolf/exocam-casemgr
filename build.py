@@ -169,6 +169,16 @@ def validate_case(spec, registry):
                 f"exort_pkg='{exort_pkg}' (expected stem '{stem}')"
             )
 
+    # exort_pkg asterisk: custom RT copied into SourceMods — create_newcase cannot replicate
+    if spec.get('exort_pkg', '').endswith('*'):
+        pkg = spec['exort_pkg']
+        errors.append(
+            f"exort_pkg='{pkg}': the '*' suffix indicates custom RT source copied into "
+            f"SourceMods of the originating case. create_newcase cannot replicate this. "
+            f"Use clone mode (add 'clone: <source_case>' to base) or manually strip '*' "
+            f"and copy RT files into SourceMods after case creation."
+        )
+
     # branch/hybrid: run_refcase and run_refdate required
     if spec.get('run_type') in ('branch', 'hybrid'):
         for field in ('run_refcase', 'run_refdate'):
@@ -492,7 +502,15 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"ARCHIVE={paths.get('archive', 'EDIT_ME')}",
         f"LONG_TERM={paths.get('long_term', 'EDIT_ME')}",
         f"CONFIG_TYPE={config_type}",
+        f"EXORT_PKG={exort_pkg}",
         *(_branch_var_block(spec) if spec.get('run_type') in ('branch', 'hybrid') else []),
+        "",
+        "# Guard: exort_pkg with '*' suffix indicates custom RT — cannot build via create_newcase",
+        "if [[ \"$EXORT_PKG\" == *\\* ]]; then",
+        "  echo \"ERROR: EXORT_PKG='$EXORT_PKG' contains '*' — custom RT source cannot be used with create_newcase.\"",
+        "  echo \"Use clone mode or manually copy RT files into SourceMods.\"",
+        "  exit 1",
+        "fi",
         "",
         "# -----------------------------------------------------------",
         "# STEP 1: create case",
