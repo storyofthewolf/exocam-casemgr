@@ -62,6 +62,7 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 |---|---|
 | CESM config | `config_type`, `exort_pkg`, `cloud_scheme`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks` |
 | HPC batch | `account` (SLURM charge account), `job_name` (short queue label, per-case) |
+| Run type | `run_type` (`startup`/`branch`/`hybrid`), `run_refcase`, `run_refdate`, `brnch_retain_casename` |
 | Atmospheric composition | `exo_co2bar`, `exo_ch4bar`, `exo_h2bar`, `exo_o2bar`, `exo_c2h6bar`, `exo_nh3bar`, `exo_cobar`, `exo_n2bar_explicit` |
 | Stellar forcing | `exo_scon`, `exo_solar_file` |
 | Geophysical | `exo_surface_gravity`, `exo_planet_radius`, `exo_ndays`, `exo_porb`, `exo_sday`, `exo_eccen`, `exo_obliq` |
@@ -78,9 +79,8 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 python build.py my_runs.yaml --outdir scripts/
 ```
 
-This validates every case and writes one script per case:
-- `scripts/<case>_build.sh` — complete CESM `create_newcase` + `cesm_setup` + build script
-- `scripts/staging/<case>/exoplanet_mod.F90` — parameter file patched with your case values
+This validates every case and writes one self-contained script per case:
+- `scripts/<case>_build.sh` — complete CESM `create_newcase` + `cesm_setup` + build script with the rendered `exoplanet_mod.F90` embedded inline as a heredoc (no staging directory needed)
 
 The build script handles all config-specific file path updates:
 - All configs: `user_nl_cam` (ncdata via `sed`; carma/volc params appended via `echo >>`)
@@ -135,15 +135,10 @@ The generated script uses `create_clone`, inheriting SourceMods, namelists, and 
 #### Generating a clone matrix with query.py
 
 ```bash
-# Bare export (default when --clone is used) — only run config in base, stubs in cases
+# Sparse export — only run config in base, stubs in cases (scientific params inherited from clone source)
 python query.py export my_base_case -o sweep.yaml \
-    --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 \
+    --clone --stop-option nyears --stop-n 20 --rest-n 5 \
     --resubmit 4 --ntasks 126 --account s2427
-
-# Full export — all scientific parameters in base for reference
-python query.py export my_base_case -o sweep.yaml \
-    --clone my_base_case --full --stop-option nyears --stop-n 20 --rest-n 5 \
-    --resubmit 4 --ntasks 126
 ```
 
 Then add per-case entries with only the parameters that differ from the clone source.
@@ -168,9 +163,9 @@ python query.py show case_a case_b
 python query.py export case_a case_b -o sweep.yaml \
     --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126 --account s2427
 
-# Export a bare clone matrix (minimal base, stubs per case)
+# Export a sparse clone matrix (minimal base, stubs per case)
 python query.py export my_base_case -o clone_sweep.yaml \
-    --clone my_base_case --stop-option nyears --stop-n 20 --rest-n 5 \
+    --clone --stop-option nyears --stop-n 20 --rest-n 5 \
     --resubmit 4 --ntasks 126 --account s2427
 ```
 
@@ -209,6 +204,7 @@ A CASE directory is recognized by the presence of `SourceMods/src.share/exoplane
 | `user_nl_clm` | `finidat`, `fsurdat` (land/mixed only) |
 | `user_docn.streams.txt.som` | `som_pop_frc_file` (aqua/mixed only) |
 | `env_build.xml` | `nlev`, `exort_pkg`, `cloud_scheme` |
+| `env_run.xml` | `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename` |
 
 The output YAML is organized into named groups:
 

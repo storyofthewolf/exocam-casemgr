@@ -159,7 +159,7 @@ cases/ + rundir/ + archive/ on HPC
 Used by both `build.py` and `scan.py`. Must never be given filesystem side effects.
 
 - `parse_exoplanet_mod(path)` — reads Fortran parameter file → flat dict. Handles `real(r8)`, `integer`, `logical`, and `character` parameter declarations. Evaluates arithmetic expressions (e.g. `0.91*6.37122e6_R8`) and symbol-substitution expressions (e.g. `1.0 - exo_co2bar - exo_ch4bar`) using `_try_eval_expr()`, which substitutes already-resolved param values then evals in a restricted namespace. Unevaluable expressions fall back to `name_expr` raw string storage.
-- `parse_user_nl_cam(path)` — reads CESM namelist → dict. Captures `ncdata`, IC pressure/level from filename, and any `carma_*` / `volc_*` keys as nested dicts. Handles both single- and double-quoted values.
+- `parse_user_nl_cam(path)` — reads CESM namelist → dict. Captures `ncdata`, IC pressure/level from filename, and any `carma_*` / `volc_*` keys as nested dicts. Handles both single- and double-quoted values. carma/volc values are coerced via `_coerce_nl_value`: Fortran logicals (`.true.`/`.false.`) → Fortran-style strings (not Python bool, for namelist round-trip correctness); numeric strings → int or float; others remain str.
 - `parse_user_nl_clm(path)` — reads `user_nl_clm` → dict with `finidat` and `fsurdat`. Called for `cam_land_fv` and `cam_mixed_fv` only.
 - `parse_docn_som(path)` — reads `user_docn.streams.txt.som` (XML fragment, wrapped in synthetic root for ElementTree) → dict with `som_pop_frc_file`. Called for aqua and mixed configs only.
 - `parse_cam_config_opts(xmlpath)` — reads `env_build.xml` (falls back to `env_run.xml` if absent) for `-nlev`, `-usr_src` (exort_pkg), cloud scheme.
@@ -171,7 +171,7 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 ### `build.py` — validation and shell script generation
 
 - `resolve_case(base, overrides)` — merges base + per-case dict.
-- `validate_case(spec, registry)` — returns list of error strings; checks required fields, IC file availability, solar/exort consistency, synchronous rotation math. Clone cases (`clone` present) use `REQUIRED_FIELDS_CLONE` (relaxed — config fields are inherited from source case). Branch/hybrid cases must supply `run_refcase` and `run_refdate`.
+- `validate_case(spec, registry)` — returns list of error strings; checks required fields, IC file availability, solar/exort consistency, synchronous rotation math. Clone cases (`clone` present) use `REQUIRED_FIELDS_CLONE` (relaxed — config fields are inherited from source case). Branch/hybrid cases must supply `run_refcase` and `run_refdate`. `exort_pkg` ending in `'*'` is an error in newcase mode (custom RT cannot be replicated by `create_newcase`) but is allowed in clone mode (RT is inherited from the clone source).
 - `render_exoplanet_mod(template_path, spec)` — regex-patches active Fortran parameter lines for all names in `EXO_PARAMS`. When `exo_n2bar_explicit` is set, also patches the `exo_n2bar` line with the explicit numeric value (high-pressure cases); otherwise leaves the N2 expression line unchanged for the Fortran compiler to evaluate.
 - `_heredoc_exoplanet_mod(exoplanet_mod_content)` — returns shell lines that write `exoplanet_mod.F90` inline via a quoted heredoc (`<< 'EXOPLANET_MOD_EOF'`). If `exoplanet_mod_content` is `None` (template not found), emits comment lines directing manual installation instead. Quoted delimiter suppresses bash variable expansion inside the Fortran content.
 - `generate_shell_script(...)` — writes the `create_newcase` + `cesm_setup` + build script. Each script is fully self-contained: the rendered `exoplanet_mod.F90` is embedded inline via heredoc (no staging directory). Script declares `RUNDIR`, `ARCHIVE`, and `LONG_TERM` shell variables from registry paths. Config-specific shell commands emitted:
@@ -182,9 +182,10 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
   - Branch/hybrid: see below.
 - `generate_clone_script(...)` — same as above but uses `create_clone -clone $CLONE_OF -case $CASE` for Step 1, skips the SourceMods/namelist copy step (Step 2 of newcase), and makes IC file lookup conditional on `ncdata` being explicitly set in the spec. `exoplanet_mod.F90` is also embedded inline via heredoc.
 - `_build_branch_pre_setup(spec)` — if `run_type` is `branch` or `hybrid`, emits `./xmlchange RUN_TYPE=startup` before `cesm_setup`. CESM requires `RUN_TYPE=startup` during `cesm_setup` when the rundir does not yet exist; the actual run type is applied afterward.
-- `_build_branch_post_setup(spec, paths)` — if `run_type` is `branch` or `hybrid`, emits: copy restart files from `$RUN_REFDIR` to rundir, then `xmlchange` calls to set `RUN_TYPE`, `CONTINUE_RUN=FALSE`, `BRNCH_RETAIN_CASENAME`, `RUN_REFCASE`, and `RUN_REFDATE`. `RUN_REFDIR` defaults to `${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}` with a comment directing the user to update it for retired refcases.
-- `_branch_var_block(spec)` — emits shell variable declarations for `RUN_REFCASE` and `RUN_REFDATE` at the top of branch/hybrid scripts.
+- `_build_branch_post_setup(spec, paths)` — if `run_type` is `branch` or `hybrid`, emits: copy restart files from `$RUN_REFDIR` to rundir, then `xmlchange` calls to set `RUN_TYPE`, `CONTINUE_RUN=FALSE`, `BRNCH_RETAIN_CASENAME`, `RUN_REFCASE`, and `RUN_REFDATE`. `RUN_REFDIR` is constructed as `${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000` (with `-00000` appended because CESM restart directories are named `YYYY-MM-DD-SSSSS` but `RUN_REFDATE` contains only `YYYY-MM-DD`).
+- `_branch_var_block(spec)` — emits shell variable declarations for `RUN_REFCASE`, `RUN_REFDATE`, and `RUN_REFDIR` at the top of branch/hybrid scripts. `RUN_REFDIR` always appends `-00000` to `RUN_REFDATE` since CESM restart seconds are always zero.
 - `_build_nl_append_block(spec)` — `echo >>` lines for carma/volc namelist params.
+- `_format_nl_value(val)` — formats a Python value as a CESM namelist RHS. Type dispatch: `bool` → `.true.`/`.false.`; `int` → bare integer; `float` → `%g` with decimal ensured; `str` Fortran logical → pass through; `str` numeric → coerce; `str` other → single-quoted. Used by `_nl_append_lines`.
 - `_build_clm_update_block(spec, paths)` — `sed` lines for CLM land files.
 - `_build_docn_update_block(spec)` — `sed` lines for SOM ocean forcing file.
 - `_build_run_script_block(spec)` — `sed` lines to patch SBATCH directives into `${CASE}.run`.
@@ -224,6 +225,7 @@ Walks CASE directories (identified by `SourceMods/src.share/exoplanet_mod.F90`),
 - `_row_to_base(row)` — converts a flat registry row to a matrix base dict.
 - `_CLONE_BASE_FIELDS` — allowlist of fields included in clone-mode base: `clone`, `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`, `account`, `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`. All other fields are omitted (inherited from clone source).
 - Clone export behavior: `--clone` (boolean `store_true`) produces a sparse base filtered to `_CLONE_BASE_FIELDS`. Per-case name stubs are written as `''  # FIXME: set new case name`. Without `--clone`, full output is always produced.
+- `exort_pkg '*'` warning: if any matched row has `exort_pkg` ending in `'*'` (custom RT copied into SourceMods), a warning is printed to stderr after the matrix output so it is visible at the end. Warning is suppressed in `--clone` mode since RT is inherited from the clone source.
 - Key renames from registry to matrix: `clm_finidat` → `finidat`, `clm_fsurdat` → `fsurdat`.
 - Registry-only fields stripped from matrix output: `case_name`, `casedir`, `inspect_date`, `ncdata_pressure_str`, `ncdata_levels`, `exo_n2bar`, `exo_n2bar_expr`, `exo_sday_expr`, `exo_pstd_computed_bar`, `warnings`, `config_saved`.
 - The exported matrix always includes a `meta` block (`description`, `author`, `created`, `source_registry`) that `query.py export` auto-populates; `description` and `author` are written as empty strings for the user to fill in.
@@ -371,10 +373,13 @@ Config-type-specific behavior:
 
 ## carma_params and volc_params
 
-Both are nested dicts in the experiment matrix spec and in the YAML registry. `_build_nl_append_block` → `_nl_append_lines` converts them to `echo "key = 'value'" >> user_nl_cam` shell lines. Value quoting rules:
-- Already single- or double-quoted: emitted as-is (inner `"` escaped for surrounding `echo "..."`).
-- Python floats: formatted with `%g` to preserve scientific notation.
-- All other bare values: wrapped in single quotes (Fortran namelist string convention).
+Both are nested dicts in the experiment matrix spec and in the YAML registry. `_build_nl_append_block` → `_nl_append_lines` → `_format_nl_value` converts them to `echo "key = val" >> user_nl_cam` shell lines. Type dispatch rules (bool checked before int, since bool is a subclass of int in Python):
+- `bool` → `.true.` / `.false.` (unquoted Fortran logical)
+- `int` → bare integer string (unquoted)
+- `float` → `%g` notation with decimal point ensured (unquoted)
+- `str` matching `.true.`/`.false.` → passed through unquoted
+- `str` that parses as a number → coerced to float and formatted unquoted
+- `str` other (file paths etc.) → single-quoted
 
 ---
 
