@@ -15,7 +15,7 @@ except ImportError:
 
 # Fortran parameter regexes
 _RE_REAL = re.compile(
-    r'^\s+(?:real\(r8\)|integer),\s*public,\s*parameter\s*::\s*(\w+)\s*=\s*([^!\n]+)',
+    r'^\s+(real\(r8\)|integer),\s*public,\s*parameter\s*::\s*(\w+)\s*=\s*([^!\n]+)',
     re.IGNORECASE
 )
 _RE_LOGICAL = re.compile(
@@ -39,7 +39,7 @@ def _try_eval_expr(rhs, known_params):
     expr = rhs
     # Substitute known numeric symbols longest-name-first to avoid partial matches
     for sym, val in sorted(known_params.items(), key=lambda kv: -len(kv[0])):
-        if isinstance(val, float) and sym in expr:
+        if isinstance(val, (int, float)) and sym in expr:
             expr = re.sub(r'\b' + re.escape(sym) + r'\b', repr(val), expr)
     # Only eval if the result is a safe arithmetic expression
     if not _RE_SAFE_EXPR.match(expr):
@@ -97,11 +97,12 @@ def parse_exoplanet_mod(path):
 
             m = _RE_REAL.match(line)
             if m:
-                name = m.group(1)
-                rhs = _RE_KIND.sub('', m.group(2)).strip().rstrip()
+                is_int = m.group(1).lower() == 'integer'
+                name = m.group(2)
+                rhs = _RE_KIND.sub('', m.group(3)).strip().rstrip()
                 val = _try_eval_expr(rhs, params)
                 if val is not None:
-                    params[name] = val
+                    params[name] = int(val) if is_int else val
                 else:
                     # unevaluable expression — keep raw for caller inspection
                     params[name] = None
