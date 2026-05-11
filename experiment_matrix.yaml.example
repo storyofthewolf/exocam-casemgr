@@ -232,10 +232,10 @@ cases:
     volc_params:
       volc_emis_so2_total: 6.0e10
       volc_emis_h2o_total: 1.0e9
-      volc_duration:       '24.0'
-      volc_press:          '10.0'
-      volc_press_sigma:    '0.3'
-      volc_weight_floor:   '1.0e-4'
-      volc_lon:            '30.0'
-      volc_lat:            '2.0'
-      volc_so2_lifetime:   '35.0'
+      volc_duration:       24.0
+      volc_press:          10.0
+      volc_press_sigma:    0.3
+      volc_weight_floor:   1.0e-4
+      volc_lon:            30.0
+      volc_lat:            2.0
+      volc_so2_lifetime:   35.0
