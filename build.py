@@ -169,8 +169,9 @@ def validate_case(spec, registry):
                 f"exort_pkg='{exort_pkg}' (expected stem '{stem}')"
             )
 
-    # exort_pkg asterisk: custom RT copied into SourceMods — create_newcase cannot replicate
-    if spec.get('exort_pkg', '').endswith('*'):
+    # exort_pkg asterisk: custom RT copied into SourceMods — create_newcase cannot replicate.
+    # Clone mode is exempt: RT source is inherited from the clone source, not via -usr_src.
+    if spec.get('exort_pkg', '').endswith('*') and not spec.get('clone'):
         pkg = spec['exort_pkg']
         errors.append(
             f"exort_pkg='{pkg}': the '*' suffix indicates custom RT source copied into "
