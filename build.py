@@ -281,28 +281,48 @@ def _build_nl_append_block(spec):
     return lines
 
 
+def _format_nl_value(val):
+    """Format a Python value as a CESM namelist RHS (for use inside echo "...")."""
+    # bool must be checked before int (bool is a subclass of int in Python)
+    if isinstance(val, bool):
+        return '.true.' if val else '.false.'
+    if isinstance(val, int):
+        return str(val)
+    if isinstance(val, float):
+        s = f'{val:g}'
+        if '.' not in s and 'e' not in s:
+            s += '.0'
+        return s
+    # str: pass through Fortran logicals unquoted; try numeric coercion; otherwise single-quote
+    s = str(val)
+    if s.lower() in ('.true.', '.false.'):
+        return s
+    try:
+        f = float(s)
+        formatted = f'{f:g}'
+        if '.' not in formatted and 'e' not in formatted:
+            formatted += '.0'
+        return formatted
+    except ValueError:
+        pass
+    # Genuine string (file path etc.) — single-quote it
+    return f"'{s.replace(chr(39), chr(92) + chr(39))}'"
+
+
 def _nl_append_lines(param_dict):
     """
     Return a list of shell lines that append key = value entries to user_nl_cam.
-    - Values already wrapped in single or double quotes are written as-is,
-      with any inner double quotes escaped for the surrounding shell echo "...".
-    - Bare numeric/logical values are single-quoted in the namelist.
-    - Python floats are formatted in %g notation to preserve scientific form.
+    Type dispatch via _format_nl_value:
+    - bool        -> .true. / .false.  (unquoted Fortran logical)
+    - int/float   -> bare number       (no quotes)
+    - str logical -> .true. / .false.  (unquoted, passed through)
+    - str numeric -> bare number       (unquoted, coerced)
+    - str other   -> 'value'           (single-quoted, e.g. file paths)
     """
     lines = []
     for key, val in param_dict.items():
-        if isinstance(val, float):
-            s = f'{val:g}'
-        else:
-            s = str(val)
-        already_quoted = (s.startswith("'") and s.endswith("'")) or \
-                         (s.startswith('"') and s.endswith('"'))
-        if already_quoted:
-            # escape any inner double quotes so the outer echo "..." stays valid
-            escaped = s.replace('"', '\\"')
-            lines.append(f'echo "{key} = {escaped}" >> user_nl_cam')
-        else:
-            lines.append(f"echo \"{key} = '{s}'\" >> user_nl_cam")
+        nl_val = _format_nl_value(val)
+        lines.append(f'echo "{key} = {nl_val}" >> user_nl_cam')
     return lines
 
 
