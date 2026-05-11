@@ -410,6 +410,17 @@ class _NoAliasDumper(yaml.Dumper):
         return True
 
 
+def _float_representer(dumper, value):
+    if 'e' in repr(value) or abs(value) >= 1e6 or (value != 0 and abs(value) < 1e-3):
+        s = f'{value:.6g}'
+    else:
+        s = repr(value)
+    return dumper.represent_scalar('tag:yaml.org,2002:float', s)
+
+
+_NoAliasDumper.add_representer(float, _float_representer)
+
+
 def _dump_matrix(matrix):
     text = yaml.dump(
         matrix,

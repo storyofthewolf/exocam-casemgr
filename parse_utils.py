@@ -55,7 +55,20 @@ _RE_NL_STR = re.compile(r'(\w+)\s*=\s*["\']([^"\']+)["\']')
 _RE_NL_VAL = re.compile(r"(\w+)\s*=\s*([^,'\s!][^,!\n]*)")
 
 
-def _to_numeric(s):
+def _coerce_nl_value(s):
+    """
+    Coerce a namelist string value to the appropriate Python type.
+    - Fortran logicals (.true./.false.) -> Fortran-style strings '.true.'/'.false.'
+      (not Python bool, so _nl_append_lines in build.py emits correct namelist syntax)
+    - Integer strings -> Python int
+    - Float strings -> Python float
+    - Anything else -> str (unchanged)
+    """
+    sl = s.strip().lower()
+    if sl in ('.true.', 'true'):
+        return '.true.'
+    if sl in ('.false.', 'false'):
+        return '.false.'
     try:
         return int(s)
     except ValueError:
@@ -129,16 +142,16 @@ def parse_user_nl_cam(path):
                 if k in keys:
                     result[k] = v
                 elif k.startswith('carma_'):
-                    carma[k] = _to_numeric(v)
+                    carma[k] = _coerce_nl_value(v)
                 elif k.startswith('volc_'):
-                    volc[k] = _to_numeric(v)
+                    volc[k] = _coerce_nl_value(v)
             # bare (non-string) values for carma_*/volc_* keys
             for m in _RE_NL_VAL.finditer(line):
                 k, v = m.group(1), m.group(2).strip().rstrip(',')
                 if k.startswith('carma_') and k not in carma:
-                    carma[k] = _to_numeric(v)
+                    carma[k] = _coerce_nl_value(v)
                 elif k.startswith('volc_') and k not in volc:
-                    volc[k] = _to_numeric(v)
+                    volc[k] = _coerce_nl_value(v)
     if carma:
         result['carma_params'] = carma
     if volc:
