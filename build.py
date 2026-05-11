@@ -423,14 +423,19 @@ def _heredoc_exoplanet_mod(exoplanet_mod_content):
 
 
 def _branch_var_block(spec):
-    """Return shell variable lines for branch/hybrid cases (RUN_REFCASE, RUN_REFDATE, RUN_REFDIR)."""
+    """Return shell variable lines for branch/hybrid cases (RUN_REFCASE, RUN_REFDATE, RUN_REFDIR).
+
+    RUN_REFDATE is YYYY-MM-DD (from env_run.xml), but CESM names restart directories
+    YYYY-MM-DD-SSSSS (date + seconds). The seconds field is always 00000, so -00000
+    is appended unconditionally when constructing RUN_REFDIR.
+    """
     return [
         f"RUN_REFCASE={spec['run_refcase']}",
         f"RUN_REFDATE={spec['run_refdate']}",
         "# Set RUN_REFDIR to the location of the reference restart files:",
-        "#   active refcase:   ${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}",
-        "#   retired refcase:  ${LONG_TERM}/${RUN_REFCASE}/rest/${RUN_REFDATE}",
-        "RUN_REFDIR=${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}",
+        "#   active refcase:   ${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
+        "#   retired refcase:  ${LONG_TERM}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
+        "RUN_REFDIR=${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
     ]
 
 
