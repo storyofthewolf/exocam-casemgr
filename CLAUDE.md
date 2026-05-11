@@ -184,7 +184,9 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 - `_build_branch_pre_setup(spec)` — if `run_type` is `branch` or `hybrid`, emits `./xmlchange RUN_TYPE=startup` before `cesm_setup`. CESM requires `RUN_TYPE=startup` during `cesm_setup` when the rundir does not yet exist; the actual run type is applied afterward.
 - `_build_branch_post_setup(spec, paths)` — if `run_type` is `branch` or `hybrid`, emits: copy restart files from `$RUN_REFDIR` to rundir, then `xmlchange` calls to set `RUN_TYPE`, `CONTINUE_RUN=FALSE`, `BRNCH_RETAIN_CASENAME`, `RUN_REFCASE`, and `RUN_REFDATE`. `RUN_REFDIR` is constructed as `${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000` (with `-00000` appended because CESM restart directories are named `YYYY-MM-DD-SSSSS` but `RUN_REFDATE` contains only `YYYY-MM-DD`).
 - `_branch_var_block(spec)` — emits shell variable declarations for `RUN_REFCASE`, `RUN_REFDATE`, and `RUN_REFDIR` at the top of branch/hybrid scripts. `RUN_REFDIR` always appends `-00000` to `RUN_REFDATE` since CESM restart seconds are always zero.
-- `_build_nl_append_block(spec)` — `echo >>` lines for carma/volc namelist params.
+- `_build_nl_append_block(spec)` — `echo >>` lines for carma_params, volc_params, and nl_cam_params. Used by `generate_shell_script` (newcase path) where the namelist is a fresh template; plain append is correct there.
+- `_nl_upsert_lines(param_dict)` — same interface as `_nl_append_lines` but emits `grep -q / sed -i / echo >>` upsert idiom per key. Replaces an existing entry if the key is already present; appends if not.
+- `_build_nl_upsert_block(spec)` — same group iteration as `_build_nl_append_block` (carma_params, volc_params, nl_cam_params) but calls `_nl_upsert_lines`. Used by `generate_clone_script` because `create_clone` copies `user_nl_cam` verbatim from the source case, so appending a key that already exists would create duplicate entries.
 - `_format_nl_value(val)` — formats a Python value as a CESM namelist RHS. Type dispatch: `bool` → `.true.`/`.false.`; `int` → bare integer; `float` → `%g` with decimal ensured; `str` Fortran logical → pass through; `str` numeric → coerce; `str` other → single-quoted. Used by `_nl_append_lines`.
 - `_build_clm_update_block(spec, paths)` — `sed` lines for CLM land files.
 - `_build_docn_update_block(spec)` — `sed` lines for SOM ocean forcing file.
@@ -325,7 +327,7 @@ Special case keys:
 - `exo_n2bar_explicit` — required for non-1-bar atmospheres; sets N2 directly and patches `exo_n2bar` in Fortran
 - `account` — `#SBATCH --account` written to `${CASE}.run` (typically in `base`)
 - `job_name` — `#SBATCH -J` written to `${CASE}.run` (typically per-case)
-- `carma_params`, `volc_params` — nested dicts appended to `user_nl_cam` via `echo >>`
+- `carma_params`, `volc_params`, `nl_cam_params` — nested dicts written to `user_nl_cam`. In newcase mode, appended via `echo >>`; in clone mode, upserted (replace if key exists, append if not). `nl_cam_params` is a catch-all for any `user_nl_cam` variable that doesn't belong to a named physics group (e.g. `nhtfrq`, `mfilt`, tuning knobs).
 - `run_type` — CESM run type: `startup` (default), `branch`, or `hybrid`. Branch/hybrid cases require `run_refcase` and `run_refdate`. The generated script handles the cesm_setup workaround automatically (sets `startup` before setup, switches back to `branch`/`hybrid` after copying restart files).
 - `run_refcase` — name of the reference case to branch/hybridize from. Required when `run_type` is `branch` or `hybrid`.
 - `run_refdate` — reference date string (e.g. `0021-01-01`) matching the restart set to use. Required when `run_type` is `branch` or `hybrid`.
@@ -371,9 +373,9 @@ Config-type-specific behavior:
 
 ---
 
-## carma_params and volc_params
+## carma_params, volc_params, and nl_cam_params
 
-Both are nested dicts in the experiment matrix spec and in the YAML registry. `_build_nl_append_block` → `_nl_append_lines` → `_format_nl_value` converts them to `echo "key = val" >> user_nl_cam` shell lines. Type dispatch rules (bool checked before int, since bool is a subclass of int in Python):
+All three are optional nested dicts in the experiment matrix spec. `nl_cam_params` is a catch-all for any `user_nl_cam` variable that doesn't belong to a named physics group (e.g. `nhtfrq`, `mfilt`, tuning knobs). In newcase mode, `_build_nl_append_block` → `_nl_append_lines` → `_format_nl_value` converts them to `echo "key = val" >> user_nl_cam` shell lines. In clone mode, `_build_nl_upsert_block` → `_nl_upsert_lines` → `_format_nl_value` uses replace-or-append semantics (`grep -q / sed -i / echo >>`) to avoid duplicate entries in the namelist copied from the clone source. Type dispatch rules (bool checked before int, since bool is a subclass of int in Python):
 - `bool` → `.true.` / `.false.` (unquoted Fortran logical)
 - `int` → bare integer string (unquoted)
 - `float` → `%g` notation with decimal point ensured (unquoted)

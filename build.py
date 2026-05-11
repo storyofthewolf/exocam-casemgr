@@ -269,16 +269,55 @@ def render_exoplanet_mod(template_path, spec):
 
 def _build_nl_append_block(spec):
     """
-    Return shell lines to append carma_params and/or volc_params to user_nl_cam.
-    Returns an empty list if neither is present in the spec.
+    Return shell lines to append carma_params, volc_params, and/or nl_cam_params
+    to user_nl_cam via echo >>. Returns an empty list if none are present.
+    Used by generate_shell_script (newcase path) where the namelist is a fresh
+    template that never contains these entries, so plain append is correct.
     """
     lines = []
-    for group_key in ('carma_params', 'volc_params'):
+    for group_key in ('carma_params', 'volc_params', 'nl_cam_params'):
         params = spec.get(group_key)
         if params:
             lines.append(f"")
             lines.append(f"# Append {group_key} to user_nl_cam")
             lines.extend(_nl_append_lines(params))
+    return lines
+
+
+def _nl_upsert_lines(param_dict):
+    """
+    Return shell lines that upsert key = value entries into user_nl_cam.
+    For each key: replace the existing line if present, otherwise append.
+    Used by generate_clone_script because create_clone copies user_nl_cam
+    verbatim from the source case, so appending a key that already exists
+    would create duplicate entries.
+    """
+    lines = []
+    for key, val in param_dict.items():
+        nl_val = _format_nl_value(val)
+        escaped_val = nl_val.replace('|', r'\|')
+        lines.append(
+            f'grep -q "{key}" user_nl_cam '
+            f'&& sed -i "s|{key} = .*|{key} = {escaped_val}|" user_nl_cam '
+            f'|| echo "{key} = {nl_val}" >> user_nl_cam'
+        )
+    return lines
+
+
+def _build_nl_upsert_block(spec):
+    """
+    Return shell lines to upsert carma_params, volc_params, and/or nl_cam_params
+    into user_nl_cam using replace-or-append semantics.
+    Used by generate_clone_script where the namelist already contains entries
+    inherited from the clone source.
+    """
+    lines = []
+    for group_key in ('carma_params', 'volc_params', 'nl_cam_params'):
+        params = spec.get(group_key)
+        if params:
+            lines.append(f"")
+            lines.append(f"# Upsert {group_key} in user_nl_cam")
+            lines.extend(_nl_upsert_lines(params))
     return lines
 
 
@@ -689,7 +728,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         ]
 
     lines += [
-        *_build_nl_append_block(spec),
+        *_build_nl_upsert_block(spec),
         *_build_clm_update_block(spec, paths),
         *_build_docn_update_block(spec),
     ]
