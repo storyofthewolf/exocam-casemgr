@@ -392,9 +392,9 @@ def _build_clm_update_block(spec, paths):
 
 def _build_run_script_block(spec):
     """
-    Return sed lines to patch SBATCH directives into ${CASE}.run after cesm_setup.
-    account: replaces existing #SBATCH --account line (present in all CESM .run files).
-    job_name (-J): inserted after the account line (not always present by default).
+    Return shell lines to patch SBATCH directives into ${CASE}.run after cesm_setup.
+    account: upsert — replace existing #SBATCH --account= line, or append if absent.
+    job_name (-J): upsert — replace existing #SBATCH -J line, or append if absent.
     Both are skipped if absent from the spec.
     """
     lines = []
@@ -410,16 +410,44 @@ def _build_run_script_block(spec):
     ]
     if account:
         lines.append(
-            f"sed -i 's|^#SBATCH --account=.*|#SBATCH --account={account}|' ${{CASE}}.run"
+            f"grep -q '^#SBATCH --account=' ${{CASE}}.run "
+            f"&& sed -i 's|^#SBATCH --account=.*|#SBATCH --account={account}|' ${{CASE}}.run "
+            f"|| echo '#SBATCH --account={account}' >> ${{CASE}}.run"
         )
     if job_name:
-        # Insert -J line after the --account line; use a no-op if account line absent
         lines.append(
             f"grep -q '^#SBATCH -J ' ${{CASE}}.run "
             f"&& sed -i 's|^#SBATCH -J .*|#SBATCH -J {job_name}|' ${{CASE}}.run "
-            f"|| sed -i '/^#SBATCH --account=/a #SBATCH -J {job_name}' ${{CASE}}.run"
+            f"|| echo '#SBATCH -J {job_name}' >> ${{CASE}}.run"
         )
     return lines
+
+
+def _build_usr_src_fix_block():
+    """
+    Return shell lines to update -usr_src in CAM_CONFIG_OPTS so it points to
+    this case's own SourceMods/src.cam/ rather than the clone source's path.
+
+    Only emitted when exort_pkg ends with '*', meaning the RT source was copied
+    into the clone source's SourceMods and create_clone inherited that -usr_src
+    path verbatim. We read the current value at shell runtime via xmlquery to
+    avoid hardcoding assumptions about the directory name.
+
+    Assumes Discover xmlquery output format:
+        CAM_CONFIG_OPTS: -nlev 51 -phys cam4 -usr_src /path/to/src.cam/dirname
+    The grep -oP extracts the whitespace-delimited token after '-usr_src '.
+    """
+    return [
+        "",
+        "# -----------------------------------------------------------",
+        "# Fix stale -usr_src in CAM_CONFIG_OPTS (custom RT clone)",
+        "# create_clone inherited -usr_src pointing to the source case;",
+        "# update it to point to this case's own SourceMods directory.",
+        "# -----------------------------------------------------------",
+        "OLD_USR_SRC=$(./xmlquery CAM_CONFIG_OPTS | grep -oP '(?<=-usr_src )\\S+')",
+        "USR_SRC_DIR=$(basename ${OLD_USR_SRC})",
+        "./xmlchange CAM_CONFIG_OPTS=\"$(./xmlquery CAM_CONFIG_OPTS | sed 's|-usr_src [^ ]*|-usr_src ${CASEROOT}/${CASE}/SourceMods/src.cam/${USR_SRC_DIR}|')\"",
+    ]
 
 
 def _build_docn_update_block(spec):
@@ -716,6 +744,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
+        *(_build_usr_src_fix_block() if exort_pkg.endswith('*') else []),
     ]
 
     if ic_file:
