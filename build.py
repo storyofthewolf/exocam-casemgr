@@ -430,12 +430,13 @@ def _build_usr_src_fix_block():
 
     Only emitted when exort_pkg ends with '*', meaning the RT source was copied
     into the clone source's SourceMods and create_clone inherited that -usr_src
-    path verbatim. We read the current value at shell runtime via xmlquery to
-    avoid hardcoding assumptions about the directory name.
+    path verbatim.
 
-    Assumes Discover xmlquery output format:
-        CAM_CONFIG_OPTS: -nlev 51 -phys cam4 -usr_src /path/to/src.cam/dirname
-    The grep -oP extracts the whitespace-delimited token after '-usr_src '.
+    xmlquery --value returns the bare value string with no 'key = ' prefix,
+    avoiding the parse error that occurs when the full xmlquery output is passed
+    to xmlchange. The new path is assembled in a shell variable (NEW_CAM_OPTS)
+    so that xmlchange receives a plain expanded string rather than shell variable
+    references, which xmlchange does not expand.
     """
     return [
         "",
@@ -444,9 +445,11 @@ def _build_usr_src_fix_block():
         "# create_clone inherited -usr_src pointing to the source case;",
         "# update it to point to this case's own SourceMods directory.",
         "# -----------------------------------------------------------",
-        "OLD_USR_SRC=$(./xmlquery CAM_CONFIG_OPTS | grep -oP '(?<=-usr_src )\\S+')",
+        "OLD_USR_SRC=$(./xmlquery --value CAM_CONFIG_OPTS | grep -oP '(?<=-usr_src )\\S+')",
         "USR_SRC_DIR=$(basename ${OLD_USR_SRC})",
-        "./xmlchange CAM_CONFIG_OPTS=\"$(./xmlquery CAM_CONFIG_OPTS | sed 's|-usr_src [^ ]*|-usr_src ${CASEROOT}/${CASE}/SourceMods/src.cam/${USR_SRC_DIR}|')\"",
+        "NEW_USR_SRC=${CASEROOT}/${CASE}/SourceMods/src.cam/${USR_SRC_DIR}",
+        "NEW_CAM_OPTS=$(./xmlquery --value CAM_CONFIG_OPTS | sed \"s|-usr_src [^ ]*|-usr_src ${NEW_USR_SRC}|\")",
+        "./xmlchange CAM_CONFIG_OPTS=\"${NEW_CAM_OPTS}\"",
     ]
 
 
@@ -973,6 +976,8 @@ def cmd_make(args):
     passed = []
     failed = []
 
+    t_start = datetime.datetime.now()
+
     for script_path in all_scripts:
         basename = os.path.basename(script_path)
         # strip _build.sh suffix to get case name
@@ -993,7 +998,15 @@ def cmd_make(args):
             print(f"FAILED (see {log_path})")
             failed.append(case_name)
 
+    t_end = datetime.datetime.now()
+    elapsed = t_end - t_start
+    total_seconds = int(elapsed.total_seconds())
+    elapsed_str = f"{total_seconds // 3600}h {(total_seconds % 3600) // 60}m {total_seconds % 60}s"
+
     print(f"\n{len(passed)} passed, {len(failed)} failed.")
+    print(f"Started:  {t_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Finished: {t_end.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Elapsed:  {elapsed_str}")
     if failed:
         for name in failed:
             print(f"  FAILED: {name}")
