@@ -432,11 +432,12 @@ def _build_usr_src_fix_block():
     into the clone source's SourceMods and create_clone inherited that -usr_src
     path verbatim.
 
-    xmlquery returns 'env_build.xml: CAM_CONFIG_OPTS = <value>'; we strip the
-    prefix with sed 's/^[^=]*= //' to get the bare value. The new path is
-    assembled into NEW_USR_SRC before being substituted into NEW_CAM_OPTS via
-    sed with double quotes, so the shell expands ${NEW_USR_SRC} at runtime
-    before sed sees it. xmlchange then receives a fully-expanded plain string.
+    xmlquery returns 'env_build.xml: CAM_CONFIG_OPTS = <value>'; sed
+    's/^[^=]*= //' strips the prefix to get the bare value. The new -usr_src
+    path is inlined directly into the sed replacement string with double quotes
+    so the shell expands $CASEROOT/$CASE/$USR_SRC_DIR at runtime before sed
+    sees the string. xmlchange then receives a fully-expanded plain path.
+    Note: CESM 1.2.1's xmlquery does not support --value.
     """
     return [
         "",

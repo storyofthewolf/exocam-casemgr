@@ -201,6 +201,7 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 - `_build_clm_update_block(spec, paths)` — `sed` lines for CLM land files.
 - `_build_docn_update_block(spec)` — `sed` lines for SOM ocean forcing file.
 - `_build_run_script_block(spec)` — shell lines to upsert SBATCH directives into `${CASE}.run`. Both `account` (`#SBATCH --account=`) and `job_name` (`#SBATCH -J`) use the `grep -q / sed -i / echo >>` idiom: replace the existing line if present, append if not. The `--account=` line is not guaranteed to exist in CESM-generated run scripts on all machines.
+- `_build_usr_src_fix_block()` — emitted in clone scripts when `exort_pkg` ends with `*`. `create_clone` copies `-usr_src` from the source case verbatim; this block reads the inherited `CAM_CONFIG_OPTS` via `./xmlquery CAM_CONFIG_OPTS | sed 's/^[^=]*= //'` (strips the `env_build.xml: VAR = ` prefix; `--value` flag not available in CESM 1.2.1), extracts the old path with `grep -oP`, then calls `./xmlchange` with the `-usr_src` path inlined as a double-quoted sed replacement so `$CASEROOT/$CASE/$USR_SRC_DIR` expand at shell runtime before `xmlchange` sees them. `xmlchange` rejects shell variable references in values.
 - `EXO_PARAMS` — set of parameter names that map directly to `exoplanet_mod.F90` and can be patched from the experiment matrix. Includes gas bars, geophysical parameters, logical flags, and RT tuning parameters (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `exo_mvelp`, `exo_ve`).
 - `REQUIRED_FIELDS` — required for newcase mode: `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
 - `REQUIRED_FIELDS_CLONE` — required for clone mode: `clone`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
@@ -472,26 +473,29 @@ should be updated to match.
 
 ---
 
-## Session handoff — 2026-05-11
+## Session handoff — 2026-05-12
 
-### Work completed this session
+### Work completed across sessions (2026-05-11 – 2026-05-12)
 
-**`build.py`:**
+**`build.py` (2026-05-11):**
 - Refactored CLI to argparse subcommands: `generate` (script generation) and `make` (execution).
 - `--scripts-dir DIR` replaces `--outdir`; top-level flag applies to both subcommands.
 - `generate --list` lists blueprints. `make --prefix PREFIX` filters scripts by case-insensitive prefix.
 - `make` globs `*_build.sh`, prompts for confirmation, runs each, captures logs to `logs/<case>.build.log`, prints per-case OK/FAILED, exits non-zero on any failure.
 - Added `_build_nl_upsert_block` / `_nl_upsert_lines`: clone-mode namelist upsert (grep/sed/echo) to avoid duplicate entries when `create_clone` copies `user_nl_cam` verbatim.
 - Added `nl_cam_params` as a third namelist group alongside `carma_params` / `volc_params` (append in newcase, upsert in clone).
-- Added `_build_usr_src_fix_block`: emitted in clone scripts when `exort_pkg` ends with `*`; reads `-usr_src` via `xmlquery` at shell runtime and rewrites `CAM_CONFIG_OPTS` to point to the new case's own `SourceMods/src.cam/`.
+- Added `_build_usr_src_fix_block`: emitted in clone scripts when `exort_pkg` ends with `*`; rewrites the inherited `-usr_src` in `CAM_CONFIG_OPTS` to point to the new case's own `SourceMods/src.cam/` directory.
 - Fixed `_build_run_script_block`: both `--account` and `-J` now use upsert idiom (grep/sed/echo) so directives are written even when absent from the CESM-generated run script.
 
-**`manage.py`:**
+**`manage.py` (2026-05-11):**
 - Refactored `retire` subcommand to three tiers: bare (tombstone only), `--keep-*` (case.yaml implicit + artifacts), `--purge` (complete erasure, nothing written).
 - Bare retire is now valid with no flags required.
 - `--purge` emits prominent `*** WARNING: COMPLETE ERASURE ***` in both preview and at confirmation.
 - Avg file preservation skipped under `--purge`.
 - All `--execute` retire paths now require a yes/no confirmation (bare retire previously had none).
+
+**`build.py` (2026-05-12):**
+- Fixed `_build_usr_src_fix_block`: CESM 1.2.1's `xmlquery` does not support `--value`; reverted to `sed 's/^[^=]*= //'` to strip the `env_build.xml: VAR = ` prefix. Root cause of original bug was that `$CASEROOT/$CASE` were stored in an intermediate `NEW_USR_SRC` shell variable containing unexpanded references, which `xmlchange` rejected. Fixed by inlining the path directly into the double-quoted sed replacement string so variables expand at shell runtime before `xmlchange` sees the value.
 
 ### Good starting points for next session
 - Update the stale module docstring in `build.py` (see Known Limitations above).
