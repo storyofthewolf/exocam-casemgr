@@ -54,6 +54,17 @@ def _try_eval_expr(rhs, known_params):
 _RE_NL_STR = re.compile(r'(\w+)\s*=\s*["\']([^"\']+)["\']')
 _RE_NL_VAL = re.compile(r"(\w+)\s*=\s*([^,'\s!][^,!\n]*)")
 
+
+def _to_numeric(s):
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        return s
+
 # IC filename pressure/level pattern
 _RE_IC = re.compile(r'ic_([0-9.e+\-]+bar)_L(\d+)')
 
@@ -117,16 +128,16 @@ def parse_user_nl_cam(path):
                 if k in keys:
                     result[k] = v
                 elif k.startswith('carma_'):
-                    carma[k] = v
+                    carma[k] = _to_numeric(v)
                 elif k.startswith('volc_'):
-                    volc[k] = v
+                    volc[k] = _to_numeric(v)
             # bare (non-string) values for carma_*/volc_* keys
             for m in _RE_NL_VAL.finditer(line):
                 k, v = m.group(1), m.group(2).strip().rstrip(',')
                 if k.startswith('carma_') and k not in carma:
-                    carma[k] = v
+                    carma[k] = _to_numeric(v)
                 elif k.startswith('volc_') and k not in volc:
-                    volc[k] = v
+                    volc[k] = _to_numeric(v)
     if carma:
         result['carma_params'] = carma
     if volc:
