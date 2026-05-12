@@ -414,7 +414,7 @@ def _build_run_script_block(spec):
             f"if grep -q '^#SBATCH --account=' ${{CASE}}.run; then\n"
             f"    sed -i 's|^#SBATCH --account=.*|#SBATCH --account={account}|' ${{CASE}}.run\n"
             f"else\n"
-            f"    sed -i '/^#SBATCH /a #SBATCH --account={account}' ${{CASE}}.run\n"
+            f"    sed -i '0,/^#SBATCH /s|^#SBATCH |#SBATCH --account={account}\\n#SBATCH |' ${{CASE}}.run\n"
             f"fi"
         )
     if job_name:
@@ -422,7 +422,7 @@ def _build_run_script_block(spec):
             f"if grep -q '^#SBATCH -J ' ${{CASE}}.run; then\n"
             f"    sed -i 's|^#SBATCH -J .*|#SBATCH -J {job_name}|' ${{CASE}}.run\n"
             f"else\n"
-            f"    sed -i '/^#SBATCH /a #SBATCH -J {job_name}' ${{CASE}}.run\n"
+            f"    sed -i '0,/^#SBATCH /s|^#SBATCH |#SBATCH -J {job_name}\\n#SBATCH |' ${{CASE}}.run\n"
             f"fi"
         )
     return lines
@@ -1058,10 +1058,11 @@ def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
         if not script_path:
             print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → script not found, skipping")
             continue
-        caseroot = _extract_caseroot(script_path)
-        if not caseroot:
+        caseroot_base = _extract_caseroot(script_path)
+        if not caseroot_base:
             print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → CASEROOT not found in script, skipping")
             continue
+        caseroot = os.path.join(caseroot_base, case_name)
         result = subprocess.run(
             ['sbatch', f'{case_name}.run'],
             cwd=caseroot,
