@@ -15,6 +15,7 @@ Default is dry-run: scripts are written but not executed.
 import argparse
 import datetime
 import os
+import random
 import re
 import subprocess
 import sys
@@ -410,15 +411,19 @@ def _build_run_script_block(spec):
     ]
     if account:
         lines.append(
-            f"grep -q '^#SBATCH --account=' ${{CASE}}.run "
-            f"&& sed -i 's|^#SBATCH --account=.*|#SBATCH --account={account}|' ${{CASE}}.run "
-            f"|| echo '#SBATCH --account={account}' >> ${{CASE}}.run"
+            f"if grep -q '^#SBATCH --account=' ${{CASE}}.run; then\n"
+            f"    sed -i 's|^#SBATCH --account=.*|#SBATCH --account={account}|' ${{CASE}}.run\n"
+            f"else\n"
+            f"    sed -i '/^#SBATCH /a #SBATCH --account={account}' ${{CASE}}.run\n"
+            f"fi"
         )
     if job_name:
         lines.append(
-            f"grep -q '^#SBATCH -J ' ${{CASE}}.run "
-            f"&& sed -i 's|^#SBATCH -J .*|#SBATCH -J {job_name}|' ${{CASE}}.run "
-            f"|| echo '#SBATCH -J {job_name}' >> ${{CASE}}.run"
+            f"if grep -q '^#SBATCH -J ' ${{CASE}}.run; then\n"
+            f"    sed -i 's|^#SBATCH -J .*|#SBATCH -J {job_name}|' ${{CASE}}.run\n"
+            f"else\n"
+            f"    sed -i '/^#SBATCH /a #SBATCH -J {job_name}' ${{CASE}}.run\n"
+            f"fi"
         )
     return lines
 
@@ -1014,7 +1019,64 @@ def cmd_make(args):
     if failed:
         for name in failed:
             print(f"  FAILED: {name}")
+
+    if getattr(args, 'send_it', False) and passed:
+        _cmd_send_it(passed, scripts_dir, all_scripts)
+
+    if failed:
         sys.exit(1)
+
+
+_SEND_IT_VERBS = [
+    'Launching', 'Shredding', 'Hucking', 'Schussing',
+    'Slaloming', 'Sending', 'Jibbing', 'Carving', 'Ripping',
+]
+_VERB_WIDTH = max(len(v) for v in _SEND_IT_VERBS)
+
+
+def _extract_caseroot(script_path):
+    """Return the CASEROOT= value from a *_build.sh script, or None."""
+    with open(script_path) as f:
+        for line in f:
+            m = re.match(r'^CASEROOT=(.+)', line)
+            if m:
+                return m.group(1).strip().strip('"').strip("'")
+    return None
+
+
+def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
+    script_map = {
+        os.path.basename(s)[:-len('_build.sh')]: s for s in all_scripts
+    }
+    bar = '━' * 40
+    print(f"\n  SEND IT")
+    print(bar)
+    submitted = 0
+    for case_name in passed_cases:
+        verb = random.choice(_SEND_IT_VERBS)
+        script_path = script_map.get(case_name)
+        if not script_path:
+            print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → script not found, skipping")
+            continue
+        caseroot = _extract_caseroot(script_path)
+        if not caseroot:
+            print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → CASEROOT not found in script, skipping")
+            continue
+        result = subprocess.run(
+            ['sbatch', f'{case_name}.run'],
+            cwd=caseroot,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → sbatch FAILED: {result.stderr.strip()}")
+            continue
+        m = re.search(r'Submitted batch job (\d+)', result.stdout)
+        job_id = m.group(1) if m else result.stdout.strip()
+        print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → job {job_id}")
+        submitted += 1
+    print(bar)
+    print(f"  {submitted} job{'s' if submitted != 1 else ''} submitted.")
 
 
 def main():
@@ -1033,6 +1095,8 @@ def main():
     p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
     p_make.add_argument('--prefix', metavar='PREFIX',
                         help='Only run scripts whose filename starts with PREFIX (case-insensitive)')
+    p_make.add_argument('--send-it', action='store_true',
+                        help='Submit each successfully built case via sbatch after building')
 
     args = parser.parse_args()
 
