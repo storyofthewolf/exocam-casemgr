@@ -25,3 +25,6 @@ build_scripts/*
 
 blueprints/*
 !blueprints/README
+
+# ignore commonly used stem for depreciated files I am not quite ready to delete
+*old*
