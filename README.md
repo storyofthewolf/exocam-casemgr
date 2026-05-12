@@ -104,7 +104,9 @@ To run all generated scripts (prompts for confirmation; logs written to `build_s
 
 ```bash
 python build.py make
-python build.py make --prefix ExoCAM_thai   # filter by case name prefix
+python build.py make --prefix ExoCAM_thai              # filter by case name prefix
+python build.py make --send-it                         # build then submit each passed case via sbatch
+python build.py make --prefix ExoCAM_thai --send-it    # filter + build + submit
 ```
 
 To run a single build script directly:

@@ -200,7 +200,11 @@ Used by both `build.py` and `scan.py`. Must never be given filesystem side effec
 - `_format_nl_value(val)` — formats a Python value as a CESM namelist RHS. Type dispatch: `bool` → `.true.`/`.false.`; `int` → bare integer; `float` → `%g` with decimal ensured; `str` Fortran logical → pass through; `str` numeric → coerce; `str` other → single-quoted. Used by `_nl_append_lines`.
 - `_build_clm_update_block(spec, paths)` — `sed` lines for CLM land files.
 - `_build_docn_update_block(spec)` — `sed` lines for SOM ocean forcing file.
-- `_build_run_script_block(spec)` — shell lines to upsert SBATCH directives into `${CASE}.run`. Both `account` (`#SBATCH --account=`) and `job_name` (`#SBATCH -J`) use the `grep -q / sed -i / echo >>` idiom: replace the existing line if present, append if not. The `--account=` line is not guaranteed to exist in CESM-generated run scripts on all machines.
+- `_build_run_script_block(spec)` — shell lines to patch SBATCH directives into `${CASE}.run`. Both `account` (`#SBATCH --account=`) and `job_name` (`#SBATCH -J`) use an `if grep -q / sed -i / else sed -i /^#SBATCH /a / fi` pattern: replace the existing line if present; if absent, insert after the first existing `#SBATCH` line so the directive lands inside the header block where SLURM will read it (not appended to end of file).
+- `_extract_caseroot(script_path)` — reads a `*_build.sh` file line-by-line, returns the value of the first `CASEROOT=` assignment (strips surrounding quotes), or `None` if not found. Used by `_cmd_send_it`.
+- `_cmd_send_it(passed_cases, scripts_dir, all_scripts)` — post-build sbatch submission loop. For each passed case, extracts `CASEROOT` from its build script, runs `sbatch <case>.run` in that directory, parses the job ID from stdout, and prints a formatted block with a random verb per case. Skips cases where `CASEROOT` cannot be extracted. Prints a count of jobs submitted.
+- `_SEND_IT_VERBS` — module-level list of submission verbs drawn randomly per case in `_cmd_send_it`.
+- `_VERB_WIDTH` — module-level int; `max(len(v) for v in _SEND_IT_VERBS)`; used for column alignment in send-it output.
 - `_build_usr_src_fix_block()` — emitted in clone scripts when `exort_pkg` ends with `*`. `create_clone` copies `-usr_src` from the source case verbatim; this block reads the inherited `CAM_CONFIG_OPTS` via `./xmlquery CAM_CONFIG_OPTS | sed 's/^[^=]*= //'` (strips the `env_build.xml: VAR = ` prefix; `--value` flag not available in CESM 1.2.1), extracts the old path with `grep -oP`, then calls `./xmlchange` with the `-usr_src` path inlined as a double-quoted sed replacement so `$CASEROOT/$CASE/$USR_SRC_DIR` expand at shell runtime before `xmlchange` sees them. `xmlchange` rejects shell variable references in values.
 - `EXO_PARAMS` — set of parameter names that map directly to `exoplanet_mod.F90` and can be patched from the experiment matrix. Includes gas bars, geophysical parameters, logical flags, and RT tuning parameters (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `exo_mvelp`, `exo_ve`).
 - `REQUIRED_FIELDS` — required for newcase mode: `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`.
@@ -473,7 +477,7 @@ should be updated to match.
 
 ---
 
-## Session handoff — 2026-05-12
+## Session handoff — 2026-05-12 (updated end-of-session)
 
 ### Work completed across sessions (2026-05-11 – 2026-05-12)
 
@@ -485,7 +489,6 @@ should be updated to match.
 - Added `_build_nl_upsert_block` / `_nl_upsert_lines`: clone-mode namelist upsert (grep/sed/echo) to avoid duplicate entries when `create_clone` copies `user_nl_cam` verbatim.
 - Added `nl_cam_params` as a third namelist group alongside `carma_params` / `volc_params` (append in newcase, upsert in clone).
 - Added `_build_usr_src_fix_block`: emitted in clone scripts when `exort_pkg` ends with `*`; rewrites the inherited `-usr_src` in `CAM_CONFIG_OPTS` to point to the new case's own `SourceMods/src.cam/` directory.
-- Fixed `_build_run_script_block`: both `--account` and `-J` now use upsert idiom (grep/sed/echo) so directives are written even when absent from the CESM-generated run script.
 
 **`manage.py` (2026-05-11):**
 - Refactored `retire` subcommand to three tiers: bare (tombstone only), `--keep-*` (case.yaml implicit + artifacts), `--purge` (complete erasure, nothing written).
@@ -494,8 +497,12 @@ should be updated to match.
 - Avg file preservation skipped under `--purge`.
 - All `--execute` retire paths now require a yes/no confirmation (bare retire previously had none).
 
-**`build.py` (2026-05-12):**
+**`build.py` (2026-05-12, session 1):**
 - Fixed `_build_usr_src_fix_block`: CESM 1.2.1's `xmlquery` does not support `--value`; reverted to `sed 's/^[^=]*= //'` to strip the `env_build.xml: VAR = ` prefix. Root cause of original bug was that `$CASEROOT/$CASE` were stored in an intermediate `NEW_USR_SRC` shell variable containing unexpanded references, which `xmlchange` rejected. Fixed by inlining the path directly into the double-quoted sed replacement string so variables expand at shell runtime before `xmlchange` sees the value.
+
+**`build.py` (2026-05-12, session 2):**
+- Fixed `_build_run_script_block`: replaced fragile `grep && sed || echo` one-liner with `if/else` for both `--account` and `-J`. The `else` branch uses `sed -i '/^#SBATCH /a ...'` to insert after the first existing `#SBATCH` line, keeping the directive inside the header block where SLURM reads it (not appended to end of file).
+- Added `make --send-it` flag: after build, submits each passed case via `sbatch <case>.run` from its `CASEROOT` (extracted from the build script). Prints a formatted output block with a random verb per case and job IDs. Requires at least one passing case to trigger. New helpers: `_extract_caseroot`, `_cmd_send_it`, `_SEND_IT_VERBS`, `_VERB_WIDTH`.
 
 ### Good starting points for next session
 - Update the stale module docstring in `build.py` (see Known Limitations above).
