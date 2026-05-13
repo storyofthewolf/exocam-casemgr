@@ -609,11 +609,13 @@ def cmd_check(args, paths):
     do_info   = getattr(args, 'info',   False)
     do_energy = getattr(args, 'energy', False)
 
+    # Collect all results before printing so max_name_len is known for alignment.
+    # Each entry: (case, status_label, status_ts, info_lines, energy_line)
+    results = []
     for case in cases:
         casestatus_path = os.path.join(caseroot, case, 'CaseStatus') if caseroot else ''
         cs = _parse_casestatus(casestatus_path) if casestatus_path else None
 
-        # --- status line ---
         if cs is None:
             status_label = 'NO_CASEDIR'
             status_ts = ''
@@ -630,38 +632,50 @@ def cmd_check(args, paths):
                 if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
                     status_label = 'RESUBMITTED'
                 elif job_queued is False and cs['last_event'].startswith('run started'):
-                    # Job was started but no longer queued — likely crashed without writing status
+                    # Started but no longer queued — likely crashed without updating CaseStatus
                     status_label = 'RUNNING?'
 
-        ts_suffix = f"  ({status_ts})" if status_ts else ''
-        print(f"{case}  [{status_label}]{ts_suffix}")
-
-        # --- --info: hist and restart breakdown ---
+        info_lines = []
         if do_info and archive:
             for model in AVG_HIST_DEFAULT_MODELS:
                 hist_dir = os.path.join(archive, case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
                 non_avg = [f for f in files if 'avg' not in f]
                 if not non_avg:
-                    print(f"  {model}/hist:    0 files")
+                    info_lines.append(f"  {model}/hist:    0 files")
                     continue
                 years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
                 span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
                 avg_note = ", avg present" if any('avg' in f for f in files) else ""
-                print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
+                info_lines.append(
+                    f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
             sets = restart_sets(case, paths)
             rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
-            print(f"  rest:      {len(sets):>4} folder(s)  ({fmt_size(rest_total)})")
+            info_lines.append(f"  rest:      {len(sets):>4} folder(s)  ({fmt_size(rest_total)})")
 
-        # --- --energy ---
+        energy_line = None
         if do_energy and archive:
             result = _energy_balance(case, archive)
             if result is not None:
                 ts_mean, fsnt_mean, flnt_mean, n_used = result
                 etop = fsnt_mean - flnt_mean
                 sign = '+' if etop >= 0 else ''
-                print(f"  Last {n_used}mo:  TS = {ts_mean:.1f} K    "
-                      f"Etop = {sign}{etop:.1f} W/m²")
+                energy_line = (f"  Last {n_used}mo:  TS = {ts_mean:.1f} K    "
+                               f"Etop = {sign}{etop:.1f} W/m²")
+
+        results.append((case, status_label, status_ts, info_lines, energy_line))
+
+    # Columnar output: name left-justified to max_name_len, tag left-justified to 15.
+    max_name_len = max(len(r[0]) for r in results)
+    tag_width = 15  # fits [RESUBMITTED] (13) with room
+
+    for case, status_label, status_ts, info_lines, energy_line in results:
+        tag = f"[{status_label}]"
+        print(f"{case:<{max_name_len}}  {tag:<{tag_width}}  {status_ts}".rstrip())
+        for line in info_lines:
+            print(line)
+        if energy_line:
+            print(energy_line)
 
 
 # ---------------------------------------------------------------------------

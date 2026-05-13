@@ -81,7 +81,13 @@ Event prefix → status label mapping (matched by `str.startswith`):
 | `cesm_setup` | `CLEANED` (covers `cesm_setup -clean`) |
 | (anything else) | `UNKNOWN` |
 
-Output per case is a single line: `<case>  [STATUS]  (<timestamp>)`.
+Output per case is a single columnar line: case name left-justified to the longest name in the current output set, status tag `[STATUS]` left-justified to 15 characters, then the timestamp. All results are collected before printing so `max_name_len` is known. Example:
+
+```
+cam_mixed_fv_modern               [COMPLETE]       2026-03-07 13:00:02
+cam_mixed_fv_modern_eruption      [BUILT]          2026-05-13 02:23:19
+cam_mixed_fv_modern_eruption_it2  [FAILED]         2026-05-09 16:24:59
+```
 
 If `CaseStatus` is missing (no caseroot dir), status is shown as `NO_CASEDIR`.
 
