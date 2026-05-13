@@ -13,7 +13,7 @@ machine: discover
 # Default run parameters — applied to any experiment matrix field left unset.
 # Override per-matrix in the base block or per-case.
 defaults:
-  resubmit:    1
+  resubmit:    0
   stop_option: nyears
   stop_n:      10
   rest_n:      10
