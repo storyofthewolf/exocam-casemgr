@@ -120,10 +120,17 @@ def find_exocam_counterpart(filename, component, exocam_sm_root):
     candidate = os.path.join(exocam_sm_root, component, filename)
     return candidate if os.path.isfile(candidate) else None
 
+def normalize_lines(text):
+    """Strip trailing whitespace from each line. Used to ignore cosmetic whitespace-only diffs."""
+    return [line.rstrip() for line in text.splitlines()]
+
+def read_normalized(path):
+    return normalize_lines(open(path, 'rb').read().decode('utf-8', errors='replace'))
+
 def diff_counts(path_a, path_b):
-    """Return (added, removed) line counts; b is reference."""
-    a = open(path_a, 'rb').read().decode('utf-8', errors='replace').splitlines()
-    b = open(path_b, 'rb').read().decode('utf-8', errors='replace').splitlines()
+    """Return (added, removed) line counts after trailing-whitespace normalization; b is reference."""
+    a = read_normalized(path_a)
+    b = read_normalized(path_b)
     ca, cb = Counter(a), Counter(b)
     return (sum(max(0, ca[l] - cb[l]) for l in ca),
             sum(max(0, cb[l] - ca[l]) for l in cb))
@@ -165,7 +172,7 @@ def _print_namelist_section(nl1, nl2, label1, label2, verbose):
     for fname in names:
         in1, in2 = fname in nl1, fname in nl2
         if in1 and in2:
-            if open(nl1[fname], 'rb').read() == open(nl2[fname], 'rb').read():
+            if read_normalized(nl1[fname]) == read_normalized(nl2[fname]):
                 if verbose:
                     print(f"  {'IDENTICAL':<14}  {fname}")
                 n_eq += 1
@@ -211,7 +218,7 @@ def cmd_summary(args, paths):
                     continue
                 in1, in2 = fname in f1, fname in f2
                 if in1 and in2:
-                    if open(f1[fname],'rb').read() == open(f2[fname],'rb').read():
+                    if read_normalized(f1[fname]) == read_normalized(f2[fname]):
                         if args.verbose:
                             print(f"  {'IDENTICAL':<14}  {fname}")
                         n_eq += 1
@@ -265,7 +272,7 @@ def cmd_summary(args, paths):
                     continue
                 exo_path = find_exocam_counterpart(fname, comp, exocam_sm)
                 if exo_path is not None:
-                    if open(abs_path,'rb').read() == open(exo_path,'rb').read():
+                    if read_normalized(abs_path) == read_normalized(exo_path):
                         if args.verbose:
                             print(f"  {'IDENTICAL':<14}  {fname}")
                         n_eq += 1
@@ -274,7 +281,7 @@ def cmd_summary(args, paths):
                         print(f"  {'MODIFIED':<14}  {fname:<40}  (+{ad} / -{rm} lines)"); n_mod += 1
                 elif fname in exort_files:
                     rt_path = exort_files[fname]
-                    if open(abs_path,'rb').read() == open(rt_path,'rb').read():
+                    if read_normalized(abs_path) == read_normalized(rt_path):
                         if args.verbose:
                             print(f"  {'RT IDENTICAL':<14}  {fname}")
                         n_rt_eq += 1
@@ -291,7 +298,7 @@ def cmd_summary(args, paths):
             for fname, abs_path in sorted(nl1.items()):
                 ref_path = os.path.join(nl_ref_dir, fname)
                 if os.path.isfile(ref_path):
-                    if open(abs_path, 'rb').read() == open(ref_path, 'rb').read():
+                    if read_normalized(abs_path) == read_normalized(ref_path):
                         if args.verbose:
                             print(f"  {'IDENTICAL':<14}  {fname}")
                     else:
@@ -338,7 +345,7 @@ def cmd_full(args, paths):
             sys.exit(f"ERROR: '{target}' not found in SourceMods or namelists of "
                      f"'{args.case}' or '{args.case2}'")
         if path1 and path2:
-            r = subprocess.run(['diff', path1, path2])
+            r = subprocess.run(['diff', '-b', path1, path2])
             if r.returncode == 0:
                 print("(files are identical)")
         elif path1:
@@ -365,7 +372,7 @@ def cmd_full(args, paths):
                                       config_type, 'namelist_files')
             ref_path = os.path.join(nl_ref_dir, target)
             if os.path.isfile(ref_path):
-                r = subprocess.run(['diff', ref_path, path1])
+                r = subprocess.run(['diff', '-b', ref_path, path1])
                 if r.returncode == 0:
                     print("(files are identical)")
             else:
@@ -376,12 +383,12 @@ def cmd_full(args, paths):
         found_comp = next(c for c in COMPONENTS if target in files1[c])
         exo_path   = find_exocam_counterpart(target, found_comp, exocam_sm)
         if exo_path is not None:
-            r = subprocess.run(['diff', exo_path, path1])
+            r = subprocess.run(['diff', '-b', exo_path, path1])
             if r.returncode == 0:
                 print("(files are identical)")
         elif target in exort_files:
             rt_path = exort_files[target]
-            r = subprocess.run(['diff', rt_path, path1])
+            r = subprocess.run(['diff', '-b', rt_path, path1])
             if r.returncode == 0:
                 print("(RT file is identical to ExoRT source)")
         else:
