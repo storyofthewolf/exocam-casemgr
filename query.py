@@ -20,6 +20,8 @@ Examples
   python query.py export ExoCAM_thai_ben1_L51_n68equiv -o my_run.yaml
   python query.py export case_a case_b -o sweep.yaml
   python query.py export my_base_case -o clone.yaml --clone
+  python query.py --archived search                          # search archived cases
+  python query.py --archived show ExoCAM_thai_ben1_L51_n68equiv
 """
 
 import argparse
@@ -36,6 +38,7 @@ _REGISTRY_GROUPS = [
 ]
 
 DEFAULT_REGISTRY = 'active.yaml'
+ARCHIVED_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'archived.yaml')
 DEFAULT_BLUEPRINT_DIR = 'blueprints'
 DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'config_registry.yaml')
@@ -461,6 +464,9 @@ def build_parser():
     )
     parser.add_argument('--registry', default=DEFAULT_REGISTRY, metavar='PATH',
                         help=f'Path to active.yaml (default: {DEFAULT_REGISTRY})')
+    parser.add_argument('--archived', action='store_true',
+                        help='Query archived.yaml instead of active.yaml '
+                             '(shorthand for --registry archived.yaml)')
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND')
 
@@ -539,6 +545,11 @@ def main():
         parser.print_help()
         sys.exit(0)
 
+    if args.archived and args.registry != DEFAULT_REGISTRY:
+        sys.exit("ERROR: --archived and --registry are mutually exclusive")
+    if args.archived:
+        args.registry = ARCHIVED_REGISTRY
+
     if not os.path.exists(args.registry):
         sys.exit(f"ERROR: registry not found: {args.registry}")
 
@@ -550,7 +561,8 @@ def main():
         cmd_show(args, load_registry_raw(args.registry))
     elif args.command == 'export':
         cmd_export(args, rows, args.config_registry)
-    print(f"\n(case information from: --registry {args.registry})")
+    registry_label = '--archived' if args.archived else f'--registry {args.registry}'
+    print(f"\n(case information from: {registry_label})")
 
 
 if __name__ == '__main__':
