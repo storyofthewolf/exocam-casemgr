@@ -106,7 +106,10 @@ def cmd_search(args, rows):
     matches = [r for r in rows
                if _match(r, set(args.cases), args.prefix, args.config_type, args.exort_pkg, args.nlev)]
     if not matches:
+        no_filters = not (args.cases or args.prefix or args.config_type or args.exort_pkg or args.nlev is not None)
         print("No cases found matching criteria.")
+        if no_filters:
+            print(f"Note: registry appears to be empty: {args.registry}")
         return
 
     # Column widths

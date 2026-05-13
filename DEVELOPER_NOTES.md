@@ -33,21 +33,26 @@ python query.py export case_a case_b -o sweep.yaml \
 python query.py export my_base_case -o clone.yaml \
     --clone --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
 
-# Disk management (all destructive ops: preview by default, --execute to act)
+# Disk management — reporting and retirement (destructive ops: preview by default, --execute to act)
 python manage.py report                                # scan all cases, write usage.yaml
 python manage.py report my_case                        # single case, print only, no yaml write
 python manage.py report --cached                       # read usage.yaml, no disk scan
-python manage.py purge-bld my_case --execute
-python manage.py purge-bld my_case --logs-only --execute
-python manage.py purge-restarts my_case --keep 1 --execute
-python manage.py purge-hist my_case --models atm --execute
-python manage.py purge-logs my_case --execute
-python manage.py move-hist my_case --models atm --execute
 python manage.py avg my_case --info
 python manage.py avg my_case --last 10 --execute
 python manage.py retire my_case --execute                                          # tombstone only
 python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
 python manage.py retire my_case --purge --execute                                  # complete erasure
+
+# Run lifecycle management — check status, purge/move files (all destructive ops preview by default)
+python runmgr.py check                                 # probe SLURM, show case status
+python runmgr.py check --info                         # include CESM event log tail
+python runmgr.py check --energy                       # include energy balance (TS/FSNT/FLNT)
+python runmgr.py cata purge-bld my_case --execute
+python runmgr.py cata purge-bld my_case --logs-only --execute
+python runmgr.py cata purge-restarts my_case --keep 1 --execute
+python runmgr.py cata purge-hist my_case --models atm --execute
+python runmgr.py cata purge-logs my_case --execute
+python runmgr.py cata move-hist my_case --models atm --execute
 
 # SourceMods diff (before retiring)
 python diff.py my_case                                 # summary: MODIFIED / CASE ONLY per file
@@ -265,6 +270,68 @@ Avg files (filenames containing `"avg"`) are always moved to long-term unconditi
 - Bare `report` (all cases): scans disk, clobbers `usage.yaml`
 - `report my_case` or `report --prefix STR`: prints only, never writes `usage.yaml`
 - `report --cached`: reads `usage.yaml`, no disk scan; incompatible with explicit case names
+
+---
+
+## manage_utils.py — shared utilities
+
+Extracted from `manage.py` to support both `manage.py` and `runmgr.py`.
+
+**Constants:**
+- `ARCHIVE_MODELS` — all archive subdirectories: `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`
+- `HIST_MODELS` — components with history/logs subdirs: `ARCHIVE_MODELS` minus `'rest'`
+- `MODEL_STEM` — CESM model name per archive component (e.g. `'atm'` → `'cam'`)
+- `AVG_HIST_DEFAULT_MODELS` — default models when `--models` is unspecified in avg/retire: `['atm', 'lnd', 'ice']`
+
+**Path and config helpers:**
+- `load_paths(args)` — merge `config_registry.yaml` paths with CLI overrides
+- `discover_cases(paths)` — list case names present in caseroot/rundir/archive
+
+**Disk helpers:**
+- `dir_size_bytes(path)` — recursive disk usage
+- `fmt_size(nbytes)` — human-readable size string
+- `list_files_with_size(directory)` — files directly in directory with total size
+
+**History filtering (shared by purge-hist and retire):**
+- `_hist_year(filename)` — extract year string from hist filename (e.g. `'0050'` from `case.cam.h0.0050-01.nc`)
+- `_hist_keep_years_filter(archive_path, models, keep_n)` — partition files by year, return keep/delete lists
+
+**Restart management:**
+- `restart_sets(case, paths)` — list restart sets as `(date_str, path)` tuples, sorted
+
+**Safety helpers:**
+- `confirm(prompt, execute)` — show preview or prompt for yes/no
+- `_require_cases(all_cases, args)` — return cases from args, fail if none provided (no `--all` flag for destructive ops)
+
+---
+
+## runmgr.py — run lifecycle management
+
+Top-level `check` subcommand and nested `cata` subcommand group.
+
+**`check` subcommand:**
+- Probes SLURM for running jobs (`squeue --name <case> -h`)
+- Parses `CaseStatus` file (last non-blank line only), extracts event and timestamp
+- Optional `--info`: appends last 5 lines of `${CASE}.log` event file
+- Optional `--energy`: computes global-mean energy balance from 12 most recent cam.h0 files using ncra + netCDF4
+- Columnar output: case name, status tag, timestamp
+
+**Energy balance computation (`_energy_balance`):**
+- Collects last 12 non-avg `cam.h0` files from `archive/<case>/atm/hist/`
+- Averages with `ncra` into temp file
+- Extracts `TS` (surface temperature), `FSNT` (top-of-atmosphere solar), `FLNT` (top-of-atmosphere LW)
+- Computes area weights: `w = cos(lat)` normalized to sum to 1.0
+- Returns `(ts_mean, fsnt_mean, flnt_mean, n_used)` or `(None, None, None, 0)` on failure
+- Cleans up temp file in finally block even on early return
+
+**`cata` subcommand group (case archival):**
+- `cata purge-bld` — delete build objects from `rundir/<case>/bld/`
+- `cata purge-restarts` — trim old restart sets in `archive/<case>/rest/`
+- `cata purge-hist` — delete history files from `archive/<case>/<model>/hist/`
+- `cata purge-logs` — delete logs from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`
+- `cata move-hist` — move history files to long-term storage
+
+All cata subcommands: preview mode by default, `--execute` required to act, confirmation prompt per case.
 
 ---
 
