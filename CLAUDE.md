@@ -32,7 +32,9 @@ CASE directories on HPC
 
 cases/ + rundir/ + archive/ on HPC
        ↓
-  manage.py                  ← disk reporting, purge, move-hist, retire
+  runmgr.py cata             ← active-run housekeeping: purge-bld, purge-restarts,
+  │                             purge-hist, purge-logs, move-hist
+  manage.py                  ← disk reporting, averaging, retirement lifecycle
   diff.py                    ← SourceMods diff before retiring
 ```
 
@@ -42,7 +44,9 @@ cases/ + rundir/ + archive/ on HPC
 - **`build.py`** — validates experiment matrix, generates self-contained shell build scripts
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
-- **`manage.py`** — disk reporting, purge/move/retire operations; lifecycle: `report`, `avg`, `retire`
+- **`manage.py`** — disk reporting, hist averaging, and retirement lifecycle: `report`, `avg`, `retire`
+- **`manage_utils.py`** — shared utility layer imported by both `manage.py` and `runmgr.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`
+- **`runmgr.py`** — run supervision tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `cata` subcommand group for active-run housekeeping: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
 - **`config_registry.yaml`** — machine-specific paths, CESM config per config_type, IC file table; must be edited per user/machine
 
@@ -50,10 +54,52 @@ cases/ + rundir/ + archive/ on HPC
 
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
 - `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt).
-- All destructive `manage.py` operations default to **preview mode**; `--execute` required to act.
+- All destructive `manage.py` and `runmgr.py cata` operations default to **preview mode**; `--execute` required to act.
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics (grep/sed/echo) rather than plain append, to avoid duplicate keys.
 - `exort_pkg` ending in `*` signals custom RT copied into SourceMods. In newcase mode this is a validation error; in clone mode it is allowed and triggers `_build_usr_src_fix_block` to rewrite the inherited `-usr_src` path.
+- `runmgr.py check` defaults to **all discoverable cases** when given no names — unlike every destructive subcommand, which requires explicit names.
+
+---
+
+## runmgr.py check — internals
+
+### CaseStatus parsing
+
+`$caseroot/<case>/CaseStatus` is read line-by-line. Blank lines are skipped. Each non-blank line is parsed as `<event> <YYYY-MM-DD> <HH:MM:SS>` by splitting off the last two whitespace tokens; everything before is the event prefix.
+
+Event prefix → status label mapping (matched by `str.startswith`):
+
+| Event prefix | Status label |
+|---|---|
+| `run SUCCESSFUL` | `COMPLETE` |
+| `run FAILED` | `FAILED` |
+| `run started` | `RUNNING` |
+| `build complete` | `BUILT` |
+| `cesm_setup` | `CLEANED` (covers `cesm_setup -clean`) |
+| (anything else) | `UNKNOWN` |
+
+The status shown is determined by the last non-blank line. The segment summary counts all `run SUCCESSFUL` and `run FAILED` lines in the full file and records the first `run started` timestamp and most-recent `run SUCCESSFUL` timestamp.
+
+If `CaseStatus` is missing (no caseroot dir), status is shown as `NO_CASEDIR`.
+
+### SLURM probe
+
+When the last CaseStatus event starts with `run started` or `run SUCCESSFUL`, `squeue --name <case> -h` is run as a subprocess:
+- **Job found + last event was `run SUCCESSFUL`** → status shown as `RESUBMITTED`
+- **No job + last event was `run started`** → status shown as `RUNNING?` (started but no longer queued — likely crashed without writing to CaseStatus)
+- **`FileNotFoundError`** (squeue not in PATH) or **non-zero exit code** → probe silently omitted, original status label retained
+
+### --energy computation
+
+1. List `*.cam.h0.*.nc` files in `$archive/<case>/atm/hist/` excluding filenames containing `"avg"`. Sort lexicographically (= chronological for CESM date strings).
+2. Take the last 12 (or fewer, with a warning printed).
+3. Run `ncra <file1> ... <fileN> /tmp/runmgr_energy_<case>.nc`. If `ncra` is not found, print a warning and skip.
+4. Open the temp file with `netCDF4`. Extract `TS`, `FSNT`, `FLNT`. If any variable is missing, print a warning and skip.
+5. Compute area weights: `w = cos(lat * π/180)`, broadcast across the lon dimension, normalize to sum to 1.
+6. Compute global means via `sum(data * w2d)`.
+7. Print `Last Nmo:  TS = 287.3 K    Etop = +0.8 W/m²` (Etop = FSNT_mean − FLNT_mean, signed, 1 decimal).
+8. The temp file is always deleted in a `finally` block, even on error.
 
 ---
 
@@ -118,8 +164,8 @@ Pressure strings (e.g. `"1bar"`, `"0.1bar"`) are IC file table keys and must exa
 ## Design invariants — do not violate
 
 - `parse_utils.py` must remain free of filesystem side effects. It reads files via paths passed to it; it never discovers or writes files itself.
-- All destructive `manage.py` operations require `--execute`. Without it, every command only prints what it would do.
-- No `--all` flag exists for destructive operations. Cases must be named explicitly.
+- All destructive `manage.py` and `runmgr.py cata` operations require `--execute`. Without it, every command only prints what it would do.
+- No `--all` flag exists for destructive operations in either tool. Cases must be named explicitly.
 - `build.py generate` generates scripts but never executes them. `build.py make` runs them (with confirmation prompt).
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
@@ -161,6 +207,20 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - `query.py`: `ARCHIVED_REGISTRY` → `RETIRED_REGISTRY`; `--archived` flag → `--retired`; mutual-exclusion message updated; clone guard updated.
 - `CLAUDE.md`, `DEVELOPER_NOTES.md`, `README.md`: all `archived.yaml` / `--archive` / `--archived` references updated to match.
 - `archived.yaml` renamed to `retired.yaml` on disk.
+
+**`manage_utils.py` (new) + `runmgr.py` (new) — cata migration:**
+- Created `manage_utils.py` with shared constants, `load_paths()`, disk helpers, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`. `manage.py` now imports all of these from there.
+- Created `runmgr.py` with `cata` subcommand group: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist` — direct ports of the same commands from `manage.py`.
+- Removed all five subcommands from `manage.py` (functions, argparse registrations, COMMANDS entries, docstring). `manage.py` now covers only `report`, `avg`, `retire`.
+
+**`runmgr.py check` (new subcommand):**
+- Parses `$caseroot/<case>/CaseStatus` to determine current status (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN/NO_CASEDIR) and segment summary.
+- SLURM probe via `squeue --name <case> -h`; degrades gracefully when squeue unavailable.
+- `RESUBMITTED` status when last event is `run SUCCESSFUL` but a job is still queued.
+- `RUNNING?` status when last event is `run started` but no job is queued (likely crashed).
+- `--info` flag: per-model hist summary and restart set count (reuses `_hist_year`, `list_files_with_size`, `restart_sets` from `manage_utils`).
+- `--energy` flag: global-mean TS and Etop=FSNT-FLNT from last 12 atm h0 files via ncra + netCDF4.
+- Defaults to all discoverable cases when no names or prefix given (unlike destructive subcommands).
 
 ### Good starting points for next session
 - Update stale module docstring in `build.py`.

@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""
+manage_utils.py — Shared utility layer for manage.py and runmgr.py
+
+Constants, path-loading, disk helpers, and case-selection primitives used by
+both tools. No subcommand logic lives here.
+"""
+
+import os
+import re
+import sys
+import yaml
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+ARCHIVE_MODELS = ['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']
+HIST_MODELS = [m for m in ARCHIVE_MODELS if m != 'rest']
+
+MODEL_STEM = {
+    'atm': 'cam', 'lnd': 'clm2', 'ice': 'cice', 'ocn': 'pop',
+    'rof': 'mosart', 'glc': 'cism', 'wav': 'ww3', 'cpl': 'cpl',
+}
+AVG_HIST_DEFAULT_MODELS = ['atm', 'lnd', 'ice']
+
+DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'config_registry.yaml')
+
+# ---------------------------------------------------------------------------
+# Paths and config
+# ---------------------------------------------------------------------------
+
+
+def load_paths(args):
+    """Load paths from config_registry.yaml, then apply any CLI overrides."""
+    paths = {}
+    cfg_path = getattr(args, 'config_registry', DEFAULT_CONFIG)
+    if cfg_path and os.path.exists(cfg_path):
+        with open(cfg_path) as f:
+            data = yaml.safe_load(f) or {}
+        paths = data.get('paths', {})
+
+    overrides = {
+        'caseroot':  getattr(args, 'caseroot',  None),
+        'rundir':    getattr(args, 'rundir',    None),
+        'archive':   getattr(args, 'archive',   None),
+        'long_term': getattr(args, 'long_term', None),
+    }
+    for k, v in overrides.items():
+        if v:
+            paths[k] = v
+    return paths
+
+
+# ---------------------------------------------------------------------------
+# Disk usage helpers
+# ---------------------------------------------------------------------------
+
+def dir_size_bytes(path):
+    """Return total bytes under path, or 0 if path doesn't exist.
+
+    Uses os.scandir so each entry's stat() is fetched once (one syscall).
+    """
+    if not os.path.exists(path):
+        return 0
+    total = 0
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                    elif entry.is_dir(follow_symlinks=False):
+                        total += dir_size_bytes(entry.path)
+                except OSError:
+                    pass
+    except OSError:
+        return 0
+    return total
+
+
+def fmt_size(nbytes):
+    """Format bytes as human-readable string."""
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if nbytes < 1024:
+            return f"{nbytes:.1f} {unit}"
+        nbytes /= 1024
+    return f"{nbytes:.1f} PB"
+
+
+def list_files_with_size(directory):
+    """Return (filenames, total_bytes) for files directly inside directory.
+
+    Subdirectories are ignored. Returns ([], 0) if directory is missing.
+    """
+    if not os.path.isdir(directory):
+        return [], 0
+    files = []
+    total = 0
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        files.append(entry.name)
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    pass
+    except OSError:
+        return [], 0
+    return files, total
+
+
+def discover_cases(paths):
+    """
+    Return sorted list of case names that appear in at least one of
+    caseroot, rundir, or archive.
+    """
+    names = set()
+    for key in ('caseroot', 'rundir', 'archive'):
+        d = paths.get(key, '')
+        if d and os.path.isdir(d):
+            for name in os.listdir(d):
+                if os.path.isdir(os.path.join(d, name)):
+                    names.add(name)
+    return sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# Hist year filtering (shared by purge-hist and retire)
+# ---------------------------------------------------------------------------
+
+_RE_HIST_YEAR = re.compile(r'\.(\d{4})-\d{2}')
+
+
+def _hist_year(filename):
+    """Extract model year string from hist filename, e.g. '0050' from case.cam.h0.0050-01.nc."""
+    m = _RE_HIST_YEAR.search(filename)
+    return m.group(1) if m else None
+
+
+def _hist_keep_years_filter(archive_path, models, keep_n):
+    """
+    Partition hist files across *models* under archive_path into keep/delete
+    based on retaining the *keep_n* most recent model years.
+
+    Returns (keep_years, per_model) where:
+      keep_years : sorted list of year strings to retain
+      per_model  : {model: {'dir': path, 'keep': [files], 'delete': [files]}}
+
+    Files whose year cannot be parsed are placed in 'keep' (never deleted).
+    """
+    all_years = set()
+    listings = {}
+    for model in models:
+        hist_dir = os.path.join(archive_path, model, 'hist')
+        files, _ = list_files_with_size(hist_dir)
+        if not files:
+            continue
+        listings[model] = (hist_dir, files)
+        for f in files:
+            y = _hist_year(f)
+            if y:
+                all_years.add(y)
+
+    keep_years = sorted(all_years)[-keep_n:] if all_years and keep_n > 0 else []
+    keep_set = set(keep_years)
+
+    per_model = {}
+    for model, (hist_dir, files) in listings.items():
+        keep_files, delete_files = [], []
+        for f in files:
+            y = _hist_year(f)
+            if y is None or y in keep_set:
+                keep_files.append(f)
+            else:
+                delete_files.append(f)
+        per_model[model] = {'dir': hist_dir, 'keep': keep_files, 'delete': delete_files}
+
+    return keep_years, per_model
+
+
+def restart_sets(case, paths):
+    """
+    Return sorted list of (date_str, path) for restart sets in
+    archive/<case>/rest/, oldest first.
+    """
+    archive = paths.get('archive', '')
+    rest_dir = os.path.join(archive, case, 'rest')
+    if not os.path.isdir(rest_dir):
+        return []
+    sets = []
+    for name in os.listdir(rest_dir):
+        full = os.path.join(rest_dir, name)
+        if os.path.isdir(full):
+            sets.append((name, full))
+    return sorted(sets, key=lambda x: x[0])
+
+
+# ---------------------------------------------------------------------------
+# Confirmation helper
+# ---------------------------------------------------------------------------
+
+def confirm(prompt, execute):
+    """Return True if the action should proceed."""
+    if not execute:
+        print(f"  [preview] would: {prompt}")
+        return False
+    answer = input(f"  Confirm: {prompt} [yes/no]: ").strip().lower()
+    return answer == 'yes'
+
+
+# ---------------------------------------------------------------------------
+# Case selection helper (destructive subcommands only)
+# ---------------------------------------------------------------------------
+
+def _require_cases(all_cases, args):
+    """Return cases from args.cases that exist on disk.
+
+    Exits with an error if no case names are provided. There is no --all flag.
+    """
+    requested = getattr(args, 'cases', None) or []
+    if not requested:
+        sys.exit("ERROR: specify case name(s). No --all flag is provided for "
+                 "destructive operations — list cases explicitly.")
+    missing = [c for c in requested if c not in all_cases]
+    if missing:
+        print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
+    return [c for c in requested if c in all_cases]
