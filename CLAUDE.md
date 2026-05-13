@@ -145,25 +145,25 @@ The module-level docstring still references the old single-command CLI. Actual C
 
 ---
 
-## Session handoff — 2026-05-12
+## Session handoff — 2026-05-13
 
-### Work completed (2026-05-11 – 2026-05-12)
+### Work completed (2026-05-13)
 
-**`build.py` (2026-05-11):**
-- Refactored CLI to argparse subcommands: `generate` and `make`. `--scripts-dir DIR` replaces `--outdir`.
-- `generate --list` lists blueprints; `make --prefix PREFIX` filters scripts by prefix.
-- `make` globs `*_build.sh`, prompts for confirmation, captures logs to `logs/<case>.build.log`.
-- Added `_build_nl_upsert_block` / `_nl_upsert_lines` for clone-mode namelist upsert.
-- Added `nl_cam_params` as third namelist group (append in newcase, upsert in clone).
-- Added `_build_usr_src_fix_block` for `exort_pkg*` clone cases: rewrites inherited `-usr_src` in `CAM_CONFIG_OPTS`.
-- Fixed `_build_run_script_block`: `--account` and `-J` now use upsert idiom.
+**`diff.py`:**
+- Added `normalize_lines` / `read_normalized` helpers; all 6 binary identity checks now use `read_normalized` so trailing-whitespace-only diffs are treated as identical.
+- `diff_counts` updated to normalize before counting.
+- All 4 `subprocess.run(['diff', ...])` calls in `cmd_full` now pass `-b` (ignore trailing whitespace in full diff view).
 
-**`manage.py` (2026-05-11):**
-- Refactored `retire` to three tiers: bare (tombstone only), `--keep-*`, `--purge` (complete erasure).
-- All `--execute` retire paths now require yes/no confirmation.
+**`query.py`:**
+- Added `RETIRED_REGISTRY` constant pointing to `retired.yaml`.
+- Added `--retired` top-level flag as shorthand for `--registry retired.yaml`; mutually exclusive with `--registry`.
+- Footer now prints `--retired` (not the path) when that flag was used.
 
-**`build.py` (2026-05-12):**
-- Fixed `_build_usr_src_fix_block`: CESM 1.2.1 `xmlquery` lacks `--value`; reverted to `sed 's/^[^=]*= //'`. Root cause: intermediate shell variable with unexpanded `$CASEROOT/$CASE` rejected by `xmlchange`. Fixed by inlining path into double-quoted sed replacement so variables expand at shell runtime.
+**Rename: `archived` → `retired` (names only, no logic changes):**
+- `scan.py`: `--archive` flag → `--retired`; all `args.archive` references → `args.retired`; `'archived.yaml'` string → `'retired.yaml'`; `_REGISTRY_HEADER` regeneration hint updated; docstring and epilog updated.
+- `query.py`: `ARCHIVED_REGISTRY` → `RETIRED_REGISTRY`; `--archived` flag → `--retired`; mutual-exclusion message updated; clone guard updated.
+- `CLAUDE.md`, `DEVELOPER_NOTES.md`, `README.md`: all `archived.yaml` / `--archive` / `--archived` references updated to match.
+- `archived.yaml` renamed to `retired.yaml` on disk.
 
 ### Good starting points for next session
 - Update stale module docstring in `build.py`.

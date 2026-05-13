@@ -19,8 +19,8 @@ python scan.py                                         # scan caseroot, print on
 python scan.py --update                                # scan and write active.yaml (clobbers)
 python scan.py my_case                                 # inspect single case, print only
 python scan.py my_case --registry active.yaml --update # inspect and merge into registry
-python scan.py --archive                               # scan long_term/ entries only
-python scan.py --archive --update                      # scan long_term/ and write archived.yaml
+python scan.py --retired                               # scan long_term/ entries only
+python scan.py --retired --update                      # scan long_term/ and write retired.yaml
 
 # Query registry
 python query.py search                                 # all cases
@@ -239,7 +239,7 @@ Sets `config_saved` (bool) on every row by checking whether `SourceMods/` exists
 
 `exort_pkg *` warning: printed to stderr after matrix output (visible at end). Suppressed in `--clone` mode since RT is inherited from the clone source.
 
-`cmd_search` appends a CONFIG column (showing `yes` or `-`) only when at least one result row contains `config_saved` — this is present in `archived.yaml` searches, absent in `active.yaml` searches.
+`cmd_search` appends a CONFIG column (showing `yes` or `-`) only when at least one result row contains `config_saved` — this is present in `retired.yaml` searches, absent in `active.yaml` searches.
 
 ---
 

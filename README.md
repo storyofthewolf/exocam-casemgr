@@ -198,8 +198,8 @@ python scan.py /path/to/cases/
 # Add new cases to an existing registry (merges with current active.yaml)
 python scan.py my_new_case --registry active.yaml --update
 
-# Scan long_term archive entries and write archived.yaml
-python scan.py --archive --update
+# Scan long_term archive entries and write retired.yaml
+python scan.py --retired --update
 ```
 
 A CASE directory is recognized by the presence of `SourceMods/src.share/exoplanet_mod.F90`. The registry captures metadata from multiple sources per case:
