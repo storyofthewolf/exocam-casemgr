@@ -373,16 +373,16 @@ _STATUS_MAP = {
 
 
 def _parse_casestatus(casestatus_path):
-    """Parse CaseStatus file.
+    """Parse CaseStatus file. Only the last non-blank line is used.
+
+    Segment history counts are intentionally not reported: CaseStatus is
+    inherited verbatim by cloned cases, making cumulative counts unreliable.
 
     Returns dict with keys:
-      status         : str label (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN)
-      last_event     : raw event prefix of the last line
-      last_ts        : timestamp string of the last line
-      n_success      : count of 'run SUCCESSFUL' lines
-      n_failed       : count of 'run FAILED' lines
-      first_run_ts   : timestamp of the first 'run started' line, or None
-      last_success_ts: timestamp of the most recent 'run SUCCESSFUL' line, or None
+      status     : str label (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN)
+      last_event : raw event prefix of the last non-blank line
+      last_ts    : timestamp string of the last non-blank line
+    Returns None if the file does not exist.
     """
     if not os.path.isfile(casestatus_path):
         return None
@@ -391,60 +391,26 @@ def _parse_casestatus(casestatus_path):
         raw_lines = f.readlines()
 
     lines = [l.rstrip('\n') for l in raw_lines if l.strip()]
+    if not lines:
+        return {'status': 'UNKNOWN', 'last_event': None, 'last_ts': None}
 
-    n_success = 0
-    n_failed = 0
-    first_run_ts = None
-    last_success_ts = None
-    last_event = None
-    last_ts = None
-
-    for line in lines:
-        # Each line: "<event prefix> <YYYY-MM-DD> <HH:MM:SS>"
-        # The date token is the second-to-last whitespace-delimited token,
-        # time is the last. Event is everything before the date.
-        parts = line.rsplit(None, 2)
-        if len(parts) < 3:
-            # Malformed — treat entire line as event with no timestamp
-            event = line.strip()
-            ts = ''
-        else:
-            event = parts[0].strip()
-            ts = f"{parts[1]} {parts[2]}"
-
-        last_event = event
-        last_ts = ts
-
-        if event == 'run SUCCESSFUL':
-            n_success += 1
-            last_success_ts = ts
-        elif event == 'run FAILED':
-            n_failed += 1
-        elif event == 'run started' and first_run_ts is None:
-            first_run_ts = ts
-
-    if last_event is None:
-        return {
-            'status': 'UNKNOWN', 'last_event': None, 'last_ts': None,
-            'n_success': 0, 'n_failed': 0,
-            'first_run_ts': None, 'last_success_ts': None,
-        }
+    # Only the last non-blank line matters.
+    line = lines[-1]
+    parts = line.rsplit(None, 2)
+    if len(parts) < 3:
+        event = line.strip()
+        ts = ''
+    else:
+        event = parts[0].strip()
+        ts = f"{parts[1]} {parts[2]}"
 
     status = 'UNKNOWN'
     for prefix, label in _STATUS_MAP.items():
-        if last_event.startswith(prefix):
+        if event.startswith(prefix):
             status = label
             break
 
-    return {
-        'status':          status,
-        'last_event':      last_event,
-        'last_ts':         last_ts,
-        'n_success':       n_success,
-        'n_failed':        n_failed,
-        'first_run_ts':    first_run_ts,
-        'last_success_ts': last_success_ts,
-    }
+    return {'status': status, 'last_event': event, 'last_ts': ts}
 
 
 def _squeue_probe(case):
@@ -593,10 +559,12 @@ def cmd_check(args, paths):
     Defaults to all discoverable cases when no case names or --prefix are given.
     Read-only — no --execute flag required or accepted.
 
-    Default output per case:
-      Current status (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN) and its
-      timestamp; segment summary (success count, fail count, first run start,
-      last success timestamp).
+    Default output per case (single line):
+      <case>  [STATUS]  (<timestamp of last CaseStatus line>)
+      Status labels: RUNNING, COMPLETE, FAILED, BUILT, CLEANED, UNKNOWN,
+      NO_CASEDIR, RESUBMITTED, RUNNING?
+      Segment history counts are not reported — CaseStatus is inherited by
+      cloned cases, making cumulative counts unreliable.
 
     SLURM probe: when the last CaseStatus event is 'run started' or
     'run SUCCESSFUL', squeue --name <case> -h is run. A queued job with a
@@ -667,18 +635,6 @@ def cmd_check(args, paths):
 
         ts_suffix = f"  ({status_ts})" if status_ts else ''
         print(f"{case}  [{status_label}]{ts_suffix}")
-
-        # --- segment summary ---
-        if cs is not None:
-            parts = []
-            if cs['n_success'] or cs['n_failed']:
-                parts.append(f"  runs: {cs['n_success']} ok / {cs['n_failed']} failed")
-            if cs['first_run_ts']:
-                parts.append(f"  first start: {cs['first_run_ts']}")
-            if cs['last_success_ts'] and cs['n_success'] > 0:
-                parts.append(f"  last ok: {cs['last_success_ts']}")
-            for p in parts:
-                print(p)
 
         # --- --info: hist and restart breakdown ---
         if do_info and archive:

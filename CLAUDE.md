@@ -66,7 +66,9 @@ cases/ + rundir/ + archive/ on HPC
 
 ### CaseStatus parsing
 
-`$caseroot/<case>/CaseStatus` is read line-by-line. Blank lines are skipped. Each non-blank line is parsed as `<event> <YYYY-MM-DD> <HH:MM:SS>` by splitting off the last two whitespace tokens; everything before is the event prefix.
+`$caseroot/<case>/CaseStatus` is read and only the **last non-blank line** is used. Each line is parsed as `<event> <YYYY-MM-DD> <HH:MM:SS>` by splitting off the last two whitespace tokens; everything before is the event prefix.
+
+Segment history counts (run ok/failed, first start, last success) are intentionally **not reported**. CaseStatus is inherited verbatim when a case is cloned, so cumulative counts from the full file are unreliable for clone cases.
 
 Event prefix → status label mapping (matched by `str.startswith`):
 
@@ -79,7 +81,7 @@ Event prefix → status label mapping (matched by `str.startswith`):
 | `cesm_setup` | `CLEANED` (covers `cesm_setup -clean`) |
 | (anything else) | `UNKNOWN` |
 
-The status shown is determined by the last non-blank line. The segment summary counts all `run SUCCESSFUL` and `run FAILED` lines in the full file and records the first `run started` timestamp and most-recent `run SUCCESSFUL` timestamp.
+Output per case is a single line: `<case>  [STATUS]  (<timestamp>)`.
 
 If `CaseStatus` is missing (no caseroot dir), status is shown as `NO_CASEDIR`.
 
@@ -214,7 +216,7 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - Removed all five subcommands from `manage.py` (functions, argparse registrations, COMMANDS entries, docstring). `manage.py` now covers only `report`, `avg`, `retire`.
 
 **`runmgr.py check` (new subcommand):**
-- Parses `$caseroot/<case>/CaseStatus` to determine current status (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN/NO_CASEDIR) and segment summary.
+- Parses `$caseroot/<case>/CaseStatus` (last non-blank line only) to determine current status (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN/NO_CASEDIR). Segment history not reported — CaseStatus inherited by clones makes counts unreliable.
 - SLURM probe via `squeue --name <case> -h`; degrades gracefully when squeue unavailable.
 - `RESUBMITTED` status when last event is `run SUCCESSFUL` but a job is still queued.
 - `RUNNING?` status when last event is `run started` but no job is queued (likely crashed).
