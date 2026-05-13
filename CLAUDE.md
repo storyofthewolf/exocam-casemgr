@@ -26,7 +26,7 @@ CASE directories on HPC
   scan.py
        ↓
   active.yaml                ← queryable YAML registry (active cases)
-  archived.yaml              ← queryable YAML registry (retired cases)
+  retired.yaml               ← queryable YAML registry (retired cases)
        ↓
   query.py                   ← search registry, export experiment matrices
 

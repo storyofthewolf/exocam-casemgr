@@ -6,8 +6,8 @@ writes a queryable YAML registry.
 Usage:
   python scan.py                     # scan active caseroot, print only
   python scan.py --update            # scan active caseroot, write active.yaml
-  python scan.py --archive           # scan long_term archive, print only
-  python scan.py --archive --update  # scan long_term archive, write archived.yaml
+  python scan.py --retired           # scan long_term archive, print only
+  python scan.py --retired --update  # scan long_term archive, write retired.yaml
 
 With no arguments, scans all cases under caseroot from config_registry.yaml.
 Each argument may be a bare case name, an absolute path, or a parent directory.
@@ -307,7 +307,7 @@ def _rows_to_ordered(rows):
 
 _REGISTRY_HEADER = (
     "# Auto-generated cache — regenerate with: "
-    "python scan.py --archive --update\n"
+    "python scan.py --retired --update\n"
 )
 
 
@@ -401,8 +401,8 @@ def main():
             'Examples:\n'
             '  python scan.py                        # scan active caseroot, print only\n'
             '  python scan.py --update               # scan active caseroot, write active.yaml\n'
-            '  python scan.py --archive              # scan long_term archive, print only\n'
-            '  python scan.py --archive --update     # scan long_term archive, write archived.yaml\n'
+            '  python scan.py --retired              # scan long_term archive, print only\n'
+            '  python scan.py --retired --update     # scan long_term archive, write retired.yaml\n'
             '  python scan.py my_case --registry active.yaml --update\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -411,11 +411,11 @@ def main():
                         help='CASE name(s), dir(s), or parent dir(s) to inspect '
                              '(default: scan all cases under caseroot from config_registry.yaml)')
     parser.add_argument('--registry', default=None,
-                        help='Output YAML path (default: active.yaml, or archived.yaml with --archive)')
+                        help='Output YAML path (default: active.yaml, or retired.yaml with --retired)')
     parser.add_argument('--update', action='store_true',
                         help='Write results to the registry file (merging with any existing content); '
                              'without --update, results are printed only')
-    parser.add_argument('--archive', action='store_true', dest='archive',
+    parser.add_argument('--retired', action='store_true', dest='retired',
                         help='Load pre-captured case.yaml entries from long_term/ '
                              '(from config_registry.yaml). No Fortran or namelist files '
                              'are read. May be combined with live case paths.')
@@ -429,12 +429,12 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if args.registry is None:
         args.registry = os.path.join(script_dir,
-                                     'archived.yaml' if args.archive else 'active.yaml')
+                                     'retired.yaml' if args.retired else 'active.yaml')
 
     caseroot  = _load_caseroot(args.config_registry)
     long_term = _load_long_term(args.config_registry)
 
-    if not args.paths and not args.archive:
+    if not args.paths and not args.retired:
         if not caseroot:
             parser.error("provide at least one CASE path, or set paths.caseroot in "
                          "config_registry.yaml for automatic caseroot scanning")
@@ -464,10 +464,10 @@ def main():
 
     # --- archive scan ---
     archive_rows = []
-    if args.archive:
+    if args.retired:
         if not long_term:
             print("WARNING: long_term path not set in config_registry.yaml — "
-                  "--archive has nothing to read.", file=sys.stderr)
+                  "--retired has nothing to read.", file=sys.stderr)
         else:
             archive_rows = scan_archive_entries(long_term)
             print(f"Archive scan: found {len(archive_rows)} case(s) in {long_term}")

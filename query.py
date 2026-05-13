@@ -20,8 +20,8 @@ Examples
   python query.py export ExoCAM_thai_ben1_L51_n68equiv -o my_run.yaml
   python query.py export case_a case_b -o sweep.yaml
   python query.py export my_base_case -o clone.yaml --clone
-  python query.py --archived search                          # search archived cases
-  python query.py --archived show ExoCAM_thai_ben1_L51_n68equiv
+  python query.py --retired search                           # search retired cases
+  python query.py --retired show ExoCAM_thai_ben1_L51_n68equiv
 """
 
 import argparse
@@ -38,7 +38,7 @@ _REGISTRY_GROUPS = [
 ]
 
 DEFAULT_REGISTRY = 'active.yaml'
-ARCHIVED_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'archived.yaml')
+RETIRED_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'retired.yaml')
 DEFAULT_BLUEPRINT_DIR = 'blueprints'
 DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'config_registry.yaml')
@@ -261,8 +261,8 @@ def cmd_export(args, rows, config_registry_path):
     clone = args.clone
 
     # --clone is only valid against active cases
-    if clone and os.path.basename(args.registry) == 'archived.yaml':
-        sys.exit("ERROR: --clone requires an active registry; archived.yaml cases cannot be cloned.")
+    if clone and os.path.basename(args.registry) == 'retired.yaml':
+        sys.exit("ERROR: --clone requires an active registry; retired.yaml cases cannot be cloned.")
 
     # For --clone, all positional cases must resolve to a single clone source
     if clone:
@@ -464,9 +464,9 @@ def build_parser():
     )
     parser.add_argument('--registry', default=DEFAULT_REGISTRY, metavar='PATH',
                         help=f'Path to active.yaml (default: {DEFAULT_REGISTRY})')
-    parser.add_argument('--archived', action='store_true',
-                        help='Query archived.yaml instead of active.yaml '
-                             '(shorthand for --registry archived.yaml)')
+    parser.add_argument('--retired', action='store_true',
+                        help='Query retired.yaml instead of active.yaml '
+                             '(shorthand for --registry retired.yaml)')
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND')
 
@@ -545,10 +545,10 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    if args.archived and args.registry != DEFAULT_REGISTRY:
-        sys.exit("ERROR: --archived and --registry are mutually exclusive")
-    if args.archived:
-        args.registry = ARCHIVED_REGISTRY
+    if args.retired and args.registry != DEFAULT_REGISTRY:
+        sys.exit("ERROR: --retired and --registry are mutually exclusive")
+    if args.retired:
+        args.registry = RETIRED_REGISTRY
 
     if not os.path.exists(args.registry):
         sys.exit(f"ERROR: registry not found: {args.registry}")
@@ -561,7 +561,7 @@ def main():
         cmd_show(args, load_registry_raw(args.registry))
     elif args.command == 'export':
         cmd_export(args, rows, args.config_registry)
-    registry_label = '--archived' if args.archived else f'--registry {args.registry}'
+    registry_label = '--retired' if args.retired else f'--registry {args.registry}'
     print(f"\n(case information from: {registry_label})")
 
 
