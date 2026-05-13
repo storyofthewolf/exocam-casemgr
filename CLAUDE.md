@@ -140,9 +140,6 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 ### diff.py: non-standard ExoRT package directory paths
 `build_exort_fileset` constructs the ExoRT reference as `{exort_root}/3dmodels/src.cam.{exort_pkg}/`. Experimental branches outside this path cause RT detection to silently return `{}` — affected files appear as `CASE ONLY`. Cases with non-standard RT are flagged with `*` in `query.py search` output. Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml`.
 
-### `build.py` module docstring is stale
-The module-level docstring still references the old single-command CLI. Actual CLI is subcommand-based (`generate` / `make`). Needs update.
-
 ---
 
 ## Session handoff — 2026-05-13

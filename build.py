@@ -4,12 +4,6 @@ ExoCAM build script generator. Reads an experiment matrix YAML and a config
 registry YAML, validates each case, and writes one self-contained shell script
 per case. Each script embeds the rendered exoplanet_mod.F90 as an inline
 heredoc so no external staging directory is required.
-
-Usage:
-  python build.py experiment_matrix.yaml [--outdir scripts/] [--execute]
-
-Default is dry-run: scripts are written but not executed.
---execute runs each script via bash and tees output to <case>.build.log.
 """
 
 import argparse
