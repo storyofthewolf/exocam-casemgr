@@ -552,6 +552,60 @@ def _energy_balance(case, archive, n_months=12):
             pass
 
 
+def _rundir_info(case, rundir):
+    """Return info lines summarizing files in rundir/<case>/run/ (no individual filenames)."""
+    import re
+    run_dir = os.path.join(rundir, case, 'run')
+    if not os.path.isdir(run_dir):
+        return ["  run/:       (not found)"]
+    try:
+        files, _ = list_files_with_size(run_dir)
+    except OSError:
+        return ["  run/:       (error reading directory)"]
+
+    hist_files = [(f, sz) for f, sz in files
+                  if re.search(r'\.h\d', f) and f.endswith('.nc')]
+    rest_files = [(f, sz) for f, sz in files
+                  if re.search(r'\.r\.[^.]+\.nc$', f)]
+
+    hist_count = len(hist_files)
+    hist_size  = sum(sz for _, sz in hist_files)
+    rest_count = len(rest_files)
+    rest_size  = sum(sz for _, sz in rest_files)
+
+    if hist_count == 0:
+        hist_line = f"  run/hist:     0 files"
+    else:
+        years = sorted(y for y in (_hist_year(f) for f, _ in hist_files) if y)
+        year_span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
+        hist_line = f"  run/hist:  {hist_count:>4} files,  {year_span}  ({fmt_size(hist_size)})"
+
+    rptr_date = None
+    rptr_path = os.path.join(run_dir, f'{case}.rpointer.atm')
+    if not os.path.isfile(rptr_path):
+        for f, _ in files:
+            if f.endswith('.rpointer.atm'):
+                rptr_path = os.path.join(run_dir, f)
+                break
+        else:
+            rptr_path = None
+    if rptr_path and os.path.isfile(rptr_path):
+        try:
+            with open(rptr_path) as fh:
+                first_line = fh.readline().strip()
+            m = re.search(r'\d{4}-\d{2}-\d{2}', first_line)
+            if m:
+                rptr_date = m.group(0)
+        except OSError:
+            pass
+
+    date_suffix = f"  [restart @ {rptr_date}]" if rptr_date else ""
+    rest_line = (f"  run/rest:  {rest_count:>4} active restart  "
+                 f"({fmt_size(rest_size)}){date_suffix}")
+
+    return [hist_line, rest_line]
+
+
 def cmd_check(args, paths):
     """
     Show run status for cases based on CaseStatus file and SLURM queue probe.
@@ -652,6 +706,9 @@ def cmd_check(args, paths):
             sets = restart_sets(case, paths)
             rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
             info_lines.append(f"  rest:      {len(sets):>4} folder(s)  ({fmt_size(rest_total)})")
+            rundir = paths.get('rundir', '')
+            if rundir:
+                info_lines.extend(_rundir_info(case, rundir))
 
         energy_line = None
         if do_energy and archive:
