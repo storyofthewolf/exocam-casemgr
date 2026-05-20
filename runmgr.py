@@ -573,7 +573,7 @@ def _rundir_info(case, rundir):
     hist_files = [(f, sz) for f, sz in file_pairs
                   if re.match(rf'^{re.escape(case)}\.cam\.h0\.\d{{4}}-\d{{2}}.*\.nc$', f)]
     rest_files = [(f, sz) for f, sz in file_pairs
-                  if re.match(rf'^{re.escape(case)}\.cam\.r\.\d{{4}}-\d{{2}}-\d{{2}}.*\.nc$', f)]
+                  if re.match(rf'^{re.escape(case)}\.cam\.r\.\d{{4}}-\d{{2}}.*\.nc$', f)]
 
     hist_count = len(hist_files)
     hist_size  = sum(sz for _, sz in hist_files)
@@ -581,11 +581,11 @@ def _rundir_info(case, rundir):
     rest_size  = sum(sz for _, sz in rest_files)
 
     if hist_count == 0:
-        hist_line = f"  run/hist:     0 files"
+        hist_line = f"  run/hist:     0 cam.h0"
     else:
         years = sorted(y for y in (_hist_year(f) for f, _ in hist_files) if y)
         year_span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
-        hist_line = f"  run/hist:  {hist_count:>4} files,  {year_span}  ({fmt_size(hist_size)})"
+        hist_line = f"  run/hist:  {hist_count:>4} cam.h0,  {year_span}  ({fmt_size(hist_size)})"
 
     rptr_date = None
     rptr_path = os.path.join(run_dir, f'{case}.rpointer.atm')
@@ -607,7 +607,7 @@ def _rundir_info(case, rundir):
             pass
 
     date_suffix = f"  [restart @ {rptr_date}]" if rptr_date else ""
-    rest_line = (f"  run/rest:  {rest_count:>4} active restart  "
+    rest_line = (f"  run/rest:  {rest_count:>4} cam.r found  "
                  f"({fmt_size(rest_size)}){date_suffix}")
 
     total_run_size = dir_size_bytes(run_dir)
