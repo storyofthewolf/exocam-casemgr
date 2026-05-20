@@ -46,7 +46,7 @@ cases/ + rundir/ + archive/ on HPC
 - **`query.py`** — searches registry, exports experiment matrices
 - **`manage.py`** — disk reporting, hist averaging, and retirement lifecycle: `report`, `avg`, `retire`
 - **`manage_utils.py`** — shared utility layer imported by both `manage.py` and `runmgr.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`
-- **`runmgr.py`** — run supervision tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `cata` subcommand group for active-run housekeeping: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`
+- **`runmgr.py`** — run supervision tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `cata` subcommand group for active-run housekeeping: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
 - **`config_registry.yaml`** — machine-specific paths, CESM config per config_type, IC file table; must be edited per user/machine
 
@@ -234,6 +234,23 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - Update stale module docstring in `build.py`.
 - `nl_cam_params` recognized by `build.py` but not yet scanned by `scan.py` — add to `_REGISTRY_GROUPS` and `inspect_case()` if desired.
 - Consider whether `manage.py avg` should move to `runmgr.py`.
+
+---
+
+## Session handoff — 2026-05-20 (continue subcommand)
+
+### Work completed (2026-05-20)
+
+**`runmgr.py continue` (new top-level subcommand):**
+- CLI: `runmgr.py continue case1 case2 ... [--stop-n N] [--resubmit N] [--execute]`
+- Reads current `STOP_N`, `RESUBMIT`, `CONTINUE_RUN` from `env_run.xml` via `_read_xml_var` (ElementTree; no xmlquery subprocess).
+- Status gate via existing `_parse_casestatus` + `_squeue_probe`: hard-blocks RUNNING/RESUBMITTED; soft-warns (per-case confirmation) for any non-COMPLETE status; COMPLETE proceeds silently.
+- Always issues `xmlchange CONTINUE_RUN=TRUE` and `xmlchange RESUBMIT=<N>` (default 0). Only issues `xmlchange STOP_N=<N>` when `--stop-n` is explicitly passed.
+- xmlchange called via `subprocess.run(['./xmlchange', ...], cwd=case_dir)` — same pattern as build scripts.
+- `sbatch <case>.run` called from `cwd=case_dir`; job ID extracted from stdout and printed.
+- Preview (no `--execute`): prints the full planned action for every case and exits without touching anything.
+- Registered as top-level subcommand alongside `check` and `cata`. Added to module docstring, README subcommand table, and CLAUDE.md module roles.
+- `_read_xml_var(xml_path, var_name)` — new private helper; parses CESM 1.x `<entry id="..." value="..."/>` format.
 
 ---
 

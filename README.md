@@ -287,6 +287,7 @@ python manage.py avg my_case --last 10 --execute     # average last 10 timesteps
 |---|---|
 | `manage.py report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Bare invocation scans all cases and clobbers `usage.yaml`. Named-case or `--prefix` invocations print only. `--cached` prints last saved snapshot. |
 | `manage.py avg` | Inspect or compute time-averaged history files using ncra (NCO). |
+| `runmgr.py continue` | Set `CONTINUE_RUN=TRUE`, optionally update `STOP_N` and `RESUBMIT` (default 0), then `sbatch` the run script. Hard-blocks on RUNNING/RESUBMITTED; soft-warns for non-COMPLETE. Preview-only without `--execute`. |
 | `runmgr.py cata purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `runmgr.py cata purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
 | `runmgr.py cata purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |

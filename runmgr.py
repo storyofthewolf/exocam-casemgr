@@ -21,6 +21,8 @@ SUBCOMMANDS
 -----------
   check                 Show run status for cases (CaseStatus + SLURM probe);
                         defaults to all discoverable cases when given no names
+  continue              Set CONTINUE_RUN=TRUE and sbatch the run script;
+                        optionally update STOP_N and RESUBMIT first
   cata purge-bld        Delete build artifacts in rundir/<case>/bld/
   cata purge-restarts   Trim old restart sets in archive/<case>/rest/; keep last N
   cata purge-hist       Delete history NetCDF files in archive/<case>/<model>/hist/
@@ -29,9 +31,9 @@ SUBCOMMANDS
 
 SAFETY
 ------
-  All destructive subcommands (cata *) require explicit case names. There is
-  no --all flag — bulk operations must be done by listing each case explicitly.
-  Bare invocation without case names will exit with an error.
+  All destructive subcommands (cata *, continue) require explicit case names.
+  There is no --all flag — bulk operations must be done by listing each case
+  explicitly. Bare invocation without case names will exit with an error.
 
   purge-hist additionally requires --keep-years N or --models to prevent
   accidental deletion of all history files.
@@ -40,6 +42,7 @@ SAFETY
 
 Run any subcommand with --help for full options, e.g.:
   python runmgr.py check --help
+  python runmgr.py continue --help
   python runmgr.py cata purge-bld --help
 """
 
@@ -356,6 +359,158 @@ def cmd_move_hist(args, paths):
                 for f in files:
                     shutil.move(os.path.join(src, f), os.path.join(dst, f))
                 print(f"    moved {len(files)} file(s)")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: continue
+# ---------------------------------------------------------------------------
+
+def _read_xml_var(xml_path, var_name):
+    """Return the value of an XML entry id=var_name from a CESM env_*.xml file.
+
+    Parses the file with ElementTree and looks for:
+      <entry id="VAR_NAME" value="..."/>  (CESM 1.x format)
+    Returns the value string, or None if not found or on any parse error.
+    """
+    try:
+        import xml.etree.ElementTree as ET
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        for elem in root.iter('entry'):
+            if elem.get('id') == var_name:
+                return elem.get('value')
+    except Exception:
+        pass
+    return None
+
+
+def cmd_continue(args, paths):
+    """
+    Set CONTINUE_RUN=TRUE and submit the run script via sbatch.
+
+    Optionally update STOP_N and RESUBMIT before submitting. RESUBMIT
+    always defaults to 0 unless --resubmit N is explicitly passed.
+
+    Status gating (checked via CaseStatus + SLURM probe):
+      RUNNING / RESUBMITTED  — hard block: skipped with error message
+      COMPLETE               — proceeds without warning
+      anything else          — soft block: per-case confirmation prompt
+
+    Without --execute, prints a preview and exits. Requires explicit case
+    names — no --all flag.
+    """
+    caseroot = paths.get('caseroot', '')
+    if not caseroot:
+        sys.exit("ERROR: caseroot path not configured.")
+
+    if not args.cases:
+        sys.exit("ERROR: continue requires explicit case names. No --all flag.")
+
+    for case in args.cases:
+        case_dir = os.path.join(caseroot, case)
+        if not os.path.isdir(case_dir):
+            print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            continue
+
+        # --- Read current XML values for preview ---
+        env_run = os.path.join(case_dir, 'env_run.xml')
+        cur_continue = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
+        cur_stop_n   = _read_xml_var(env_run, 'STOP_N')       or '?'
+        cur_resubmit = _read_xml_var(env_run, 'RESUBMIT')     or '?'
+
+        # --- Status gate ---
+        casestatus_path = os.path.join(case_dir, 'CaseStatus')
+        cs = _parse_casestatus(casestatus_path)
+        if cs is None:
+            status_label = 'NO_CASEDIR'
+        else:
+            status_label = cs['status']
+            if cs['last_event'] and (
+                cs['last_event'].startswith('run started') or
+                cs['last_event'].startswith('run SUCCESSFUL')
+            ):
+                job_queued = _squeue_probe(case)
+                if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
+                    status_label = 'RESUBMITTED'
+                elif job_queued is False and cs['last_event'].startswith('run started'):
+                    status_label = 'RUNNING?'
+
+        if status_label in ('RUNNING', 'RESUBMITTED'):
+            print(f"  {case}: [{status_label}] — skipping (job already active)")
+            continue
+
+        # --- Build preview ---
+        new_resubmit = args.resubmit if args.resubmit is not None else 0
+        run_script = os.path.join(case_dir, f'{case}.run')
+
+        print(f"  {case}  [{status_label}]")
+        print(f"    CONTINUE_RUN: {cur_continue} -> TRUE")
+        if args.stop_n is not None:
+            print(f"    STOP_N:       {cur_stop_n} -> {args.stop_n}")
+        else:
+            print(f"    STOP_N:       {cur_stop_n}  (unchanged)")
+        print(f"    RESUBMIT:     {cur_resubmit} -> {new_resubmit}")
+        print(f"    sbatch: {run_script}")
+
+        if not args.execute:
+            continue
+
+        # --- Soft block: warn and confirm for non-COMPLETE statuses ---
+        if status_label != 'COMPLETE':
+            print(f"    WARNING: status is [{status_label}], not COMPLETE.")
+            try:
+                answer = input(f"    Continue anyway for {case}? [yes/no]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                print(f"    Skipping {case}.")
+                continue
+            if answer not in ('yes', 'y'):
+                print(f"    Skipping {case}.")
+                continue
+
+        # --- Apply xmlchange calls ---
+        def _xmlchange(var, val):
+            result = subprocess.run(
+                ['./xmlchange', f'{var}={val}'],
+                cwd=case_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"xmlchange {var}={val} failed: {result.stderr.strip()}")
+
+        try:
+            _xmlchange('CONTINUE_RUN', 'TRUE')
+            if args.stop_n is not None:
+                _xmlchange('STOP_N', args.stop_n)
+            _xmlchange('RESUBMIT', new_resubmit)
+        except RuntimeError as e:
+            print(f"    ERROR: {e}")
+            continue
+
+        # --- sbatch ---
+        try:
+            result = subprocess.run(
+                ['sbatch', f'{case}.run'],
+                cwd=case_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
+        except FileNotFoundError:
+            print(f"    ERROR: sbatch not found in PATH")
+            continue
+
+        if result.returncode != 0:
+            print(f"    ERROR: sbatch failed: {result.stderr.strip()}")
+            continue
+
+        import re as _re
+        m = _re.search(r'Submitted batch job (\d+)', result.stdout)
+        job_id = m.group(1) if m else result.stdout.strip()
+        print(f"    submitted: job {job_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +957,22 @@ def build_parser():
                          help='Compute global-mean energy balance (TS, Etop=FSNT-FLNT) '
                               'from last 12 atm h0 files via ncra; requires ncra + netCDF4')
 
+    # ---- continue ----
+    p_cont = top_sub.add_parser(
+        'continue',
+        help='Set CONTINUE_RUN=TRUE and sbatch the run script; optionally update STOP_N/RESUBMIT',
+        description=cmd_continue.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_cont.add_argument('cases', nargs='+',
+                        help='Case name(s) to continue (required; no --all flag)')
+    p_cont.add_argument('--stop-n', dest='stop_n', type=int, metavar='N', default=None,
+                        help='Set STOP_N before submitting (omit to preserve current value)')
+    p_cont.add_argument('--resubmit', type=int, metavar='N', default=None,
+                        help='Set RESUBMIT before submitting (default: 0)')
+    p_cont.add_argument('--execute', action='store_true',
+                        help='Actually perform actions (default is preview only)')
+
     # ---- cata subcommand group ----
     p_cata = top_sub.add_parser(
         'cata',
@@ -905,6 +1076,9 @@ def main():
 
     if args.group == 'check':
         cmd_check(args, paths)
+
+    elif args.group == 'continue':
+        cmd_continue(args, paths)
 
     elif args.group == 'cata':
         if args.cata_command is None:
