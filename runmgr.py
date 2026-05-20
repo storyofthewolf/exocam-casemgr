@@ -558,14 +558,21 @@ def _rundir_info(case, rundir):
     run_dir = os.path.join(rundir, case, 'run')
     if not os.path.isdir(run_dir):
         return ["  run/:       (not found)"]
+    file_pairs = []  # list of (filename, size_bytes)
     try:
-        files, _ = list_files_with_size(run_dir)
+        with os.scandir(run_dir) as it:
+            for entry in it:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        file_pairs.append((entry.name, entry.stat(follow_symlinks=False).st_size))
+                except OSError:
+                    pass
     except OSError:
         return ["  run/:       (error reading directory)"]
 
-    hist_files = [(f, sz) for f, sz in files
+    hist_files = [(f, sz) for f, sz in file_pairs
                   if re.search(r'\.h\d', f) and f.endswith('.nc')]
-    rest_files = [(f, sz) for f, sz in files
+    rest_files = [(f, sz) for f, sz in file_pairs
                   if re.search(r'\.r\.[^.]+\.nc$', f)]
 
     hist_count = len(hist_files)
@@ -583,7 +590,7 @@ def _rundir_info(case, rundir):
     rptr_date = None
     rptr_path = os.path.join(run_dir, f'{case}.rpointer.atm')
     if not os.path.isfile(rptr_path):
-        for f, _ in files:
+        for f, _ in file_pairs:
             if f.endswith('.rpointer.atm'):
                 rptr_path = os.path.join(run_dir, f)
                 break
