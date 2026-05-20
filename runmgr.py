@@ -397,16 +397,29 @@ def cmd_continue(args, paths):
       anything else          — soft block: per-case confirmation prompt
 
     Without --execute, prints a preview and exits. Requires explicit case
-    names — no --all flag.
+    names or --prefix — no --all flag.
     """
     caseroot = paths.get('caseroot', '')
     if not caseroot:
         sys.exit("ERROR: caseroot path not configured.")
 
-    if not args.cases:
-        sys.exit("ERROR: continue requires explicit case names. No --all flag.")
+    prefix_filter = getattr(args, 'prefix', None)
+    explicit_cases = args.cases or []
 
-    for case in args.cases:
+    if explicit_cases and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+
+    if prefix_filter:
+        all_cases = discover_cases(paths)
+        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
+        if not cases:
+            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
+    elif explicit_cases:
+        cases = explicit_cases
+    else:
+        sys.exit("ERROR: continue requires explicit case names or --prefix. No --all flag.")
+
+    for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
@@ -414,9 +427,10 @@ def cmd_continue(args, paths):
 
         # --- Read current XML values for preview ---
         env_run = os.path.join(case_dir, 'env_run.xml')
-        cur_continue = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
-        cur_stop_n   = _read_xml_var(env_run, 'STOP_N')       or '?'
-        cur_resubmit = _read_xml_var(env_run, 'RESUBMIT')     or '?'
+        cur_continue    = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
+        cur_stop_n      = _read_xml_var(env_run, 'STOP_N')       or '?'
+        cur_stop_option = _read_xml_var(env_run, 'STOP_OPTION')  or '?'
+        cur_resubmit    = _read_xml_var(env_run, 'RESUBMIT')     or '?'
 
         # --- Status gate ---
         casestatus_path = os.path.join(case_dir, 'CaseStatus')
@@ -446,9 +460,9 @@ def cmd_continue(args, paths):
         print(f"  {case}  [{status_label}]")
         print(f"    CONTINUE_RUN: {cur_continue} -> TRUE")
         if args.stop_n is not None:
-            print(f"    STOP_N:       {cur_stop_n} -> {args.stop_n}")
+            print(f"    STOP_N:       {cur_stop_n} -> {args.stop_n}  (stop_option: {cur_stop_option})")
         else:
-            print(f"    STOP_N:       {cur_stop_n}  (unchanged)")
+            print(f"    STOP_N:       {cur_stop_n}  (unchanged)  (stop_option: {cur_stop_option})")
         print(f"    RESUBMIT:     {cur_resubmit} -> {new_resubmit}")
         print(f"    sbatch: {run_script}")
 
@@ -511,6 +525,9 @@ def cmd_continue(args, paths):
         m = _re.search(r'Submitted batch job (\d+)', result.stdout)
         job_id = m.group(1) if m else result.stdout.strip()
         print(f"    submitted: job {job_id}")
+
+    if not args.execute:
+        print("\n(preview only — rerun with --execute to submit)")
 
 
 # ---------------------------------------------------------------------------
@@ -964,8 +981,10 @@ def build_parser():
         description=cmd_continue.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_cont.add_argument('cases', nargs='+',
-                        help='Case name(s) to continue (required; no --all flag)')
+    p_cont.add_argument('cases', nargs='*',
+                        help='Case name(s) to continue (or use --prefix; no --all flag)')
+    p_cont.add_argument('--prefix', metavar='STR', default=None,
+                        help='Case-insensitive prefix filter; cannot combine with explicit case names')
     p_cont.add_argument('--stop-n', dest='stop_n', type=int, metavar='N', default=None,
                         help='Set STOP_N before submitting (omit to preserve current value)')
     p_cont.add_argument('--resubmit', type=int, metavar='N', default=None,

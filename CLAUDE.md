@@ -252,6 +252,11 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - Registered as top-level subcommand alongside `check` and `cata`. Added to module docstring, README subcommand table, and CLAUDE.md module roles.
 - `_read_xml_var(xml_path, var_name)` — new private helper; parses CESM 1.x `<entry id="..." value="..."/>` format.
 
+**`runmgr.py continue` refinements (2026-05-20):**
+- `--prefix PREFIX` added as an alternative to explicit case names; mutually exclusive with positional case names; errors out if no cases match.
+- `STOP_OPTION` read from `env_run.xml` and displayed inline with `STOP_N` in the preview block: `STOP_N: 10 -> 1  (stop_option: nyears)`.
+- Preview footer printed once after all cases: `(preview only — rerun with --execute to submit)` — only shown when `--execute` was not passed.
+
 ---
 
 ## Session handoff — 2026-05-20
