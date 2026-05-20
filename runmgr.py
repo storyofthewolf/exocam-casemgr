@@ -610,7 +610,8 @@ def _rundir_info(case, rundir):
     rest_line = (f"  run/rest:  {rest_count:>4} active restart  "
                  f"({fmt_size(rest_size)}){date_suffix}")
 
-    return [hist_line, rest_line]
+    total_run_size = dir_size_bytes(run_dir)
+    return [hist_line, rest_line, f"  run/total:         {fmt_size(total_run_size)}"]
 
 
 def cmd_check(args, paths):
