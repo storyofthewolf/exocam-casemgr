@@ -571,9 +571,9 @@ def _rundir_info(case, rundir):
         return ["  run/:       (error reading directory)"]
 
     hist_files = [(f, sz) for f, sz in file_pairs
-                  if re.search(r'\.h\d', f) and f.endswith('.nc')]
+                  if re.match(rf'^{re.escape(case)}\.cam\.h0\.\d{{4}}-\d{{2}}.*\.nc$', f)]
     rest_files = [(f, sz) for f, sz in file_pairs
-                  if re.search(r'\.r\.[^.]+\.nc$', f)]
+                  if re.match(rf'^{re.escape(case)}\.cam\.r\.\d{{4}}-\d{{2}}-\d{{2}}.*\.nc$', f)]
 
     hist_count = len(hist_files)
     hist_size  = sum(sz for _, sz in hist_files)
