@@ -38,9 +38,9 @@ EXO_PARAMS = {
 }
 
 REQUIRED_FIELDS = ['config_type', 'exort_pkg', 'nlev', 'mach',
-                   'stop_option', 'stop_n', 'rest_n', 'resubmit', 'ntasks']
+                   'stop_option', 'stop_n', 'rest_option', 'rest_n', 'resubmit', 'ntasks']
 # Fields required for clone mode (config/compset/mach are inherited from the source case)
-REQUIRED_FIELDS_CLONE = ['clone', 'stop_option', 'stop_n', 'rest_n', 'resubmit', 'ntasks']
+REQUIRED_FIELDS_CLONE = ['clone', 'stop_option', 'stop_n', 'rest_option', 'rest_n', 'resubmit', 'ntasks']
 
 SOLAR_FILE_STEMS = {
     'n68equiv':   'n68',
@@ -658,6 +658,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# -----------------------------------------------------------",
         f"./xmlchange STOP_OPTION={spec['stop_option']}",
         f"./xmlchange STOP_N={spec['stop_n']}",
+        f"./xmlchange REST_OPTION={spec['rest_option']}",
         f"./xmlchange REST_N={spec['rest_n']}",
         f"./xmlchange RESUBMIT={spec['resubmit']}",
         (f"./xmlchange CAM_CONFIG_OPTS="
@@ -794,6 +795,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# -----------------------------------------------------------",
         f"./xmlchange STOP_OPTION={spec['stop_option']}",
         f"./xmlchange STOP_N={spec['stop_n']}",
+        f"./xmlchange REST_OPTION={spec['rest_option']}",
         f"./xmlchange REST_N={spec['rest_n']}",
         f"./xmlchange RESUBMIT={spec['resubmit']}",
     ]

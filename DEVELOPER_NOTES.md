@@ -135,6 +135,7 @@ defaults:
   resubmit: 4
   stop_option: nyears
   stop_n: 10
+  rest_option: nyears
   rest_n: 1
   ntasks: 126
   account: YOUR_ACCOUNT
@@ -200,9 +201,9 @@ geophysical (`exo_gravity`, `exo_radius`, `exo_porb`, `exo_ndays`, `exo_sday`, `
 logical flags (`do_exo_*`),
 RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `exo_mvelp`, `exo_ve`).
 
-**`REQUIRED_FIELDS`** (newcase): `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`
+**`REQUIRED_FIELDS`** (newcase): `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`
 
-**`REQUIRED_FIELDS_CLONE`**: `clone`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`
+**`REQUIRED_FIELDS_CLONE`**: `clone`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`
 
 **Namelist value formatting** (`_format_nl_value`): `bool` → `.true.`/`.false.`; `int` → bare integer; `float` → `%g` with decimal ensured; `str` Fortran logical → pass through; `str` numeric → coerced; `str` other → single-quoted. Note: `bool` is checked before `int` because Python's `bool` is a subclass of `int`.
 
@@ -240,7 +241,7 @@ Sets `config_saved` (bool) on every row by checking whether `SourceMods/` exists
 ## query.py — export internals
 
 **`_CLONE_BASE_FIELDS`** — fields included in clone-mode sparse export:
-`clone`, `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_n`, `resubmit`, `ntasks`, `account`, `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`.
+`clone`, `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`, `account`, `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`.
 
 `exort_pkg *` warning: printed to stderr after matrix output (visible at end). Suppressed in `--clone` mode since RT is inherited from the clone source.
 

@@ -16,6 +16,7 @@ defaults:
   resubmit:    0
   stop_option: nyears
   stop_n:      10
+  rest_option: nyears
   rest_n:      10
   ntasks:      126
   account:     s2427

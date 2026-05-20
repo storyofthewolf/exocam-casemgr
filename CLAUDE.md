@@ -234,3 +234,15 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - Update stale module docstring in `build.py`.
 - `nl_cam_params` recognized by `build.py` but not yet scanned by `scan.py` — add to `_REGISTRY_GROUPS` and `inspect_case()` if desired.
 - Consider whether `manage.py avg` should move to `runmgr.py`.
+
+---
+
+## Session handoff — 2026-05-20
+
+### Work completed (2026-05-20)
+
+**`REST_OPTION` added to build pipeline:**
+- `config_registry.yaml`: added `rest_option: nyears` to `defaults:` block (after `stop_option`)
+- `query.py`: added `--rest-option` CLI flag, `_cli_or_default`, `base` dict population, `_REQUIRED_LABELS` entry, and `_CLONE_BASE_FIELDS` entry — all parallel to `stop_option`
+- `build.py`: added `./xmlchange REST_OPTION=...` after `./xmlchange STOP_OPTION=...` in both `generate_shell_script` and `generate_clone_script`; added `rest_option` to `REQUIRED_FIELDS` and `REQUIRED_FIELDS_CLONE`
+- `DEVELOPER_NOTES.md`: updated `REQUIRED_FIELDS`, `REQUIRED_FIELDS_CLONE`, `_CLONE_BASE_FIELDS`, and `config_registry.yaml` structure docs

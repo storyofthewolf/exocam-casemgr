@@ -167,7 +167,7 @@ def cmd_show(args, raw_entries):
 _BASE_FIELD_ORDER = [
     # CESM config
     'config_type', 'exort_pkg', 'cloud_scheme', 'nlev',
-    'mach', 'stop_option', 'stop_n', 'rest_n', 'ntasks', 'account',
+    'mach', 'stop_option', 'stop_n', 'rest_option', 'rest_n', 'ntasks', 'account',
     'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename',
     # atmosphere
     'exo_co2bar', 'exo_ch4bar', 'exo_c2h6bar', 'exo_nh3bar',
@@ -191,7 +191,7 @@ _BASE_FIELD_ORDER = [
 # Fields included in a clone export base (explicit allowlist — all others omitted)
 _CLONE_BASE_FIELDS = {
     'clone', 'config_type', 'exort_pkg', 'nlev',
-    'mach', 'stop_option', 'stop_n', 'rest_n', 'resubmit', 'ntasks', 'account',
+    'mach', 'stop_option', 'stop_n', 'rest_option', 'rest_n', 'resubmit', 'ntasks', 'account',
     'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename',
 }
 
@@ -327,6 +327,7 @@ def cmd_export(args, rows, config_registry_path):
     resubmit    = _cli_or_default('resubmit')
     stop_option = _cli_or_default('stop_option')
     stop_n      = _cli_or_default('stop_n')
+    rest_option = _cli_or_default('rest_option')
     rest_n      = _cli_or_default('rest_n')
     ntasks      = _cli_or_default('ntasks')
     account     = _cli_or_default('account') or ''
@@ -334,6 +335,7 @@ def cmd_export(args, rows, config_registry_path):
     base['mach']        = mach        or ''
     base['stop_option'] = stop_option or ''
     base['stop_n']      = stop_n      if stop_n      is not None else ''
+    base['rest_option'] = rest_option or ''
     base['rest_n']      = rest_n      if rest_n      is not None else ''
     base['resubmit']    = resubmit    if resubmit    is not None else ''
     base['ntasks']      = ntasks      if ntasks      is not None else ''
@@ -345,6 +347,7 @@ def cmd_export(args, rows, config_registry_path):
         'mach':        'mach          — CESM machine name (e.g. discover)',
         'stop_option': 'stop_option   — run length unit (e.g. nyears)',
         'stop_n':      'stop_n        — run length value (e.g. 20)',
+        'rest_option': 'rest_option   — restart frequency unit (e.g. nyears)',
         'rest_n':      'rest_n        — restart interval (e.g. 5)',
         'resubmit':    'resubmit      — number of automatic resubmissions (e.g. 1)',
         'ntasks':      'ntasks        — processor count (e.g. 126)',
@@ -522,6 +525,8 @@ def build_parser():
                           help='CESM machine name (default: read from config_registry.yaml)')
     p_export.add_argument('--stop-option', dest='stop_option', metavar='STR',
                           help='Run length unit, e.g. nyears or ndays')
+    p_export.add_argument('--rest-option', dest='rest_option', metavar='STR',
+                          help='Restart frequency unit (nyears or ndays)')
     p_export.add_argument('--stop-n', dest='stop_n', type=int, metavar='N',
                           help='Run length value')
     p_export.add_argument('--rest-n', dest='rest_n', type=int, metavar='N',
