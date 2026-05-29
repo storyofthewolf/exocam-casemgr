@@ -46,7 +46,7 @@ cases/ + rundir/ + archive/ on HPC
 - **`query.py`** — searches registry, exports experiment matrices
 - **`manage.py`** — disk reporting, hist averaging, and retirement lifecycle: `report`, `avg`, `retire`
 - **`manage_utils.py`** — shared utility layer imported by both `manage.py` and `runmgr.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`
-- **`runmgr.py`** — run supervision tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `cata` subcommand group for active-run housekeeping: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`
+- **`runmgr.py`** — run supervision tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch — for re-running from scratch after fixing a parameter); `cata` subcommand group for active-run housekeeping: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
 - **`config_registry.yaml`** — machine-specific paths, CESM config per config_type, IC file table; must be edited per user/machine
 
@@ -256,6 +256,26 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - `--prefix PREFIX` added as an alternative to explicit case names; mutually exclusive with positional case names; errors out if no cases match.
 - `STOP_OPTION` read from `env_run.xml` and displayed inline with `STOP_N` in the preview block: `STOP_N: 10 -> 1  (stop_option: nyears)`.
 - Preview footer printed once after all cases: `(preview only — rerun with --execute to submit)` — only shown when `--execute` was not passed.
+
+---
+
+## Session handoff — 2026-05-29
+
+### Work completed (2026-05-29)
+
+**`runmgr.py restart` subcommand added:**
+- CLI: `runmgr.py restart case1 case2 ... [--set VAR=VALUE ...] [--stop-n N] [--resubmit N] [--execute]`; also accepts `--prefix`
+- Always applies `CONTINUE_RUN=FALSE` first; then applies `--set` pairs in order; then sbatches
+- `--set` is repeatable and generic — any CESM xml variable; immediate use case is `--set RUN_STARTDATE=YYYY-MM-DD`
+- `--stop-n` / `--resubmit` are convenience aliases (appended after `--set` items); RESUBMIT defaults to current value (unlike `continue` which defaults to 0)
+- Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; all others → soft-warn with per-case confirmation
+- Preview: shows current → new for CONTINUE_RUN and each changed var, plus sbatch line; footer printed once
+
+**`run_startdate` / `RUN_STARTDATE` added:**
+- `parse_utils.py`: added `RUN_STARTDATE` → `run_startdate` to `parse_run_type_fields`; defaults to `None`
+- `scan.py`: added `run_startdate` to `_REGISTRY_GROUPS['meta']` (after `brnch_retain_casename`)
+- `query.py`: added `run_startdate` to `_BASE_FIELD_ORDER` and `_CLONE_BASE_FIELDS`
+- `build.py`: added conditional `./xmlchange RUN_STARTDATE=...` after `RESUBMIT` in both `generate_shell_script` and `generate_clone_script`; emitted only when field is present in spec (optional — not in `REQUIRED_FIELDS`)
 
 ---
 

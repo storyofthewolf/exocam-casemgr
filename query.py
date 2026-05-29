@@ -168,7 +168,7 @@ _BASE_FIELD_ORDER = [
     # CESM config
     'config_type', 'exort_pkg', 'cloud_scheme', 'nlev',
     'mach', 'stop_option', 'stop_n', 'rest_option', 'rest_n', 'ntasks', 'account',
-    'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename',
+    'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename', 'run_startdate',
     # atmosphere
     'exo_co2bar', 'exo_ch4bar', 'exo_c2h6bar', 'exo_nh3bar',
     'exo_cobar', 'exo_h2bar', 'exo_o2bar',
@@ -192,7 +192,7 @@ _BASE_FIELD_ORDER = [
 _CLONE_BASE_FIELDS = {
     'clone', 'config_type', 'exort_pkg', 'nlev',
     'mach', 'stop_option', 'stop_n', 'rest_option', 'rest_n', 'resubmit', 'ntasks', 'account',
-    'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename',
+    'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename', 'run_startdate',
 }
 
 # Registry keys not forwarded to the matrix

@@ -661,6 +661,8 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"./xmlchange REST_OPTION={spec['rest_option']}",
         f"./xmlchange REST_N={spec['rest_n']}",
         f"./xmlchange RESUBMIT={spec['resubmit']}",
+        *([ f"./xmlchange RUN_STARTDATE={spec['run_startdate']}" ]
+          if spec.get('run_startdate') else []),
         (f"./xmlchange CAM_CONFIG_OPTS="
          f"\"-nlev {nlev} -phys {phys}"
          + (f" {cloud_opts}" if cloud_opts else "")
@@ -798,6 +800,8 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"./xmlchange REST_OPTION={spec['rest_option']}",
         f"./xmlchange REST_N={spec['rest_n']}",
         f"./xmlchange RESUBMIT={spec['resubmit']}",
+        *([ f"./xmlchange RUN_STARTDATE={spec['run_startdate']}" ]
+          if spec.get('run_startdate') else []),
     ]
 
     lines += [

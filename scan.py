@@ -60,7 +60,7 @@ _REGISTRY_GROUPS = [
         'ncdata', 'ncdata_pressure_str', 'ncdata_levels',
         'clm_finidat', 'clm_fsurdat',
         'som_pop_frc_file',
-        'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename',
+        'run_type', 'run_refcase', 'run_refdate', 'brnch_retain_casename', 'run_startdate',
     ]),
     ('atmosphere', [
         'exo_co2bar', 'exo_ch4bar', 'exo_h2bar', 'exo_o2bar',

@@ -263,7 +263,8 @@ def _find_cam_config_opts(xmlpath):
 
 def parse_run_type_fields(xmlpath):
     """
-    Parse env_run.xml for RUN_TYPE, RUN_REFCASE, RUN_REFDATE, BRNCH_RETAIN_CASENAME.
+    Parse env_run.xml for RUN_TYPE, RUN_REFCASE, RUN_REFDATE, BRNCH_RETAIN_CASENAME,
+    RUN_STARTDATE.
     Returns dict with lowercase keys. run_type defaults to 'startup'; others default to None.
     brnch_retain_casename is stored as a lowercase string ('true' or 'false'), not a bool.
     """
@@ -272,12 +273,14 @@ def parse_run_type_fields(xmlpath):
         'run_refcase':           None,
         'run_refdate':           None,
         'brnch_retain_casename': None,
+        'run_startdate':         None,
     }
     id_map = {
         'RUN_TYPE':              'run_type',
         'RUN_REFCASE':           'run_refcase',
         'RUN_REFDATE':           'run_refdate',
         'BRNCH_RETAIN_CASENAME': 'brnch_retain_casename',
+        'RUN_STARTDATE':         'run_startdate',
     }
     if not os.path.exists(xmlpath):
         return fields
