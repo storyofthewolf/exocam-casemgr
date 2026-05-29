@@ -43,10 +43,12 @@ python manage.py retire my_case --execute                                       
 python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
 python manage.py retire my_case --purge --execute                                  # complete erasure
 
-# Run lifecycle management — check status, purge/move files (all destructive ops preview by default)
+# Run lifecycle management — check status, continue/restart, purge/move files (all destructive ops preview by default)
 python runmgr.py check                                 # probe SLURM, show case status
 python runmgr.py check --info                         # include CESM event log tail
 python runmgr.py check --energy                       # include energy balance (TS/FSNT/FLNT)
+python runmgr.py continue case1 --set STOP_N=10 --set RESUBMIT=5  # CONTINUE_RUN=TRUE + xmlchange
+python runmgr.py restart case1 --set RUN_STARTDATE=0001-01-01 --execute  # CONTINUE_RUN=FALSE + xmlchange
 python runmgr.py cata purge-bld my_case --execute
 python runmgr.py cata purge-bld my_case --logs-only --execute
 python runmgr.py cata purge-restarts my_case --keep 1 --execute
@@ -95,6 +97,7 @@ Start from `experiment_matrix.yaml.example`. Each case inherits all `base` value
 | `run_type` | `startup` (default), `branch`, or `hybrid` |
 | `run_refcase` | Reference case name for branch/hybrid |
 | `run_refdate` | Reference date string, e.g. `0021-01-01` |
+| `run_startdate` | Start date for the run, e.g. `0001-01-01` (startup/hybrid only; optional) |
 | `brnch_retain_casename` | `'true'` or `'false'`; passed to `BRNCH_RETAIN_CASENAME` xmlchange |
 
 ---
@@ -107,7 +110,8 @@ Written by `scan.py`, read by `query.py` and `manage.py`. Groups are defined by 
 cases:
 - meta:          # case_name, casedir, config_type, exort_pkg, nlev, inspect_date,
                  # ncdata, ncdata_pressure_str, ncdata_levels, clm_finidat, clm_fsurdat,
-                 # som_pop_frc_file, run_type, run_refcase, run_refdate, brnch_retain_casename
+                 # som_pop_frc_file, run_type, run_refcase, run_refdate, brnch_retain_casename,
+                 # run_startdate
   atmosphere:    # gas bars (exo_co2bar, exo_ch4bar, ...), exo_pstd_computed_bar,
                  # exo_scon, solar_file, exort_pkg
   geophysical:   # exo_ndays, exo_porb, exo_sday, exo_gravity, exo_radius,
@@ -179,7 +183,7 @@ All functions take explicit file paths and return dicts. No filesystem side effe
 | `parse_user_nl_clm(path)` | `user_nl_clm` | dict with `finidat`, `fsurdat` | Called for `cam_land_fv` and `cam_mixed_fv` only |
 | `parse_docn_som(path)` | `user_docn.streams.txt.som` | dict with `som_pop_frc_file` | XML fragment; wrapped in synthetic root for ElementTree |
 | `parse_cam_config_opts(xmlpath)` | `env_build.xml` (falls back to `env_run.xml`) | dict with `nlev`, `exort_pkg`, cloud scheme | |
-| `parse_run_type_fields(xmlpath)` | `env_run.xml` | dict with `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename` | Falls back to line scan if ElementTree fails |
+| `parse_run_type_fields(xmlpath)` | `env_run.xml` | dict with `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`, `run_startdate` | Falls back to line scan if ElementTree fails |
 | `compute_pstd_bar(params)` | params dict | `(pstd_bar, n2bar_computed)` | N2 implicit for ≤1 bar; explicit `exo_n2bar` required above 1 bar |
 | `pressure_str_to_bar(s)` | `'1bar'`, `'0.1bar'` etc. | float | Used by `check_consistency` |
 | `read_solar_nw(path)` | NetCDF solar file | int or None | Returns None if netCDF4 unavailable or file inaccessible |
@@ -241,7 +245,7 @@ Sets `config_saved` (bool) on every row by checking whether `SourceMods/` exists
 ## query.py — export internals
 
 **`_CLONE_BASE_FIELDS`** — fields included in clone-mode sparse export:
-`clone`, `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`, `account`, `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`.
+`clone`, `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`, `account`, `run_type`, `run_refcase`, `run_refdate`, `brnch_retain_casename`, `run_startdate`.
 
 `exort_pkg *` warning: printed to stderr after matrix output (visible at end). Suppressed in `--clone` mode since RT is inherited from the clone source.
 
@@ -308,7 +312,7 @@ Extracted from `manage.py` to support both `manage.py` and `runmgr.py`.
 
 ## runmgr.py — run lifecycle management
 
-Top-level `check` subcommand and nested `cata` subcommand group.
+Subcommands: `check`, `continue`, `restart`, and nested `cata` subcommand group.
 
 **`check` subcommand:**
 - Probes SLURM for running jobs (`squeue --name <case> -h`)
@@ -324,6 +328,20 @@ Top-level `check` subcommand and nested `cata` subcommand group.
 - Computes area weights: `w = cos(lat)` normalized to sum to 1.0
 - Returns `(ts_mean, fsnt_mean, flnt_mean, n_used)` or `(None, None, None, 0)` on failure
 - Cleans up temp file in finally block even on early return
+
+**`continue` subcommand:**
+- Sets `CONTINUE_RUN=TRUE` and sbatches the run script
+- Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
+- Example: `--set STOP_N=10 --set RESUBMIT=5`
+- Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; others → soft-warn with per-case confirmation
+- Preview mode by default; `--execute` required to submit
+
+**`restart` subcommand:**
+- Sets `CONTINUE_RUN=FALSE` and sbatches the run script (for rerunning from scratch)
+- Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
+- Example: `--set RUN_STARTDATE=0001-01-01 --set RESUBMIT=9`
+- Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; others → soft-warn with per-case confirmation
+- Preview mode by default; `--execute` required to submit
 
 **`cata` subcommand group (case archival):**
 - `cata purge-bld` — delete build objects from `rundir/<case>/bld/`
