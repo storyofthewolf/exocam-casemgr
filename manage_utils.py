@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-manage_utils.py — Shared utility layer for manage.py and runmgr.py
+manage_utils.py — Shared utility layer for datamgr.py and runmgr.py
 
 Constants, path-loading, disk helpers, and case-selection primitives used by
 both tools. No subcommand logic lives here.

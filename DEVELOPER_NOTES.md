@@ -34,14 +34,14 @@ python query.py export my_base_case -o clone.yaml \
     --clone --stop-option nyears --stop-n 20 --rest-n 5 --resubmit 4 --ntasks 126
 
 # Disk management — reporting and retirement (destructive ops: preview by default, --execute to act)
-python manage.py report                                # scan all cases, write usage.yaml
-python manage.py report my_case                        # single case, print only, no yaml write
-python manage.py report --cached                       # read usage.yaml, no disk scan
-python manage.py avg my_case --info
-python manage.py avg my_case --last 10 --execute
-python manage.py retire my_case --execute                                          # tombstone only
-python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
-python manage.py retire my_case --purge --execute                                  # complete erasure
+python datamgr.py report                                # scan all cases, write usage.yaml
+python datamgr.py report my_case                        # single case, print only, no yaml write
+python datamgr.py report --cached                       # read usage.yaml, no disk scan
+python datamgr.py avg my_case --info
+python datamgr.py avg my_case --last 10 --execute
+python datamgr.py retire my_case --execute                                          # tombstone only
+python datamgr.py retire my_case --keep-config --keep-years 5 --keep-restarts --execute
+python datamgr.py retire my_case --purge --execute                                  # complete erasure
 
 # Run lifecycle management — check status, continue/restart, purge/move files (all destructive ops preview by default)
 python runmgr.py check                                 # probe SLURM, show case status
@@ -104,7 +104,7 @@ Start from `experiment_matrix.yaml.example`. Each case inherits all `base` value
 
 ## YAML registry structure
 
-Written by `scan.py`, read by `query.py` and `manage.py`. Groups are defined by `_REGISTRY_GROUPS` in `scan.py`.
+Written by `scan.py`, read by `query.py` and `datamgr.py`. Groups are defined by `_REGISTRY_GROUPS` in `scan.py`.
 
 ```yaml
 cases:
@@ -253,7 +253,7 @@ Sets `config_saved` (bool) on every row by checking whether `SourceMods/` exists
 
 ---
 
-## manage.py — key constants and retire tiers
+## datamgr.py — key constants and retire tiers
 
 **`ARCHIVE_MODELS`**: `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`
 
@@ -280,7 +280,7 @@ Avg files (filenames containing `"avg"`) are always moved to long-term unconditi
 
 ## manage_utils.py — shared utilities
 
-Extracted from `manage.py` to support both `manage.py` and `runmgr.py`.
+Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 
 **Constants:**
 - `ARCHIVE_MODELS` — all archive subdirectories: `['atm', 'cpl', 'dart', 'glc', 'ice', 'lnd', 'ocn', 'rest', 'rof', 'wav']`

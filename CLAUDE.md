@@ -32,9 +32,9 @@ CASE directories on HPC
 
 cases/ + rundir/ + archive/ on HPC
        ↓
-  runmgr.py cata             ← active-run housekeeping: purge-bld, purge-restarts,
+  datamgr.py cata             ← surgical output housekeeping: purge-bld, purge-restarts,
   │                             purge-hist, purge-logs, move-hist
-  manage.py                  ← disk reporting, averaging, retirement lifecycle
+  datamgr.py                  ← disk reporting, averaging, retirement lifecycle
   diff.py                    ← SourceMods diff before retiring
 ```
 
@@ -44,9 +44,9 @@ cases/ + rundir/ + archive/ on HPC
 - **`build.py`** — validates experiment matrix, generates self-contained shell build scripts
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
-- **`manage.py`** — disk reporting, hist averaging, and retirement lifecycle: `report`, `avg`, `retire`
-- **`manage_utils.py`** — shared utility layer imported by both `manage.py` and `runmgr.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`
-- **`runmgr.py`** — run supervision tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch — for re-running from scratch after fixing a parameter); `cata` subcommand group for active-run housekeeping: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`
+- **`datamgr.py`** — case data management: `report` (disk survey), `cata` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
+- **`manage_utils.py`** — shared utility layer imported by both `datamgr.py` and `runmgr.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`
+- **`runmgr.py`** — run control tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `ls` subcommand (file browser for a single case); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch)
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
 - **`config_registry.yaml`** — machine-specific paths, CESM config per config_type, IC file table; must be edited per user/machine
 
@@ -54,7 +54,7 @@ cases/ + rundir/ + archive/ on HPC
 
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
 - `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt).
-- All destructive `manage.py` and `runmgr.py cata` operations default to **preview mode**; `--execute` required to act.
+- All destructive `datamgr.py` operations (including `cata`) default to **preview mode**; `--execute` required to act.
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics (grep/sed/echo) rather than plain append, to avoid duplicate keys.
 - `exort_pkg` ending in `*` signals custom RT copied into SourceMods. In newcase mode this is a validation error; in clone mode it is allowed and triggers `_build_usr_src_fix_block` to rewrite the inherited `-usr_src` path.
@@ -172,7 +172,7 @@ Pressure strings (e.g. `"1bar"`, `"0.1bar"`) are IC file table keys and must exa
 ## Design invariants — do not violate
 
 - `parse_utils.py` must remain free of filesystem side effects. It reads files via paths passed to it; it never discovers or writes files itself.
-- All destructive `manage.py` and `runmgr.py cata` operations require `--execute`. Without it, every command only prints what it would do.
+- All destructive `datamgr.py` operations (including `cata`) require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations in either tool. Cases must be named explicitly.
 - `build.py generate` generates scripts but never executes them. `build.py make` runs them (with confirmation prompt).
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
@@ -217,9 +217,9 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - `archived.yaml` renamed to `retired.yaml` on disk.
 
 **`manage_utils.py` (new) + `runmgr.py` (new) — cata migration:**
-- Created `manage_utils.py` with shared constants, `load_paths()`, disk helpers, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`. `manage.py` now imports all of these from there.
-- Created `runmgr.py` with `cata` subcommand group: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist` — direct ports of the same commands from `manage.py`.
-- Removed all five subcommands from `manage.py` (functions, argparse registrations, COMMANDS entries, docstring). `manage.py` now covers only `report`, `avg`, `retire`.
+- Created `manage_utils.py` with shared constants, `load_paths()`, disk helpers, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`. `datamgr.py` now imports all of these from there.
+- Created `runmgr.py` with `cata` subcommand group: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist` — direct ports of the same commands from `datamgr.py`.
+- Removed all five subcommands from `datamgr.py` (functions, argparse registrations, COMMANDS entries, docstring). `datamgr.py` now covers only `report`, `avg`, `retire`.
 
 **`runmgr.py check` (new subcommand):**
 - Parses `$caseroot/<case>/CaseStatus` (last non-blank line only) to determine current status (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN/NO_CASEDIR). Segment history not reported — CaseStatus inherited by clones makes counts unreliable.
@@ -233,7 +233,7 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 ### Good starting points for next session
 - Update stale module docstring in `build.py`.
 - `nl_cam_params` recognized by `build.py` but not yet scanned by `scan.py` — add to `_REGISTRY_GROUPS` and `inspect_case()` if desired.
-- Consider whether `manage.py avg` should move to `runmgr.py`.
+- Consider whether `datamgr.py avg` should move to `runmgr.py`.
 
 ---
 

@@ -22,8 +22,8 @@ Python 3.8+.
 | `build.py` | Build script generator — validation, Fortran patching, shell script writer |
 | `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
-| `manage.py` | Data management — disk usage reporting and case retirement |
-| `manage_utils.py` | Shared utility layer for `manage.py` and `runmgr.py` — constants, disk helpers, case selection |
+| `datamgr.py` | Data management — disk usage reporting and case retirement |
+| `manage_utils.py` | Shared utility layer for `datamgr.py` and `runmgr.py` — constants, disk helpers, case selection |
 | `runmgr.py` | Run and case lifecycle management — check SLURM status, cata subcommands for purge and move operations |
 | `query.py` | Registry search and experiment matrix export |
 | `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
@@ -247,53 +247,53 @@ Consistency warnings are generated for pressure mismatches, level mismatches, an
 
 ### 7. Manage disk space and case lifecycle
 
-#### Report disk usage (manage.py)
+#### Report disk usage (datamgr.py)
 
 ```bash
 # Show disk usage across cases/, rundir/, and archive/ (default when called with no args)
-python manage.py
-python manage.py report               # explicit
-python manage.py report case1 case2   # specific cases only
+python datamgr.py
+python datamgr.py report               # explicit
+python datamgr.py report case1 case2   # specific cases only
 ```
 
-#### Purge and move files (runmgr.py cata)
+#### Purge and move files (datamgr.py cata)
 
 All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes, and each case prompts for confirmation before acting. There is no `--all` flag — case names must always be listed explicitly.
 
 ```bash
 # Preview what each command would do (safe default — nothing is changed)
-python runmgr.py cata purge-bld my_case
-python runmgr.py cata purge-restarts my_case --keep 1
-python runmgr.py cata purge-hist my_case --models atm lnd
-python runmgr.py cata purge-logs my_case
-python runmgr.py cata move-hist my_case --models atm
+python datamgr.py cata purge-bld my_case
+python datamgr.py cata purge-restarts my_case --keep 1
+python datamgr.py cata purge-hist my_case --models atm lnd
+python datamgr.py cata purge-logs my_case
+python datamgr.py cata move-hist my_case --models atm
 
 # Add --execute to actually perform the action (prompts yes/no per case)
-python runmgr.py cata purge-bld my_case --execute
-python runmgr.py cata purge-restarts my_case --keep 1 --execute
-python runmgr.py cata move-hist my_case --models atm --execute
+python datamgr.py cata purge-bld my_case --execute
+python datamgr.py cata purge-restarts my_case --keep 1 --execute
+python datamgr.py cata move-hist my_case --models atm --execute
 ```
 
-#### Average history files (manage.py)
+#### Average history files (datamgr.py)
 
 ```bash
-python manage.py avg my_case --info                   # inspect available files
-python manage.py avg my_case --last 10 --execute     # average last 10 timesteps
+python datamgr.py avg my_case --info                   # inspect available files
+python datamgr.py avg my_case --last 10 --execute     # average last 10 timesteps
 ```
 
 #### Subcommand reference
 
 | Subcommand | What it does |
 |---|---|
-| `manage.py report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Bare invocation scans all cases and clobbers `usage.yaml`. Named-case or `--prefix` invocations print only. `--cached` prints last saved snapshot. |
-| `manage.py avg` | Inspect or compute time-averaged history files using ncra (NCO). |
+| `datamgr.py report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Bare invocation scans all cases and clobbers `usage.yaml`. Named-case or `--prefix` invocations print only. `--cached` prints last saved snapshot. |
+| `datamgr.py avg` | Inspect or compute time-averaged history files using ncra (NCO). |
 | `runmgr.py continue` | Set `CONTINUE_RUN=TRUE`, optionally update `STOP_N` and `RESUBMIT` (default 0), then `sbatch` the run script. Hard-blocks on RUNNING/RESUBMITTED; soft-warns for non-COMPLETE. Preview-only without `--execute`. |
-| `runmgr.py cata purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
-| `runmgr.py cata purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
-| `runmgr.py cata purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |
-| `runmgr.py cata purge-logs` | Delete log files from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`. Both locations safe to purge after a run. `--no-archive-logs` / `--no-case-logs` skip one side. |
-| `runmgr.py cata move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
-| `manage.py retire` | Retire a completed case (three tiers — see below). |
+| `datamgr.py cata purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
+| `datamgr.py cata purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
+| `datamgr.py cata purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |
+| `datamgr.py cata purge-logs` | Delete log files from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`. Both locations safe to purge after a run. `--no-archive-logs` / `--no-case-logs` skip one side. |
+| `datamgr.py cata move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
+| `datamgr.py retire` | Retire a completed case (three tiers — see below). |
 
 #### Retiring a case with `retire`
 
@@ -309,19 +309,19 @@ python manage.py avg my_case --last 10 --execute     # average last 10 timesteps
 
 ```bash
 # Preview (no --execute — always safe to run first)
-python manage.py retire my_case --keep-config --keep-years 5 --keep-restarts
+python datamgr.py retire my_case --keep-config --keep-years 5 --keep-restarts
 
 # Tier 1: tombstone only (case.yaml written, everything deleted)
-python manage.py retire my_case --execute
+python datamgr.py retire my_case --execute
 
 # Tier 2: save config files only
-python manage.py retire my_case --keep-config --execute
+python datamgr.py retire my_case --keep-config --execute
 
 # Tier 2: save config files, 1 year of history, and most recent restart
-python manage.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
+python datamgr.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
 
 # Tier 3: complete erasure (prominent warning shown before confirmation)
-python manage.py retire my_case --purge --execute
+python datamgr.py retire my_case --purge --execute
 ```
 
 Run any subcommand with `--help` for full options.
