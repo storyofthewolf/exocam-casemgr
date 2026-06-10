@@ -17,9 +17,8 @@ registry file is required.
 SUBCOMMANDS
 -----------
   check                 Show run status for cases (CaseStatus + SLURM probe);
-                        defaults to all discoverable cases when given no names
-  ls                    List files in a storage area for a single case;
-                        omit dir for a summary (like check --info)
+                        defaults to all discoverable cases when given no names.
+                        --dir lists individual files in a storage area for one case.
   continue              Set CONTINUE_RUN=TRUE and sbatch the run script;
                         optionally apply --set VAR=VALUE xmlchange calls first
   restart               Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch;
@@ -28,7 +27,7 @@ SUBCOMMANDS
 SAFETY
 ------
   continue and restart require explicit case names or --prefix.
-  There is no --all flag. check and ls are read-only and need no --execute.
+  There is no --all flag. check is read-only and needs no --execute.
 
 Run any subcommand with --help for full options, e.g.:
   python runmgr.py check --help
@@ -638,6 +637,18 @@ def _rundir_info(case, rundir):
     return [hist_line, rest_line, f"  run/total:         {fmt_size(total_run_size)}"]
 
 
+# Maps the short label used on the CLI to a callable returning the absolute
+# directory path given (case, paths).
+_DIR_RESOLVERS = {
+    'atm/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'atm', 'hist'),
+    'lnd/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'lnd', 'hist'),
+    'ice/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'ice', 'hist'),
+    'ocn/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'ocn', 'hist'),
+    'rest':     lambda case, p: os.path.join(p.get('archive', ''), case, 'rest'),
+    'run':      lambda case, p: os.path.join(p.get('rundir',  ''), case, 'run'),
+}
+
+
 def cmd_check(args, paths):
     """
     Show run status for cases based on CaseStatus file and SLURM queue probe.
@@ -663,6 +674,13 @@ def cmd_check(args, paths):
     --energy: compute global-mean energy balance from the last 12 atm h0 files
               via ncra + netCDF4. Reports TS and Etop = FSNT - FLNT. Requires
               ncra in PATH and netCDF4 + numpy Python packages.
+
+    --dir DIR: drill down into a specific storage area for exactly one case.
+               Lists individual files with sizes (sorted by name) and a total.
+               For 'rest', lists top-level subdirectory entries (restart sets).
+               Prints the absolute path as a header. Requires exactly one
+               explicit case name; incompatible with --prefix.
+               DIR choices: atm/hist, lnd/hist, ice/hist, ocn/hist, rest, run.
     """
     caseroot = paths.get('caseroot', '')
     archive  = paths.get('archive',  '')
@@ -672,6 +690,13 @@ def cmd_check(args, paths):
 
     if requested and prefix_filter:
         sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+
+    target_dir = getattr(args, 'dir', None)
+    if target_dir is not None:
+        if prefix_filter:
+            sys.exit("ERROR: --dir cannot be combined with --prefix.")
+        if len(requested) != 1:
+            sys.exit("ERROR: --dir requires exactly one explicit case name.")
 
     all_cases = discover_cases(paths)
 
@@ -754,6 +779,64 @@ def cmd_check(args, paths):
 
         results.append((case, status_label, status_ts, info_lines, energy_line))
 
+    if target_dir is not None:
+        # Drill-down mode: list files in the named storage area for the single case.
+        case = cases[0]
+        resolver = _DIR_RESOLVERS.get(target_dir)
+        abs_dir = resolver(case, paths) if resolver else None
+        if not abs_dir:
+            sys.exit(f"ERROR: path not configured for '{target_dir}'.")
+
+        print(f"{abs_dir}")
+
+        if not os.path.isdir(abs_dir):
+            print("  (directory not found)")
+            return
+
+        # For 'rest', list subdirectory entries (restart sets are directories).
+        if target_dir == 'rest':
+            try:
+                entries = sorted(os.scandir(abs_dir), key=lambda e: e.name)
+            except OSError as exc:
+                sys.exit(f"ERROR reading directory: {exc}")
+            if not entries:
+                print("  (empty)")
+                return
+            for entry in entries:
+                try:
+                    size = dir_size_bytes(entry.path) if entry.is_dir() else entry.stat().st_size
+                    print(f"  {entry.name:<60}  {fmt_size(size):>10}")
+                except OSError:
+                    print(f"  {entry.name}")
+            return
+
+        # All other dirs: list files sorted by name with individual sizes.
+        files, _ = list_files_with_size(abs_dir)
+        if not files:
+            print("  (empty or no files)")
+            return
+
+        files_sorted = sorted(files)
+        sizes = {}
+        try:
+            with os.scandir(abs_dir) as it:
+                for entry in it:
+                    if entry.is_file(follow_symlinks=False):
+                        try:
+                            sizes[entry.name] = entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            sizes[entry.name] = 0
+        except OSError as exc:
+            sys.exit(f"ERROR reading directory: {exc}")
+
+        total = sum(sizes.get(f, 0) for f in files_sorted)
+        for fname in files_sorted:
+            sz = sizes.get(fname, 0)
+            print(f"  {fname:<60}  {fmt_size(sz):>10}")
+        print(f"  {'─' * 72}")
+        print(f"  {'total':60}  {fmt_size(total):>10}")
+        return
+
     # Columnar output: name left-justified to max_name_len, tag left-justified to 15.
     max_name_len = max(len(r[0]) for r in results)
     tag_width = 15  # fits [RESUBMITTED] (13) with room
@@ -765,142 +848,6 @@ def cmd_check(args, paths):
             print(line)
         if energy_line:
             print(energy_line)
-
-
-# ---------------------------------------------------------------------------
-# Subcommand: ls
-# ---------------------------------------------------------------------------
-
-# Maps the short label used on the CLI / in --info output to a callable that
-# returns the absolute directory path given (case, paths).
-_LS_DIR_RESOLVERS = {
-    'atm/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'atm', 'hist'),
-    'lnd/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'lnd', 'hist'),
-    'ice/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'ice', 'hist'),
-    'ocn/hist': lambda case, p: os.path.join(p.get('archive', ''), case, 'ocn', 'hist'),
-    'rest':     lambda case, p: os.path.join(p.get('archive', ''), case, 'rest'),
-    'run':      lambda case, p: os.path.join(p.get('rundir',  ''), case, 'run'),
-}
-
-
-def _ls_summary(case, paths):
-    """Print the --info-style summary for a single case (no status line)."""
-    archive = paths.get('archive', '')
-    rundir  = paths.get('rundir',  '')
-
-    for model in AVG_HIST_DEFAULT_MODELS:
-        hist_dir = os.path.join(archive, case, model, 'hist')
-        files, total = list_files_with_size(hist_dir)
-        non_avg = [f for f in files if 'avg' not in f]
-        if not non_avg:
-            print(f"  {model}/hist:    0 files")
-            continue
-        years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
-        span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
-        avg_note = ", avg present" if any('avg' in f for f in files) else ""
-        print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
-
-    sets = restart_sets(case, paths)
-    rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
-    print(f"  rest:      {len(sets):>4} folder(s)  ({fmt_size(rest_total)})")
-
-    if rundir:
-        for line in _rundir_info(case, rundir):
-            print(line)
-
-
-def cmd_ls(args, paths):
-    """
-    List files in a storage area for a single case.
-
-    With no DIR argument, prints the --info-style summary (file counts, year
-    spans, sizes) for all storage areas — identical to 'check --info <case>'
-    but without the status line.
-
-    With a DIR argument, lists every file in that directory with its size,
-    sorted by name, with a total at the bottom.  DIR is one of the short
-    labels shown in the summary output:
-
-      atm/hist   archive/<case>/atm/hist/
-      lnd/hist   archive/<case>/lnd/hist/
-      ice/hist   archive/<case>/ice/hist/
-      ocn/hist   archive/<case>/ocn/hist/
-      rest       archive/<case>/rest/          (top-level entries only)
-      run        rundir/<case>/run/
-
-    The absolute path is printed as a header line so you always know where
-    you are.
-    """
-    case = args.case
-
-    all_cases = discover_cases(paths)
-    if case not in all_cases:
-        sys.exit(f"ERROR: case '{case}' not found on disk.")
-
-    target_dir = getattr(args, 'dir', None)
-
-    if target_dir is None:
-        print(f"{case}")
-        _ls_summary(case, paths)
-        return
-
-    resolver = _LS_DIR_RESOLVERS.get(target_dir)
-    if resolver is None:
-        sys.exit(f"ERROR: unknown dir '{target_dir}'. "
-                 f"Choices: {', '.join(_LS_DIR_RESOLVERS)}")
-
-    abs_dir = resolver(case, paths)
-    if not abs_dir:
-        sys.exit(f"ERROR: path not configured for '{target_dir}'.")
-
-    print(f"{abs_dir}")
-
-    if not os.path.isdir(abs_dir):
-        print("  (directory not found)")
-        return
-
-    # For 'rest', list subdirectory entries (restart sets are directories).
-    if target_dir == 'rest':
-        try:
-            entries = sorted(os.scandir(abs_dir), key=lambda e: e.name)
-        except OSError as exc:
-            sys.exit(f"ERROR reading directory: {exc}")
-        if not entries:
-            print("  (empty)")
-            return
-        for entry in entries:
-            try:
-                size = dir_size_bytes(entry.path) if entry.is_dir() else entry.stat().st_size
-                print(f"  {entry.name:<60}  {fmt_size(size):>10}")
-            except OSError:
-                print(f"  {entry.name}")
-        return
-
-    # All other dirs: list files sorted by name with individual sizes.
-    files, _ = list_files_with_size(abs_dir)
-    if not files:
-        print("  (empty or no files)")
-        return
-
-    files_sorted = sorted(files)
-    sizes = {}
-    try:
-        with os.scandir(abs_dir) as it:
-            for entry in it:
-                if entry.is_file(follow_symlinks=False):
-                    try:
-                        sizes[entry.name] = entry.stat(follow_symlinks=False).st_size
-                    except OSError:
-                        sizes[entry.name] = 0
-    except OSError as exc:
-        sys.exit(f"ERROR reading directory: {exc}")
-
-    total = sum(sizes.get(f, 0) for f in files_sorted)
-    for fname in files_sorted:
-        sz = sizes.get(fname, 0)
-        print(f"  {fname:<60}  {fmt_size(sz):>10}")
-    print(f"  {'─' * 72}")
-    print(f"  {'total':60}  {fmt_size(total):>10}")
 
 
 # ---------------------------------------------------------------------------
@@ -943,21 +890,11 @@ def build_parser():
     p_check.add_argument('--energy', action='store_true',
                          help='Compute global-mean energy balance (TS, Etop=FSNT-FLNT) '
                               'from last 12 atm h0 files via ncra; requires ncra + netCDF4')
-
-    # ---- ls ----
-    p_ls = top_sub.add_parser(
-        'ls',
-        help=argparse.SUPPRESS,
-        description=cmd_ls.__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p_ls.add_argument('case', help='Case name')
-    p_ls.add_argument('dir', nargs='?', default=None,
-                      choices=list(_LS_DIR_RESOLVERS),
-                      metavar='DIR',
-                      help=('Storage area to list: '
-                            f'{", ".join(_LS_DIR_RESOLVERS)} '
-                            '(omit for summary)'))
+    p_check.add_argument('--dir', metavar='DIR', default=None,
+                         choices=list(_DIR_RESOLVERS),
+                         help=('Drill down into a specific storage area for a single case: '
+                               f'{", ".join(_DIR_RESOLVERS)}. '
+                               'Requires exactly one case name; incompatible with --prefix.'))
 
     # ---- continue ----
     p_cont = top_sub.add_parser(
@@ -1020,9 +957,6 @@ def main():
 
     if args.group == 'check':
         cmd_check(args, paths)
-
-    elif args.group == 'ls':
-        cmd_ls(args, paths)
 
     elif args.group == 'continue':
         cmd_continue(args, paths)
