@@ -1217,12 +1217,12 @@ def build_parser():
     parser.add_argument('--long-term', dest='long_term',
                         help='Override paths.long_term from config_registry')
 
-    sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND')
+    sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
 
     # ---- report (read-only; no --execute; empty cases = all) ----
     p_report = sub.add_parser(
         'report',
-        help='Show disk usage per case across cases/, rundir/, and archive/',
+        help=argparse.SUPPRESS,
         description=cmd_report.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1241,16 +1241,15 @@ def build_parser():
     # ---- cata subcommand group ----
     p_cata = sub.add_parser(
         'cata',
-        help='Surgical output management (purge-bld, purge-restarts, '
-             'purge-hist, purge-logs, move-hist)',
+        help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    cata_sub = p_cata.add_subparsers(dest='cata_command', metavar='CATA_SUBCOMMAND')
+    cata_sub = p_cata.add_subparsers(dest='cata_command', metavar='CATA_SUBCOMMAND', help=argparse.SUPPRESS)
 
     # ---- cata purge-bld ----
     p_bld = cata_sub.add_parser(
         'purge-bld',
-        help='Delete build artifacts in rundir/<case>/bld/',
+        help=argparse.SUPPRESS,
         description=cmd_purge_bld.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1261,7 +1260,7 @@ def build_parser():
     # ---- cata purge-restarts ----
     p_rest = cata_sub.add_parser(
         'purge-restarts',
-        help='Trim old restart sets in archive/<case>/rest/, keep last N',
+        help=argparse.SUPPRESS,
         description=cmd_purge_restarts.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1272,7 +1271,7 @@ def build_parser():
     # ---- cata purge-hist ----
     p_hist = cata_sub.add_parser(
         'purge-hist',
-        help='Delete history NetCDF files from archive/<case>/<model>/hist/',
+        help=argparse.SUPPRESS,
         description=cmd_purge_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1286,7 +1285,7 @@ def build_parser():
     # ---- cata purge-logs ----
     p_logs = cata_sub.add_parser(
         'purge-logs',
-        help='Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/',
+        help=argparse.SUPPRESS,
         description=cmd_purge_logs.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1300,7 +1299,7 @@ def build_parser():
     # ---- cata move-hist ----
     p_mvhist = cata_sub.add_parser(
         'move-hist',
-        help='Move history files to long-term storage (preserves archive structure)',
+        help=argparse.SUPPRESS,
         description=cmd_move_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1310,7 +1309,7 @@ def build_parser():
     # ---- avg ----
     p_avg = sub.add_parser(
         'avg',
-        help='Inspect or compute time-averaged history files using ncra',
+        help=argparse.SUPPRESS,
         description=cmd_avg_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1330,7 +1329,7 @@ def build_parser():
     # ---- retire ----
     p_arc = sub.add_parser(
         'retire',
-        help='Retire a case: write tombstone/data to long-term, then delete from cesm_scratch',
+        help=argparse.SUPPRESS,
         description=cmd_retire_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

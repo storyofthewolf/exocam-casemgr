@@ -923,12 +923,12 @@ def build_parser():
     parser.add_argument('--long-term', dest='long_term',
                         help='Override paths.long_term from config_registry')
 
-    top_sub = parser.add_subparsers(dest='group', metavar='SUBCOMMAND')
+    top_sub = parser.add_subparsers(dest='group', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
 
     # ---- check ----
     p_check = top_sub.add_parser(
         'check',
-        help='Show run status for cases (CaseStatus + SLURM probe); defaults to all cases',
+        help=argparse.SUPPRESS,
         description=cmd_check.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -947,7 +947,7 @@ def build_parser():
     # ---- ls ----
     p_ls = top_sub.add_parser(
         'ls',
-        help='List files in a storage area for a single case',
+        help=argparse.SUPPRESS,
         description=cmd_ls.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -962,7 +962,7 @@ def build_parser():
     # ---- continue ----
     p_cont = top_sub.add_parser(
         'continue',
-        help='Set CONTINUE_RUN=TRUE and sbatch the run script; optionally update STOP_N/RESUBMIT',
+        help=argparse.SUPPRESS,
         description=cmd_continue.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -979,7 +979,7 @@ def build_parser():
     # ---- restart ----
     p_restart = top_sub.add_parser(
         'restart',
-        help='Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch; rerun from scratch',
+        help=argparse.SUPPRESS,
         description=cmd_restart.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

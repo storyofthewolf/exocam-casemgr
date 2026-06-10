@@ -474,12 +474,12 @@ def build_parser():
                         help='Query retired.yaml instead of active.yaml '
                              '(shorthand for --registry retired.yaml)')
 
-    sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND')
+    sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
 
     # ---- search ----
     p_search = sub.add_parser(
         'search',
-        help='List cases matching filter criteria',
+        help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_search.add_argument('cases', nargs='*', metavar='CASE_NAME',
@@ -496,7 +496,7 @@ def build_parser():
     # ---- show ----
     p_show = sub.add_parser(
         'show',
-        help='Print all parameters for one case by exact name',
+        help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_show.add_argument('cases', nargs='+', metavar='CASE_NAME',
@@ -507,7 +507,7 @@ def build_parser():
     # ---- export ----
     p_export = sub.add_parser(
         'export',
-        help='Generate an experiment_matrix.yaml from one or more registry cases',
+        help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_export.add_argument('case_names', nargs='+', metavar='CASE_NAME',
