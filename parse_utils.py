@@ -212,6 +212,34 @@ def parse_user_nl_clm(path):
     return result
 
 
+# Sea-ice / snow broadband albedo keys patched per-case into user_nl_cice.
+# These do not share a common prefix (unlike carma_*/volc_*), so they are
+# matched by explicit key set.
+CICE_ALBEDO_KEYS = ('albicei', 'albicev', 'albsnowi', 'albsnowv')
+
+
+def parse_user_nl_cice(path):
+    """
+    Parse user_nl_cice, return dict with an nl_cice_params sub-dict holding any
+    of the broadband albedo keys (albicei/albicev/albsnowi/albsnowv) found.
+    Values are bare floats; coerced via _coerce_nl_value. Returns {} (no
+    nl_cice_params) if none are set, mirroring carma_params/volc_params.
+    """
+    result = {}
+    cice = {}
+    with open(path) as f:
+        for line in f:
+            if line.lstrip().startswith('!'):
+                continue
+            for m in _RE_NL_VAL.finditer(line):
+                k, v = m.group(1), m.group(2).strip().rstrip(',')
+                if k in CICE_ALBEDO_KEYS and k not in cice:
+                    cice[k] = _coerce_nl_value(v)
+    if cice:
+        result['nl_cice_params'] = cice
+    return result
+
+
 def parse_cam_config_opts(xmlpath):
     """
     Parse env_build.xml (or env_run.xml) for CAM_CONFIG_OPTS.
