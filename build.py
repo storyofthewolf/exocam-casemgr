@@ -1011,7 +1011,7 @@ def cmd_make(args):
         result = subprocess.run(
             ['bash', script_path],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True
+            universal_newlines=True
         )
         with open(log_path, 'w') as f:
             f.write(result.stdout)
