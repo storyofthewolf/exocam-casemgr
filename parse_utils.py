@@ -220,10 +220,10 @@ CICE_ALBEDO_KEYS = ('albicei', 'albicev', 'albsnowi', 'albsnowv')
 
 def parse_user_nl_cice(path):
     """
-    Parse user_nl_cice, return dict with an nl_cice_params sub-dict holding any
+    Parse user_nl_cice, return dict with a cice_params sub-dict holding any
     of the broadband albedo keys (albicei/albicev/albsnowi/albsnowv) found.
     Values are bare floats; coerced via _coerce_nl_value. Returns {} (no
-    nl_cice_params) if none are set, mirroring carma_params/volc_params.
+    cice_params) if none are set, mirroring carma_params/volc_params.
     """
     result = {}
     cice = {}
@@ -236,7 +236,7 @@ def parse_user_nl_cice(path):
                 if k in CICE_ALBEDO_KEYS and k not in cice:
                     cice[k] = _coerce_nl_value(v)
     if cice:
-        result['nl_cice_params'] = cice
+        result['cice_params'] = cice
     return result
 
 
