@@ -17,7 +17,7 @@ the code + the other docs) only after it has been agreed and validated.
 **Motivation:** Two per-case inputs are currently produced by hand or by external
 tools and pasted into the experiment matrix:
 
-1. The sea-ice/snow broadband albedos (`nl_cice_params`: `albicei`, `albicev`,
+1. The sea-ice/snow broadband albedos (`cice_params`: `albicei`, `albicev`,
    `albsnowi`, `albsnowv`), which depend on `exo_solar_file` and are computed by
    `ExoCAM/tools/py_progs/broadband_albedo_calculator.py`.
 2. The `ncdata` initial-condition file at a given surface pressure, currently made
@@ -42,17 +42,17 @@ There is also a host-machine split: `generate` runs **locally**; albedo calc nee
 the stellar `.nc`, and IC generation needs HPC scratch and source IC files. "Where
 the hook lives" is really "on which machine does it run."
 
-### Proposal 1 — Auto-derive `nl_cice_params` from `exo_solar_file`  (LIKELY YES, low risk)
+### Proposal 1 — Auto-derive `cice_params` from `exo_solar_file`  (LIKELY YES, low risk)
 
 Output is four small floats derived from a file already named in the spec, so this
 fits the "pure derivation" category.
 
 - **Hook location:** a `_derive_cice_albedos(spec)` step called from / just after
   `resolve_case()` in `build.py`, **before** script generation. If the case has an
-  `exo_solar_file` and no explicit `nl_cice_params`, compute the 4 albedos and
+  `exo_solar_file` and no explicit `cice_params`, compute the 4 albedos and
   inject them into the spec; the existing `_build_nl_append_block` writes them with
   no downstream change.
-- **Override semantics:** explicit `nl_cice_params` in the matrix wins; derivation
+- **Override semantics:** explicit `cice_params` in the matrix wins; derivation
   only fills the gap.
 - **Why it's good:** today the albedos and `exo_solar_file` can silently drift out
   of sync (wrong star -> wrong albedos, no error). Deriving them makes the spec
@@ -110,12 +110,12 @@ Different animal from Proposal 1 for three reasons:
 | Step | Effort | Risk | Do it? |
 |---|---|---|---|
 | Refactor `broadband_albedo_calculator.py` into an importable function | small | low | Yes — worth it regardless |
-| Auto-derive `nl_cice_params` from `exo_solar_file` in `resolve_case` | small | low | **Yes** |
+| Auto-derive `cice_params` from `exo_solar_file` in `resolve_case` | small | low | **Yes** |
 | Add `paths.exocam_tools` to `config_registry.yaml` + graceful skip | small | low | Yes (enabler for above) |
 | Port `changepress_cesm.pro` -> Python + validate vs IDL | **large** | medium (science) | Separate effort |
 | Emit guarded IC-gen call into the build shell script | small | low | Yes, *after* the port |
 
 **Bottom line:** Proposal 1 is a clean, low-risk extension in the same spirit as the
-existing `nl_cice_params` plumbing — prototype it as a separate, reviewable change.
+existing `cice_params` plumbing — prototype it as a separate, reviewable change.
 Proposal 2 is a good long-term goal but is gated on the IDL->Python port and must be
 emitted into the shell script, never run as an in-process side effect of `generate`.

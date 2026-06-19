@@ -78,7 +78,7 @@ _REGISTRY_GROUPS = [
         'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
     ]),
     ('special', [
-        'carma_params', 'volc_params', 'nl_cice_params',
+        'carma_params', 'volc_params', 'cice_params',
     ]),
     ('diagnostics', [
         'warnings', 'config_saved',
@@ -165,11 +165,11 @@ def inspect_case(casedir):
     row['clm_fsurdat'] = clm.get('fsurdat')
 
     # user_nl_cice broadband albedos (configs with a cice model: aqua and mixed)
-    row['nl_cice_params'] = None
+    row['cice_params'] = None
     if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se', 'cam_mixed_fv'):
         cice_path = os.path.join(casedir, 'user_nl_cice')
         if os.path.exists(cice_path):
-            row['nl_cice_params'] = parse_user_nl_cice(cice_path).get('nl_cice_params')
+            row['cice_params'] = parse_user_nl_cice(cice_path).get('cice_params')
 
     # user_docn.streams.txt.som (aqua and mixed configs only)
     row['som_pop_frc_file'] = None

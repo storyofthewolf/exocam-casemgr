@@ -23,16 +23,19 @@ SUBCOMMANDS
                         optionally apply --set VAR=VALUE xmlchange calls first
   restart               Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch;
                         use to fix and rerun from scratch after a completed or failed run
+  submit                sbatch a built case as-is (no xmlchange); the launch step
+                        after `build.py make`. Skips cases with no <case>.run.
 
 SAFETY
 ------
-  continue and restart require explicit case names or --prefix.
+  continue, restart, and submit require explicit case names or --prefix.
   There is no --all flag. check is read-only and needs no --execute.
 
 Run any subcommand with --help for full options, e.g.:
   python runmgr.py check --help
   python runmgr.py continue --help
   python runmgr.py restart --help
+  python runmgr.py submit --help
 """
 
 import argparse
@@ -47,7 +50,7 @@ from manage_utils import (
     ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
-    _hist_year, restart_sets,
+    _hist_year, restart_sets, submit_case,
 )
 
 # ---------------------------------------------------------------------------
@@ -376,6 +379,111 @@ def cmd_restart(args, paths):
         m = _re.search(r'Submitted batch job (\d+)', result.stdout)
         job_id = m.group(1) if m else result.stdout.strip()
         print(f"    submitted: job {job_id}")
+
+    if not args.execute:
+        print("\n(preview only — rerun with --execute to submit)")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: submit
+# ---------------------------------------------------------------------------
+
+def cmd_submit(args, paths):
+    """
+    sbatch a built case's run script as-is — no XML changes.
+
+    Use this to launch cases after `build.py make` (which builds but does not
+    submit) once you have inspected the build. Unlike continue/restart, submit
+    makes no xmlchange calls: it runs exactly what you built. It is not this
+    tool's job to build — a case with no <case>.run is skipped with a message.
+
+    Status gating (checked via CaseStatus + SLURM probe):
+      RUNNING / RESUBMITTED  — hard block: skipped (a job is already active)
+      BUILT / COMPLETE       — proceeds without warning (BUILT is the normal
+                               post-make state; COMPLETE covers re-launch and
+                               clones that inherit the source's CaseStatus)
+      anything else          — soft block: per-case confirmation prompt
+
+    Without --execute, prints a preview and exits. Requires explicit case
+    names or --prefix — no --all flag.
+    """
+    caseroot = paths.get('caseroot', '')
+    if not caseroot:
+        sys.exit("ERROR: caseroot path not configured.")
+
+    prefix_filter  = getattr(args, 'prefix', None)
+    explicit_cases = args.cases or []
+
+    if explicit_cases and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+
+    if prefix_filter:
+        all_cases = discover_cases(paths)
+        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
+        if not cases:
+            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
+    elif explicit_cases:
+        cases = explicit_cases
+    else:
+        sys.exit("ERROR: submit requires explicit case names or --prefix. No --all flag.")
+
+    for case in cases:
+        case_dir = os.path.join(caseroot, case)
+        if not os.path.isdir(case_dir):
+            print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            continue
+
+        run_script = os.path.join(case_dir, f'{case}.run')
+        if not os.path.isfile(run_script):
+            print(f"  {case}: SKIP — not built ({case}.run not found). "
+                  f"Run build.py make first.")
+            continue
+
+        # Status gate
+        casestatus_path = os.path.join(case_dir, 'CaseStatus')
+        cs = _parse_casestatus(casestatus_path)
+        if cs is None:
+            status_label = 'NO_CASEDIR'
+        else:
+            status_label = cs['status']
+            if cs['last_event'] and (
+                cs['last_event'].startswith('run started') or
+                cs['last_event'].startswith('run SUCCESSFUL')
+            ):
+                job_queued = _squeue_probe(case)
+                if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
+                    status_label = 'RESUBMITTED'
+                elif job_queued is False and cs['last_event'].startswith('run started'):
+                    status_label = 'RUNNING?'
+
+        if status_label in ('RUNNING', 'RESUBMITTED'):
+            print(f"  {case}: [{status_label}] — skipping (job already active)")
+            continue
+
+        print(f"  {case}  [{status_label}]")
+        print(f"    sbatch: {run_script}")
+
+        if not args.execute:
+            continue
+
+        # Soft block: warn and confirm for statuses other than the expected ones
+        if status_label not in ('BUILT', 'COMPLETE'):
+            print(f"    WARNING: status is [{status_label}], not BUILT/COMPLETE.")
+            try:
+                answer = input(f"    Submit anyway for {case}? [yes/no]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                print(f"    Skipping {case}.")
+                continue
+            if answer not in ('yes', 'y'):
+                print(f"    Skipping {case}.")
+                continue
+
+        ok, detail = submit_case(case_dir, case)
+        if ok:
+            print(f"    submitted: job {detail}")
+        else:
+            print(f"    ERROR: {detail}")
 
     if not args.execute:
         print("\n(preview only — rerun with --execute to submit)")
@@ -931,6 +1039,21 @@ def build_parser():
     p_restart.add_argument('--execute', action='store_true',
                            help='Actually perform actions (default is preview only)')
 
+    # ---- submit ----
+    p_submit = top_sub.add_parser(
+        'submit',
+        help=argparse.SUPPRESS,
+        description=cmd_submit.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_submit.add_argument('cases', nargs='*',
+                          help='Case name(s) to submit (or use --prefix; no --all flag)')
+    p_submit.add_argument('--prefix', metavar='STR', default=None,
+                          help='Case-insensitive prefix filter; '
+                               'cannot combine with explicit case names')
+    p_submit.add_argument('--execute', action='store_true',
+                          help='Actually perform actions (default is preview only)')
+
     return parser
 
 
@@ -963,6 +1086,9 @@ def main():
 
     elif args.group == 'restart':
         cmd_restart(args, paths)
+
+    elif args.group == 'submit':
+        cmd_submit(args, paths)
 
 
 if __name__ == '__main__':

@@ -21,6 +21,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import compute_pstd_bar
+from manage_utils import submit_case
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {
@@ -265,7 +266,7 @@ def render_exoplanet_mod(template_path, spec):
 def _build_nl_append_block(spec):
     """
     Return shell lines to append carma_params, volc_params, and/or nl_cam_params
-    to user_nl_cam (and nl_cice_params to user_nl_cice) via echo >>. Returns an
+    to user_nl_cam (and cice_params to user_nl_cice) via echo >>. Returns an
     empty list if none are present.
     Used by generate_shell_script (newcase path) where the namelist is a fresh
     template that never contains these entries, so plain append is correct.
@@ -277,10 +278,10 @@ def _build_nl_append_block(spec):
             lines.append(f"")
             lines.append(f"# Append {group_key} to user_nl_cam")
             lines.extend(_nl_append_lines(params))
-    cice_params = spec.get('nl_cice_params')
+    cice_params = spec.get('cice_params')
     if cice_params:
         lines.append(f"")
-        lines.append(f"# Append nl_cice_params to user_nl_cice")
+        lines.append(f"# Append cice_params to user_nl_cice")
         lines.extend(_nl_append_lines(cice_params, target='user_nl_cice'))
     return lines
 
@@ -309,7 +310,7 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
 def _build_nl_upsert_block(spec):
     """
     Return shell lines to upsert carma_params, volc_params, and/or nl_cam_params
-    into user_nl_cam (and nl_cice_params into user_nl_cice) using replace-or-append
+    into user_nl_cam (and cice_params into user_nl_cice) using replace-or-append
     semantics.
     Used by generate_clone_script where the namelist already contains entries
     inherited from the clone source.
@@ -321,10 +322,10 @@ def _build_nl_upsert_block(spec):
             lines.append(f"")
             lines.append(f"# Upsert {group_key} in user_nl_cam")
             lines.extend(_nl_upsert_lines(params))
-    cice_params = spec.get('nl_cice_params')
+    cice_params = spec.get('cice_params')
     if cice_params:
         lines.append(f"")
-        lines.append(f"# Upsert nl_cice_params in user_nl_cice")
+        lines.append(f"# Upsert cice_params in user_nl_cice")
         lines.extend(_nl_upsert_lines(cice_params, target='user_nl_cice'))
     return lines
 
@@ -1077,18 +1078,11 @@ def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
             print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → CASEROOT not found in script, skipping")
             continue
         caseroot = os.path.join(caseroot_base, case_name)
-        result = subprocess.run(
-            ['sbatch', f'{case_name}.run'],
-            cwd=caseroot,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → sbatch FAILED: {result.stderr.strip()}")
+        ok, detail = submit_case(caseroot, case_name)
+        if not ok:
+            print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → {detail}")
             continue
-        m = re.search(r'Submitted batch job (\d+)', result.stdout)
-        job_id = m.group(1) if m else result.stdout.strip()
-        print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → job {job_id}")
+        print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → job {detail}")
         submitted += 1
     print(bar)
     print(f"  {submitted} job{'s' if submitted != 1 else ''} submitted.")
