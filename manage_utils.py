@@ -8,6 +8,7 @@ both tools. No subcommand logic lives here.
 
 import os
 import re
+import subprocess
 import sys
 import yaml
 
@@ -228,3 +229,35 @@ def _require_cases(all_cases, args):
     if missing:
         print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
     return [c for c in requested if c in all_cases]
+
+
+# ---------------------------------------------------------------------------
+# Job submission (shared by runmgr.py submit and build.py make --send-it)
+# ---------------------------------------------------------------------------
+
+def submit_case(case_dir, case_name):
+    """sbatch <case_name>.run from case_dir.
+
+    The single submission code path. Callers handle their own status gating,
+    XML edits, and output formatting; this only runs sbatch and reports the
+    outcome.
+
+    Returns (ok, detail):
+      (True,  job_id)      on success — job_id parsed from sbatch stdout
+      (False, message)     on failure — sbatch not found, nonzero exit, etc.
+    """
+    try:
+        result = subprocess.run(
+            ['sbatch', f'{case_name}.run'],
+            cwd=case_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+    except FileNotFoundError:
+        return False, 'sbatch not found in PATH'
+    if result.returncode != 0:
+        return False, f'sbatch failed: {result.stderr.strip()}'
+    m = re.search(r'Submitted batch job (\d+)', result.stdout)
+    job_id = m.group(1) if m else result.stdout.strip()
+    return True, job_id
