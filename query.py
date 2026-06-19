@@ -185,7 +185,7 @@ _BASE_FIELD_ORDER = [
     # land/ocean files
     'finidat', 'fsurdat', 'som_pop_frc_file',
     # special
-    'carma_params', 'volc_params',
+    'carma_params', 'volc_params', 'nl_cice_params',
 ]
 
 # Fields included in a clone export base (explicit allowlist — all others omitted)

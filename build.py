@@ -265,7 +265,8 @@ def render_exoplanet_mod(template_path, spec):
 def _build_nl_append_block(spec):
     """
     Return shell lines to append carma_params, volc_params, and/or nl_cam_params
-    to user_nl_cam via echo >>. Returns an empty list if none are present.
+    to user_nl_cam (and nl_cice_params to user_nl_cice) via echo >>. Returns an
+    empty list if none are present.
     Used by generate_shell_script (newcase path) where the namelist is a fresh
     template that never contains these entries, so plain append is correct.
     """
@@ -276,14 +277,20 @@ def _build_nl_append_block(spec):
             lines.append(f"")
             lines.append(f"# Append {group_key} to user_nl_cam")
             lines.extend(_nl_append_lines(params))
+    cice_params = spec.get('nl_cice_params')
+    if cice_params:
+        lines.append(f"")
+        lines.append(f"# Append nl_cice_params to user_nl_cice")
+        lines.extend(_nl_append_lines(cice_params, target='user_nl_cice'))
     return lines
 
 
-def _nl_upsert_lines(param_dict):
+def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     """
-    Return shell lines that upsert key = value entries into user_nl_cam.
+    Return shell lines that upsert key = value entries into a namelist file
+    (default user_nl_cam; pass target='user_nl_cice' etc. for others).
     For each key: replace the existing line if present, otherwise append.
-    Used by generate_clone_script because create_clone copies user_nl_cam
+    Used by generate_clone_script because create_clone copies the namelist
     verbatim from the source case, so appending a key that already exists
     would create duplicate entries.
     """
@@ -292,9 +299,9 @@ def _nl_upsert_lines(param_dict):
         nl_val = _format_nl_value(val)
         escaped_val = nl_val.replace('|', r'\|')
         lines.append(
-            f'grep -q "{key}" user_nl_cam '
-            f'&& sed -i "s|{key} = .*|{key} = {escaped_val}|" user_nl_cam '
-            f'|| echo "{key} = {nl_val}" >> user_nl_cam'
+            f'grep -q "{key}" {target} '
+            f'&& sed -i "s|{key} = .*|{key} = {escaped_val}|" {target} '
+            f'|| echo "{key} = {nl_val}" >> {target}'
         )
     return lines
 
@@ -302,7 +309,8 @@ def _nl_upsert_lines(param_dict):
 def _build_nl_upsert_block(spec):
     """
     Return shell lines to upsert carma_params, volc_params, and/or nl_cam_params
-    into user_nl_cam using replace-or-append semantics.
+    into user_nl_cam (and nl_cice_params into user_nl_cice) using replace-or-append
+    semantics.
     Used by generate_clone_script where the namelist already contains entries
     inherited from the clone source.
     """
@@ -313,6 +321,11 @@ def _build_nl_upsert_block(spec):
             lines.append(f"")
             lines.append(f"# Upsert {group_key} in user_nl_cam")
             lines.extend(_nl_upsert_lines(params))
+    cice_params = spec.get('nl_cice_params')
+    if cice_params:
+        lines.append(f"")
+        lines.append(f"# Upsert nl_cice_params in user_nl_cice")
+        lines.extend(_nl_upsert_lines(cice_params, target='user_nl_cice'))
     return lines
 
 
@@ -344,9 +357,10 @@ def _format_nl_value(val):
     return f"'{s.replace(chr(39), chr(92) + chr(39))}'"
 
 
-def _nl_append_lines(param_dict):
+def _nl_append_lines(param_dict, target='user_nl_cam'):
     """
-    Return a list of shell lines that append key = value entries to user_nl_cam.
+    Return a list of shell lines that append key = value entries to a namelist
+    file (default user_nl_cam; pass target='user_nl_cice' etc. for others).
     Type dispatch via _format_nl_value:
     - bool        -> .true. / .false.  (unquoted Fortran logical)
     - int/float   -> bare number       (no quotes)
@@ -357,7 +371,7 @@ def _nl_append_lines(param_dict):
     lines = []
     for key, val in param_dict.items():
         nl_val = _format_nl_value(val)
-        lines.append(f'echo "{key} = {nl_val}" >> user_nl_cam')
+        lines.append(f'echo "{key} = {nl_val}" >> {target}')
     return lines
 
 

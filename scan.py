@@ -23,8 +23,8 @@ import yaml
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import (
-    parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_docn_som,
-    parse_cam_config_opts, parse_run_type_fields,
+    parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_user_nl_cice,
+    parse_docn_som, parse_cam_config_opts, parse_run_type_fields,
     compute_pstd_bar, pressure_str_to_bar, read_solar_nw
 )
 
@@ -78,7 +78,7 @@ _REGISTRY_GROUPS = [
         'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
     ]),
     ('special', [
-        'carma_params', 'volc_params',
+        'carma_params', 'volc_params', 'nl_cice_params',
     ]),
     ('diagnostics', [
         'warnings', 'config_saved',
@@ -163,6 +163,13 @@ def inspect_case(casedir):
             clm = parse_user_nl_clm(clm_path)
     row['clm_finidat'] = clm.get('finidat')
     row['clm_fsurdat'] = clm.get('fsurdat')
+
+    # user_nl_cice broadband albedos (configs with a cice model: aqua and mixed)
+    row['nl_cice_params'] = None
+    if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se', 'cam_mixed_fv'):
+        cice_path = os.path.join(casedir, 'user_nl_cice')
+        if os.path.exists(cice_path):
+            row['nl_cice_params'] = parse_user_nl_cice(cice_path).get('nl_cice_params')
 
     # user_docn.streams.txt.som (aqua and mixed configs only)
     row['som_pop_frc_file'] = None
