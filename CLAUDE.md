@@ -45,15 +45,15 @@ cases/ + rundir/ + archive/ on HPC
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
 - **`datamgr.py`** — case data management: `report` (disk survey), `cata` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
-- **`manage_utils.py`** — shared utility layer imported by both `datamgr.py` and `runmgr.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`
-- **`runmgr.py`** — run control tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `ls` subcommand (file browser for a single case); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch)
+- **`manage_utils.py`** — shared utility layer imported by `datamgr.py`, `runmgr.py`, and `build.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`, `submit_case()` (the single `sbatch` code path, shared by `runmgr.py submit` and `build.py make --send-it`)
+- **`runmgr.py`** — run control tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `submit` subcommand (sbatch a built case as-is, no xmlchange — the launch step after `build.py make`; requires `<case>.run`); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch)
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
 - **`config_registry.yaml`** — machine-specific paths, CESM config per config_type, IC file table; must be edited per user/machine
 
 ### Key non-obvious behaviors
 
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
-- `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt).
+- `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt). `make` **builds but does not submit** — submission is a separate step (`runmgr.py submit`, or `make --send-it` to fold both together). The three run verbs are distinct: `submit` (launch a built case as-is, no xmlchange), `continue` (CONTINUE_RUN=TRUE), `restart` (CONTINUE_RUN=FALSE + fixes).
 - All destructive `datamgr.py` operations (including `cata`) default to **preview mode**; `--execute` required to act.
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics (grep/sed/echo) rather than plain append, to avoid duplicate keys.

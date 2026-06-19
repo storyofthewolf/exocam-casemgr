@@ -27,9 +27,8 @@ Python 3.8+.
 | `runmgr.py` | Run and case lifecycle management — check SLURM status, cata subcommands for purge and move operations |
 | `query.py` | Registry search and experiment matrix export |
 | `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
-| `run_builds.sh` | Legacy batch runner for `*_build.sh` scripts (superseded by `build.py make`) |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
-| `experiment_matrix.yaml.example` | Annotated template for writing experiment matrices |
+| `blueprints/experiment_matrix.example.yaml` | Annotated template for writing experiment matrices |
 
 ---
 
@@ -55,10 +54,10 @@ paths:
 Copy the example and edit:
 
 ```bash
-cp experiment_matrix.yaml.example my_runs.yaml
+cp blueprints/experiment_matrix.example.yaml blueprints/my_runs.yaml
 ```
 
-The matrix has a `base` section (shared defaults) and a `cases` list. Each case inherits all base values and can override any of them. See `experiment_matrix.yaml.example` for the full annotated parameter set, organized into these groups:
+The matrix has a `base` section (shared defaults) and a `cases` list. Each case inherits all base values and can override any of them. See `blueprints/experiment_matrix.example.yaml` for the full annotated parameter set, organized into these groups:
 
 | Group | Keys |
 |---|---|
@@ -105,19 +104,31 @@ python build.py generate --list
 To run all generated scripts (prompts for confirmation; logs written to `build_scripts/logs/`):
 
 ```bash
-python build.py make
-python build.py make --prefix ExoCAM_thai              # filter by case name prefix
-python build.py make --send-it                         # build then submit each passed case via sbatch
-python build.py make --prefix ExoCAM_thai --send-it    # filter + build + submit
+python build.py make                                  # build only — inspect, then submit later
+python build.py make --prefix ExoCAM_thai             # filter by case name prefix
+python build.py make --send-it                        # build then submit each passed case via sbatch
+python build.py make --prefix ExoCAM_thai --send-it   # filter + build + submit
 ```
+
+`make` **builds but does not submit** — review the cases, then launch them with
+`runmgr.py submit` (the standalone launch step):
+
+```bash
+python runmgr.py submit my_case                       # preview
+python runmgr.py submit --prefix ExoCAM_thai          # preview a whole set
+python runmgr.py submit my_case --execute             # sbatch the built case as-is
+```
+
+`make --send-it` is the power-user shortcut that folds build + submit into one
+step. Either way, `submit` makes no `xmlchange` calls — it runs exactly what you
+built. Use `runmgr.py continue` / `restart` instead to manage a case that has
+already run.
 
 To run a single build script directly:
 
 ```bash
 bash build_scripts/my_case_build.sh
 ```
-
-Job submission (`.run`) is always manual.
 
 #### Clone mode
 
@@ -287,7 +298,9 @@ python datamgr.py avg my_case --last 10 --execute     # average last 10 timestep
 |---|---|
 | `datamgr.py report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Bare invocation scans all cases and clobbers `usage.yaml`. Named-case or `--prefix` invocations print only. `--cached` prints last saved snapshot. |
 | `datamgr.py avg` | Inspect or compute time-averaged history files using ncra (NCO). |
+| `runmgr.py submit` | `sbatch` a built case as-is — no `xmlchange`. The launch step after `build.py make`. Requires `<case>.run` (skips with a message if not built). Hard-blocks RUNNING/RESUBMITTED; silent for BUILT/COMPLETE; soft-warns otherwise. Preview-only without `--execute`. |
 | `runmgr.py continue` | Set `CONTINUE_RUN=TRUE`, optionally update `STOP_N` and `RESUBMIT` (default 0), then `sbatch` the run script. Hard-blocks on RUNNING/RESUBMITTED; soft-warns for non-COMPLETE. Preview-only without `--execute`. |
+| `runmgr.py restart` | Set `CONTINUE_RUN=FALSE`, apply `--set VAR=VALUE` `xmlchange` calls, then `sbatch`. Use to fix and rerun from scratch after a completed or failed run. Same gating as `continue`. |
 | `datamgr.py cata purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `datamgr.py cata purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
 | `datamgr.py cata purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |

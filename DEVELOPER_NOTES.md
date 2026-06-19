@@ -4,6 +4,81 @@ Human-readable reference for the ExoCAM case management toolchain. This document
 
 ---
 
+## Concepts — the mental model
+
+Read this first if you're returning to the toolchain after a break. The pieces only
+make sense once you hold three ideas in mind: **two formats, one bridge.**
+
+### The two formats hold different things
+
+| | **Experiment matrix** (`blueprints/*.yaml`) | **Registry** (`active.yaml` / `retired.yaml`) |
+|---|---|---|
+| Direction | **input** — what you intend to build | **output** — what was actually built |
+| Author | **you**, by hand | **`scan.py`**, by walking live CASE dirs |
+| Shape | `base:` + `cases:` (factored) | flat, **explicit per case** |
+| Contents | only the knobs you set | every field, incl. derived/diagnostic |
+| Optimized for | writing | querying |
+
+The key asymmetry: the matrix's `base:`/`cases:` split encodes **authorial intent** —
+"these values are shared *on purpose*; these per-case lines are the *intentional*
+deviations." That factoring is information only you have. By the time `scan.py` sees a
+directory of finished cases, the build has already "compiled away" the `base:`/`cases:`
+structure into fully-resolved configurations. **You cannot recover intent from facts**,
+so the registry doesn't try — it stores each case completely, on its own terms.
+
+This is also why the registry holds fields that are *not* valid matrix inputs:
+`ncdata_pressure_str` (parsed from a filename), `exo_pstd_computed_bar` (computed),
+`warnings` / `inspect_date` (observations). These are *results*, not *settings*.
+
+### `export` is the (deliberately lossy) bridge back
+
+`query.py export` goes registry → matrix, re-imposing a `base:` factoring that was never
+recoverable. So it punts on the hard version: it dumps fields into `base:` (or, in
+`--clone` mode, prunes to a known field set) rather than guessing what "should" be shared
+vs. per-case. It also **strips** registry-only fields (`_SKIP_KEYS`), **renames** registry
+keys to matrix keys (`clm_finidat` → `finidat`), and lets you inject fresh run settings
+(`--stop-n`, `--account`). You then re-impose the real factoring by hand — because you're
+the only one who knows it.
+
+**Rule of thumb: store rich, emit lean.** Scan everything observable into the registry;
+export only the subset that is a legitimate, re-runnable input.
+
+### Two reads of a case, two different shapes
+
+- **`query.py show <case>`** — dumps the registry entry **verbatim**, in its **grouped**
+  structure (`meta:`, `atmosphere:`, …). A faithful window *into* storage. Use it to
+  inspect "everything we know about this case."
+- **`query.py export <case>`** — **synthesizes a build-ready matrix** (`base:` + `cases:`),
+  flat and filtered, to feed back into `build.py`. Use it to start a new sweep from an
+  existing case.
+
+Different shapes because they serve opposite directions of data flow. (This is why adding
+a new namelist field, like `cice_params`, means touching **both** `scan.py` — to store
+it — *and* `query.py`'s `_BASE_FIELD_ORDER` — to forward it through the bridge.)
+
+### Why some namelist values are top-level and some are subgroup dicts
+
+`user_nl_cam`, `user_nl_clm`, `user_nl_cice` are sibling source files, but their individual
+variables sort into two buckets:
+
+- **Promoted to top level** (`ncdata`, `finidat`, `fsurdat`): a fixed set of high-value
+  scalars the tooling *reasons about* — `ncdata` gets its pressure/level string parsed out;
+  `finidat`/`fsurdat` are config-gated. They earn first-class keys because code does things
+  with them.
+- **Kept in subgroup dicts** (`carma_params`, `volc_params`, `cice_params`): open-ended
+  bags of namelist values the tooling forwards **verbatim** without interpreting. Bundling
+  keeps them extensible (prefix-based groups accept new keys with no code change) and keeps
+  the top level uncluttered.
+
+### The one safety invariant to keep in your head
+
+`build.py generate` produces self-contained, reviewable shell scripts and **touches nothing
+on disk**; `build.py make` runs them. Every destructive `datamgr.py` op defaults to preview
+and needs `--execute`. The toolchain is trustworthy precisely because *generating a recipe*
+and *running it* are separate steps.
+
+---
+
 ## Quick CLI reference
 
 ```bash
@@ -70,7 +145,7 @@ Dependencies: `pip install pyyaml` (required); `pip install netCDF4` (optional, 
 
 ## Experiment matrix format
 
-Start from `experiment_matrix.yaml.example`. Each case inherits all `base` values; any key in a case dict overrides the base.
+Start from `blueprints/experiment_matrix.example.yaml`. Each case inherits all `base` values; any key in a case dict overrides the base.
 
 **Top-level keys:**
 
