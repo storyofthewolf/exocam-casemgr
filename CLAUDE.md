@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Git workflow
 
-- **Bug fixes, refactors, docs, small changes** → commit directly to `main`. Do
-  NOT branch, do NOT ask. If the prompt obviously describes a fix, just commit.
-- **Significant feature changes** → before committing, ASK whether to create a
-  new branch or commit to `main`. Do not branch automatically and do not assume.
+- **Bug fixes, docs, small changes** → commit directly to `main`. Do NOT branch,
+  do NOT ask. If the prompt obviously describes a fix, just commit.
+- **Significant feature changes, new features, or refactors** → before
+  committing, ASK whether to create a new branch or commit to `main`. Do not
+  branch automatically and do not assume.
 - When in doubt, lean toward committing to `main`.
 
 ## What this is
