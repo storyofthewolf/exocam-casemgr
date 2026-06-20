@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Git workflow
 
-Do NOT branch before committing bug fixes, refactors, docs, or other small
-changes — commit directly to `main`. Only create a feature branch for true new
-features. When in doubt, commit to `main`.
+- **Bug fixes, refactors, docs, small changes** → commit directly to `main`. Do
+  NOT branch, do NOT ask. If the prompt obviously describes a fix, just commit.
+- **Significant feature changes** → before committing, ASK whether to create a
+  new branch or commit to `main`. Do not branch automatically and do not assume.
+- When in doubt, lean toward committing to `main`.
 
 ## What this is
 
