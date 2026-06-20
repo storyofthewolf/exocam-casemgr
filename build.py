@@ -99,6 +99,21 @@ def bar_to_pressure_str(bar_val):
     return s + 'bar'
 
 
+def resolve_ic_path(ic_file, config_type, paths):
+    """
+    Resolve an IC file reference to a full ncdata path.
+
+    A bare filename (from the registry ic_files table) is placed under the
+    config-type IC directory. An explicit ncdata value that is already an
+    absolute path (or contains a directory component) is used verbatim —
+    prepending the base dir would mangle it into a double path.
+    """
+    if ic_file.startswith('/') or '/' in ic_file:
+        return ic_file
+    return (f"{paths.get('exocam_root', '$EXOCAM')}/cesm1.2.1/initial_files"
+            f"/{config_type}/{ic_file}")
+
+
 def find_ic_file(spec, registry):
     """
     Look up IC filename in registry.ic_files[config_type][pressure_str][nlev].
@@ -594,8 +609,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         stem = SOLAR_FILE_STEMS.get(exort_pkg, exort_pkg)
         solar_file = f"{paths.get('exort_root','$EXORT')}/data/solar/G2V_SUN_{stem}.nc"
 
-    ic_path = (f"{paths.get('exocam_root','$EXOCAM')}/cesm1.2.1/initial_files"
-               f"/{config_type}/{ic_file}")
+    ic_path = resolve_ic_path(ic_file, config_type, paths)
 
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
     script_path = os.path.join(outdir, f"{case_name}_build.sh")
@@ -778,8 +792,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     ]
 
     if ic_file:
-        ic_path = (f"{paths.get('exocam_root','$EXOCAM')}/cesm1.2.1/initial_files"
-                   f"/{config_type}/{ic_file}")
+        ic_path = resolve_ic_path(ic_file, config_type, paths)
         lines += [
             "",
             "# Update ncdata path in user_nl_cam",
