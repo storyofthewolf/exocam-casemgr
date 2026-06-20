@@ -162,8 +162,8 @@ Start from `blueprints/experiment_matrix.example.yaml`. Each case inherits all `
 | Key | Description |
 |---|---|
 | `clone` | Triggers clone mode (`create_clone`). Typically in `base` so all cases share the same source. `exoplanet_mod.F90` template taken from clone source; only matrix-listed params are patched. |
-| `ncdata` | Bypasses automatic IC file lookup |
-| `exo_n2bar_explicit` | Required for non-1-bar atmospheres; patches `exo_n2bar` Fortran line with explicit value |
+| `ncdata` | Bypasses automatic IC file lookup. May be a bare filename (placed under the config-type IC dir) or an absolute/dir-bearing path (used verbatim by `resolve_ic_path` — never re-prefixed). |
+| `exo_n2bar_explicit` | Patches `exo_n2bar` with an explicit value. Required above 1 bar for clone builds; for newcase builds N2 is always explicit (this value if present, else `target − sum(specified gases)`). |
 | `account` | `#SBATCH --account` written to `${CASE}.run` (typically in `base`) |
 | `job_name` | `#SBATCH -J` written to `${CASE}.run` (typically per-case) |
 | `carma_params` | Nested dict → `user_nl_cam` (append in newcase, upsert in clone) |
@@ -280,6 +280,14 @@ geophysical (`exo_gravity`, `exo_radius`, `exo_porb`, `exo_ndays`, `exo_sday`, `
 logical flags (`do_exo_*`),
 RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `exo_mvelp`, `exo_ve`).
 
+**`GAS_BAR_PARAMS`** — the radiatively-active gas bars (`exo_co2bar`, `exo_ch4bar`, `exo_c2h6bar`, `exo_nh3bar`, `exo_cobar`, `exo_h2bar`, `exo_o2bar`; excludes N2). Used by `render_exoplanet_mod` for newcase clean-slate zeroing and the N2 fill sum.
+
+**`render_exoplanet_mod(template_path, spec, is_clone)`** — renders gas/parameter values into the F90 template. Newcase (`is_clone=False`): every `GAS_BAR_PARAMS` gas absent from the spec is forced to `0.0`, and `exo_n2bar` is always written as an explicit number (`exo_n2bar_explicit` or `compute_pstd_from_spec − sum(specified)`). Clone (`is_clone=True`): only matrix-named params are patched; unspecified gases and N2 keep the source template's values.
+
+**`resolve_ic_path(ic_file, config_type, paths)`** — bare filename → prepend `{exocam_root}/cesm1.2.1/initial_files/{config_type}/`; path containing `/` (absolute or dir-bearing) → verbatim. Called by both build-script generators to set `ncdata`.
+
+**`_fortran_value`** — formats numeric RHS at 12 sig figs (`%.12g`, or `%.10e` for very small/large magnitudes) so the `exo_n2bar` fill precision survives; appends `_r8`.
+
 **`REQUIRED_FIELDS`** (newcase): `config_type`, `exort_pkg`, `nlev`, `mach`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`
 
 **`REQUIRED_FIELDS_CLONE`**: `clone`, `stop_option`, `stop_n`, `rest_option`, `rest_n`, `resubmit`, `ntasks`
@@ -288,7 +296,7 @@ RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `ex
 
 **Newcase vs clone namelist behavior:**
 - Newcase: plain `echo >> user_nl_cam` (template is fresh, no existing keys)
-- Clone: `grep -q / sed -i / echo >>` upsert (clone copies `user_nl_cam` verbatim from source, so appending duplicates keys)
+- Clone (`_nl_upsert_lines`): replace-or-append upsert (clone copies `user_nl_cam`/`user_nl_cice` verbatim from source, so a plain append would duplicate keys). Emits `if grep -qE "^[[:space:]]*KEY[[:space:]]*=" T; then sed -i -E "s|^[[:space:]]*KEY[[:space:]]*=.*|KEY = VAL|" T; else echo "KEY = VAL" >> T; fi`. The anchored pattern tolerates leading whitespace and any spacing around `=`, ignores trailing inline comments, and avoids matching a different key that contains this one as a substring. The explicit `if/then/else` ensures the append branch fires only when the key is genuinely absent — never as a fallback for a `sed` that exited non-zero (the old `grep && sed || echo` chain appended a duplicate on any `sed` failure).
 
 **Branch/hybrid CESM workaround:** CESM requires `RUN_TYPE=startup` during `cesm_setup` when the rundir doesn't yet exist. Build scripts set `startup` before setup, then switch back to `branch`/`hybrid` after copying restart files. `RUN_REFDIR` always appends `-00000` to `RUN_REFDATE` (CESM restart dirs are named `YYYY-MM-DD-SSSSS`; seconds are always zero for ExoCAM cases).
 

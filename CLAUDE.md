@@ -210,95 +210,18 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ---
 
-## Session handoff — 2026-05-13
+## Session handoff — 2026-06-19
 
-### Work completed (2026-05-13)
+Three generated-build-script bugs surfaced from a real batch (`gplfr_grp3.yaml`). All three fixes affect only **newly generated** `build_scripts/*.sh` — existing scripts on the HPC must be regenerated to benefit.
 
-**`diff.py`:**
-- Added `normalize_lines` / `read_normalized` helpers; all 6 binary identity checks now use `read_normalized` so trailing-whitespace-only diffs are treated as identical.
-- `diff_counts` updated to normalize before counting.
-- All 4 `subprocess.run(['diff', ...])` calls in `cmd_full` now pass `-b` (ignore trailing whitespace in full diff view).
+**1. Namelist upsert duplicate bug (`_nl_upsert_lines`, build.py):** The clone-mode `grep "KEY" && sed -i "s|KEY = .*|...|" || echo >>` idiom appended a duplicate (e.g. cice albedos) instead of replacing, because the `&& … || …` chain falls through to the append branch on *any* non-zero `sed` exit, and the unanchored single-space pattern was brittle. Replaced with `if grep -qE "^[[:space:]]*KEY[[:space:]]*=" T; then sed -i -E ... ; else echo >> ; fi`. Append now fires only when the key is genuinely absent.
 
-**`query.py`:**
-- Added `RETIRED_REGISTRY` constant pointing to `retired.yaml`.
-- Added `--retired` top-level flag as shorthand for `--registry retired.yaml`; mutually exclusive with `--registry`.
-- Footer now prints `--retired` (not the path) when that flag was used.
+**2. ncdata absolute-path mangling (build.py):** Explicit absolute `ncdata` values were double-prefixed with the config-type IC dir, producing `.../cam_aqua_fv//gpfsm/.../ic_*.nc`. New `resolve_ic_path()` helper: bare filename → prepend IC base dir; absolute/dir-bearing path → verbatim. Used by both `generate_shell_script` and `generate_clone_script`.
 
-**Rename: `archived` → `retired` (names only, no logic changes):**
-- `scan.py`: `--archive` flag → `--retired`; all `args.archive` references → `args.retired`; `'archived.yaml'` string → `'retired.yaml'`; `_REGISTRY_HEADER` regeneration hint updated; docstring and epilog updated.
-- `query.py`: `ARCHIVED_REGISTRY` → `RETIRED_REGISTRY`; `--archived` flag → `--retired`; mutual-exclusion message updated; clone guard updated.
-- `CLAUDE.md`, `DEVELOPER_NOTES.md`, `README.md`: all `archived.yaml` / `--archive` / `--archived` references updated to match.
-- `archived.yaml` renamed to `retired.yaml` on disk.
+**3. Newcase clean-slate gas composition (`render_exoplanet_mod`, build.py):** Added an `is_clone` flag. Newcase now forces every unspecified `GAS_BAR_PARAMS` gas to `0.0` (no more inherited modern-Earth `exo_o2bar=0.2095`) and always emits explicit `exo_n2bar` (`exo_n2bar_explicit` or `target − sum(specified)`). Clone preserves the source composition (unchanged behavior). `_fortran_value` bumped to 12 sig figs so the N2 fill precision survives. "Pressure and N2 handling" section above rewritten to document both paths.
 
-**`manage_utils.py` (new) + `runmgr.py` (new) — cata migration:**
-- Created `manage_utils.py` with shared constants, `load_paths()`, disk helpers, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`. `datamgr.py` now imports all of these from there.
-- Created `runmgr.py` with `cata` subcommand group: `purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist` — direct ports of the same commands from `datamgr.py`.
-- Removed all five subcommands from `datamgr.py` (functions, argparse registrations, COMMANDS entries, docstring). `datamgr.py` now covers only `report`, `avg`, `retire`.
-
-**`runmgr.py check` (new subcommand):**
-- Parses `$caseroot/<case>/CaseStatus` (last non-blank line only) to determine current status (RUNNING/COMPLETE/FAILED/BUILT/CLEANED/UNKNOWN/NO_CASEDIR). Segment history not reported — CaseStatus inherited by clones makes counts unreliable.
-- SLURM probe via `squeue --name <case> -h`; degrades gracefully when squeue unavailable.
-- `RESUBMITTED` status when last event is `run SUCCESSFUL` but a job is still queued.
-- `RUNNING?` status when last event is `run started` but no job is queued (likely crashed).
-- `--info` flag: per-model hist summary and restart set count (reuses `_hist_year`, `list_files_with_size`, `restart_sets` from `manage_utils`).
-- `--energy` flag: global-mean TS and Etop=FSNT-FLNT from last 12 atm h0 files via ncra + netCDF4.
-- Defaults to all discoverable cases when no names or prefix given (unlike destructive subcommands).
+**Git workflow policy added** (this CLAUDE.md + global `~/.claude/CLAUDE.md`): bug fixes/docs/small changes commit directly to `main` without asking; significant features/new features/refactors → ask whether to branch first.
 
 ### Good starting points for next session
-- Update stale module docstring in `build.py`.
-- `nl_cam_params` recognized by `build.py` but not yet scanned by `scan.py` — add to `_REGISTRY_GROUPS` and `inspect_case()` if desired.
-- Consider whether `datamgr.py avg` should move to `runmgr.py`.
-
----
-
-## Session handoff — 2026-05-20 (continue subcommand)
-
-### Work completed (2026-05-20)
-
-**`runmgr.py continue` (new top-level subcommand):**
-- CLI: `runmgr.py continue case1 case2 ... [--stop-n N] [--resubmit N] [--execute]`
-- Reads current `STOP_N`, `RESUBMIT`, `CONTINUE_RUN` from `env_run.xml` via `_read_xml_var` (ElementTree; no xmlquery subprocess).
-- Status gate via existing `_parse_casestatus` + `_squeue_probe`: hard-blocks RUNNING/RESUBMITTED; soft-warns (per-case confirmation) for any non-COMPLETE status; COMPLETE proceeds silently.
-- Always issues `xmlchange CONTINUE_RUN=TRUE` and `xmlchange RESUBMIT=<N>` (default 0). Only issues `xmlchange STOP_N=<N>` when `--stop-n` is explicitly passed.
-- xmlchange called via `subprocess.run(['./xmlchange', ...], cwd=case_dir)` — same pattern as build scripts.
-- `sbatch <case>.run` called from `cwd=case_dir`; job ID extracted from stdout and printed.
-- Preview (no `--execute`): prints the full planned action for every case and exits without touching anything.
-- Registered as top-level subcommand alongside `check` and `cata`. Added to module docstring, README subcommand table, and CLAUDE.md module roles.
-- `_read_xml_var(xml_path, var_name)` — new private helper; parses CESM 1.x `<entry id="..." value="..."/>` format.
-
-**`runmgr.py continue` refinements (2026-05-20):**
-- `--prefix PREFIX` added as an alternative to explicit case names; mutually exclusive with positional case names; errors out if no cases match.
-- `STOP_OPTION` read from `env_run.xml` and displayed inline with `STOP_N` in the preview block: `STOP_N: 10 -> 1  (stop_option: nyears)`.
-- Preview footer printed once after all cases: `(preview only — rerun with --execute to submit)` — only shown when `--execute` was not passed.
-
----
-
-## Session handoff — 2026-05-29
-
-### Work completed (2026-05-29)
-
-**`runmgr.py restart` subcommand added:**
-- CLI: `runmgr.py restart case1 case2 ... [--set VAR=VALUE ...] [--stop-n N] [--resubmit N] [--execute]`; also accepts `--prefix`
-- Always applies `CONTINUE_RUN=FALSE` first; then applies `--set` pairs in order; then sbatches
-- `--set` is repeatable and generic — any CESM xml variable; immediate use case is `--set RUN_STARTDATE=YYYY-MM-DD`
-- `--stop-n` / `--resubmit` are convenience aliases (appended after `--set` items); RESUBMIT defaults to current value (unlike `continue` which defaults to 0)
-- Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; all others → soft-warn with per-case confirmation
-- Preview: shows current → new for CONTINUE_RUN and each changed var, plus sbatch line; footer printed once
-
-**`run_startdate` / `RUN_STARTDATE` added:**
-- `parse_utils.py`: added `RUN_STARTDATE` → `run_startdate` to `parse_run_type_fields`; defaults to `None`
-- `scan.py`: added `run_startdate` to `_REGISTRY_GROUPS['meta']` (after `brnch_retain_casename`)
-- `query.py`: added `run_startdate` to `_BASE_FIELD_ORDER` and `_CLONE_BASE_FIELDS`
-- `build.py`: added conditional `./xmlchange RUN_STARTDATE=...` after `RESUBMIT` in both `generate_shell_script` and `generate_clone_script`; emitted only when field is present in spec (optional — not in `REQUIRED_FIELDS`)
-
----
-
-## Session handoff — 2026-05-20
-
-### Work completed (2026-05-20)
-
-**`REST_OPTION` added to build pipeline:**
-- `config_registry.yaml`: added `rest_option: nyears` to `defaults:` block (after `stop_option`)
-- `query.py`: added `--rest-option` CLI flag, `_cli_or_default`, `base` dict population, `_REQUIRED_LABELS` entry, and `_CLONE_BASE_FIELDS` entry — all parallel to `stop_option`
-- `build.py`: added `./xmlchange REST_OPTION=...` after `./xmlchange STOP_OPTION=...` in both `generate_shell_script` and `generate_clone_script`; added `rest_option` to `REQUIRED_FIELDS` and `REQUIRED_FIELDS_CLONE`
-- `DEVELOPER_NOTES.md`: updated `REQUIRED_FIELDS`, `REQUIRED_FIELDS_CLONE`, `_CLONE_BASE_FIELDS`, and `config_registry.yaml` structure docs
+- Regenerate the `gplfr_grp3` build scripts on the HPC and verify all three fixes in the rendered output.
+- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`.
