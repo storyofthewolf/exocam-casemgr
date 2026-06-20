@@ -223,10 +223,12 @@ def _fortran_value(name, value):
         f = float(value)
         # use scientific notation for very small/large values
         if abs(f) != 0 and (abs(f) < 1e-3 or abs(f) >= 1e8):
-            s = f"{f:.6e}"
+            s = f"{f:.10e}"
         else:
-            # ensure there's always a decimal point so Fortran parses as real
-            s = f"{f:g}"
+            # ensure there's always a decimal point so Fortran parses as real.
+            # 12 sig figs preserves full input precision (matters for exo_n2bar,
+            # the pressure-balancing fill gas) without float noise.
+            s = f"{f:.12g}"
             if '.' not in s and 'e' not in s:
                 s += '.0'
         return f"{s}_r8"
@@ -234,22 +236,50 @@ def _fortran_value(name, value):
         return str(value)
 
 
-def render_exoplanet_mod(template_path, spec):
+# Radiatively-active gas bar params (excludes N2, which is the filling gas).
+GAS_BAR_PARAMS = (
+    'exo_co2bar', 'exo_ch4bar', 'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar',
+    'exo_h2bar', 'exo_o2bar',
+)
+
+
+def render_exoplanet_mod(template_path, spec, is_clone=False):
     """
     Read exoplanet_mod.F90 template, substitute values from spec.
     Returns modified file content as string.
     Only touches active (uncommented) parameter lines for params in EXO_PARAMS.
     The derived constants block is passed through unchanged.
+
+    Newcase (is_clone=False): start from a clean slate — every radiatively-active
+    gas not named in the matrix is forced to 0.0 (the template's modern-Earth
+    defaults, e.g. exo_o2bar=0.2095, must not leak in), and N2 is always emitted
+    as an explicit numeric fill = target_pressure - sum(specified gases).
+
+    Clone (is_clone=True): preserve the source case's composition — only the gas
+    params named in the matrix are substituted; unspecified gases and N2 keep
+    whatever the clone-source template has.
     """
-    n2bar = compute_n2bar(spec)
     substitutions = {}
     for k, v in spec.items():
         if k in EXO_PARAMS:
             substitutions[k] = v
-    # Only patch exo_n2bar when explicitly set (high-pressure atmospheres).
-    # For <=1 bar cases the Fortran expression line is correct as-is.
-    if 'exo_n2bar_explicit' in spec and n2bar is not None:
-        substitutions['exo_n2bar'] = n2bar
+
+    if is_clone:
+        # Only patch exo_n2bar when explicitly set (high-pressure atmospheres).
+        # For <=1 bar cases the Fortran expression line is correct as-is.
+        n2bar = compute_n2bar(spec)
+        if 'exo_n2bar_explicit' in spec and n2bar is not None:
+            substitutions['exo_n2bar'] = n2bar
+    else:
+        # Clean slate: zero every unspecified gas, then fill with explicit N2.
+        for gas in GAS_BAR_PARAMS:
+            substitutions.setdefault(gas, 0.0)
+        if 'exo_n2bar_explicit' in spec:
+            substitutions['exo_n2bar'] = float(spec['exo_n2bar_explicit'])
+        else:
+            target = compute_pstd_from_spec(spec)
+            specified = sum(float(spec.get(g, 0.0)) for g in GAS_BAR_PARAMS)
+            substitutions['exo_n2bar'] = target - specified
 
     lines_out = []
     with open(template_path) as f:
@@ -964,7 +994,7 @@ def cmd_generate(args):
             template_path = None
 
         if template_path and os.path.exists(template_path):
-            exoplanet_mod_content = render_exoplanet_mod(template_path, spec)
+            exoplanet_mod_content = render_exoplanet_mod(template_path, spec, is_clone=is_clone)
         else:
             src_label = spec.get('clone') if is_clone else (config_type or 'unknown')
             print(f"  WARNING: template exoplanet_mod.F90 not found for {src_label}; "

@@ -147,9 +147,14 @@ Config-conditional logic (present in both `build.py` and `scan.py`):
 
 ## Pressure and N2 handling
 
-Total surface pressure is computed from the sum of individual gas bar values. N2 is implicit for ≤1 bar atmospheres (fills to 1.0). For higher pressures, `exo_n2bar_explicit` must be set in the matrix — this patches the `exo_n2bar` Fortran line with an explicit numeric value. Without it, the N2 expression line is left for the Fortran compiler to evaluate at compile time.
+`render_exoplanet_mod` behaves differently for newcase vs clone (controlled by its `is_clone` flag):
 
-Pressure strings (e.g. `"1bar"`, `"0.1bar"`) are IC file table keys and must exactly match substrings in IC filenames.
+- **Newcase (`is_clone=False`) — clean slate.** Every radiatively-active gas in `GAS_BAR_PARAMS` (CO2, CH4, C2H6, NH3, CO, H2, O2) that is *not* named in the matrix is forced to `0.0` — the template's modern-Earth defaults (e.g. `exo_o2bar = 0.2095`) must not leak in. N2 is **always** emitted as an explicit numeric fill: `exo_n2bar_explicit` if set, otherwise `compute_pstd_from_spec(spec) − sum(specified gases)`. The Fortran `1 - sum(others)` expression line is never relied upon for newcase.
+- **Clone (`is_clone=True`) — preserve composition.** Only the gas params named in the matrix are substituted; all unspecified gases and N2 keep whatever the clone-source `exoplanet_mod.F90` has. `exo_n2bar` is patched only when `exo_n2bar_explicit` is set (high-pressure case); otherwise the source's expression line is left intact.
+
+`_fortran_value` formats gas bar values at 12 significant figures (`%.12g`) so the full input precision of the N2 fill survives without float noise.
+
+Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas bar values: `exo_n2bar_explicit + sum(others)` when explicit N2 is set, else `sum(others)` (defaulting to 1.0 for ≤1 bar). Pressure strings (e.g. `"1bar"`, `"0.1bar"`) are IC file table keys and must exactly match substrings in IC filenames.
 
 ---
 
