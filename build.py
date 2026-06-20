@@ -299,10 +299,16 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     for key, val in param_dict.items():
         nl_val = _format_nl_value(val)
         escaped_val = nl_val.replace('|', r'\|')
+        # Match the key at start-of-line, allowing leading whitespace and any
+        # whitespace around '=', and rewrite the whole line. Anchoring on the
+        # key (^[[:space:]]*KEY[[:space:]]*=) avoids matching a different key
+        # that merely contains this one as a substring, and tolerates source
+        # formatting (extra spaces/tabs, trailing inline comments).
+        pat = f'^[[:space:]]*{key}[[:space:]]*='
         lines.append(
-            f'grep -q "{key}" {target} '
-            f'&& sed -i "s|{key} = .*|{key} = {escaped_val}|" {target} '
-            f'|| echo "{key} = {nl_val}" >> {target}'
+            f'if grep -qE "{pat}" {target}; then '
+            f'sed -i -E "s|{pat}.*|{key} = {escaped_val}|" {target}; '
+            f'else echo "{key} = {nl_val}" >> {target}; fi'
         )
     return lines
 
