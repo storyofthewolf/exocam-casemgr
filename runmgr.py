@@ -147,7 +147,8 @@ def cmd_continue(args, paths):
                 if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
                     status_label = 'RESUBMITTED'
                 elif job_queued is False and cs['last_event'].startswith('run started'):
-                    status_label = 'RUNNING?'
+                    run_out_path = os.path.join(case_dir, 'run.out')
+                    status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
 
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
@@ -306,7 +307,8 @@ def cmd_restart(args, paths):
                 if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
                     status_label = 'RESUBMITTED'
                 elif job_queued is False and cs['last_event'].startswith('run started'):
-                    status_label = 'RUNNING?'
+                    run_out_path = os.path.join(case_dir, 'run.out')
+                    status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
 
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
@@ -454,7 +456,8 @@ def cmd_submit(args, paths):
                 if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
                     status_label = 'RESUBMITTED'
                 elif job_queued is False and cs['last_event'].startswith('run started'):
-                    status_label = 'RUNNING?'
+                    run_out_path = os.path.join(case_dir, 'run.out')
+                    status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
 
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
@@ -562,6 +565,40 @@ def _squeue_probe(case):
     if result.returncode != 0:
         return None
     return bool(result.stdout.strip())
+
+
+# Markers in cases/<case>/run.out. The file is appended to on every run attempt,
+# so only the segment after the LAST "CSM EXECUTION BEGINS HERE" is relevant.
+_RUN_OUT_BEGIN_MARKER = 'CSM EXECUTION BEGINS HERE'
+_RUN_OUT_TIMEOUT_MARKERS = ('CANCELLED', 'DUE TO TIME LIMIT')
+
+
+def _run_out_walltimeout(run_out_path):
+    """Return True if the most recent run.out segment ended in a SLURM wall-clock
+    timeout (slurmstepd "CANCELLED ... DUE TO TIME LIMIT").
+
+    Only the segment after the last "CSM EXECUTION BEGINS HERE" is examined,
+    because run.out is appended to on each run attempt. Returns False if the file
+    is missing/unreadable or shows no timeout in the last segment.
+    """
+    try:
+        with open(run_out_path) as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+
+    last_begin = -1
+    for i, line in enumerate(lines):
+        if _RUN_OUT_BEGIN_MARKER in line:
+            last_begin = i
+    if last_begin < 0:
+        return False
+
+    segment = lines[last_begin:]
+    return any(
+        all(marker in line for marker in _RUN_OUT_TIMEOUT_MARKERS)
+        for line in segment
+    )
 
 
 def _energy_balance(case, archive, n_months=12):
@@ -767,7 +804,7 @@ def cmd_check(args, paths):
     Default output per case (single line):
       <case>  [STATUS]  (<timestamp of last CaseStatus line>)
       Status labels: RUNNING, COMPLETE, FAILED, BUILT, CLEANED, UNKNOWN,
-      NO_CASEDIR, RESUBMITTED, RUNNING?
+      NO_CASEDIR, RESUBMITTED, RUNNING?, WALLCLOCK
       Segment history counts are not reported — CaseStatus is inherited by
       cloned cases, making cumulative counts unreliable.
 
@@ -775,6 +812,10 @@ def cmd_check(args, paths):
     'run SUCCESSFUL', squeue --name <case> -h is run. A queued job with a
     SUCCESSFUL last event is shown as RESUBMITTED. If squeue is unavailable or
     errors, the probe is silently omitted.
+
+    WALLCLOCK: when a 'run started' case is no longer queued, run.out is checked.
+    A SLURM wall-clock kill ('CANCELLED ... DUE TO TIME LIMIT' in the last
+    run.out segment) is shown as WALLCLOCK rather than the generic RUNNING?.
 
     --info: additionally print per-model hist file count, year span, and size
             (atm, lnd, ice) and restart set count.
@@ -851,8 +892,14 @@ def cmd_check(args, paths):
                 if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
                     status_label = 'RESUBMITTED'
                 elif job_queued is False and cs['last_event'].startswith('run started'):
-                    # Started but no longer queued — likely crashed without updating CaseStatus
-                    status_label = 'RUNNING?'
+                    # Started but no longer queued — likely crashed without updating CaseStatus.
+                    # SLURM wall-clock kills don't update CaseStatus either, but they DO leave a
+                    # "CANCELLED ... DUE TO TIME LIMIT" line in the last run.out segment.
+                    run_out_path = os.path.join(caseroot, case, 'run.out') if caseroot else ''
+                    if run_out_path and _run_out_walltimeout(run_out_path):
+                        status_label = 'WALLCLOCK'
+                    else:
+                        status_label = 'RUNNING?'
 
         info_lines = []
         if do_info and archive:
