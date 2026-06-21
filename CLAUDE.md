@@ -104,8 +104,19 @@ If `CaseStatus` is missing (no caseroot dir), status is shown as `NO_CASEDIR`.
 
 When the last CaseStatus event starts with `run started` or `run SUCCESSFUL`, `squeue --name <case> -h` is run as a subprocess:
 - **Job found + last event was `run SUCCESSFUL`** → status shown as `RESUBMITTED`
-- **No job + last event was `run started`** → status shown as `RUNNING?` (started but no longer queued — likely crashed without writing to CaseStatus)
+- **No job + last event was `run started`** → `cases/<case>/run.out` is checked (`_run_out_walltimeout`):
+  - timeout found → status shown as `WALLCLOCK`
+  - otherwise → status shown as `RUNNING?` (started but no longer queued — likely crashed without writing to CaseStatus)
 - **`FileNotFoundError`** (squeue not in PATH) or **non-zero exit code** → probe silently omitted, original status label retained
+
+### WALLCLOCK detection (run.out)
+
+A SLURM wall-clock kill never updates `CaseStatus` (it would otherwise read `RUNNING?`), but it leaves a `CANCELLED ... DUE TO TIME LIMIT` line in `cases/<case>/run.out`. `_run_out_walltimeout(run_out_path)` resolves the `RUNNING?` ambiguity:
+
+1. `run.out` is **appended to on every run attempt**, so only the segment after the **last** `CSM EXECUTION BEGINS HERE` line is examined — a timeout in an earlier segment followed by a fresh success must not register.
+2. Returns `True` if any line in that last segment contains **both** `CANCELLED` and `DUE TO TIME LIMIT`. Missing/unreadable file → `False`.
+
+`WALLCLOCK` is a probe-derived label (like `RESUBMITTED`/`RUNNING?`), not a `CaseStatus` event mapping. It is non-`COMPLETE`, so the run-control verbs (`continue`/`restart`/`submit`) soft-block (warn + confirm) on it, the same as `FAILED` — appropriate for a timed-out case the user wants to relaunch. Wired into all four probe sites: `check`, `continue`, `restart`, `submit`.
 
 ### --energy computation
 
