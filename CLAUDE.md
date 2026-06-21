@@ -50,7 +50,7 @@ cases/ + rundir/ + archive/ on HPC
 ### Module roles
 
 - **`parse_utils.py`** — pure parsing primitives; no filesystem side effects (invariant)
-- **`build.py`** — validates experiment matrix, generates self-contained shell build scripts
+- **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
 - **`datamgr.py`** — case data management: `report` (disk survey), `cata` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
@@ -131,6 +131,21 @@ A SLURM wall-clock kill never updates `CaseStatus` (it would otherwise read `RUN
 
 ---
 
+## build.py generate --verify
+
+`build.py generate <matrix> --verify` checks matrix coherency and **generates no scripts** (exits 1 if any case fails). It catches transposition mistakes — wrong value types, missing input files — before they reach the rendered build scripts. It does **not** check geophysical/scientific coherency.
+
+Two checks per resolved case spec (`verify_case` in `build.py`):
+
+1. **Type tags** — every matrix value with a `PARAM_TYPES` entry is checked against `bool` / `int` / `real` / `str` (`_check_type`). `bool` accepts python bool or the strings `true`/`false`; `int` accepts ints or integral-valued numerics (rejects `26.5`); `real` accepts any numeric; `str` rejects numeric/bool. `PARAM_TYPES` is the authoritative table — add new params there. (A python bool is explicitly rejected for int/real/str since `bool` is an `int` subclass.)
+2. **NetCDF file existence** — each field in `NCFILE_FIELDS` (`ncdata`, `exo_solar_file`, `som_pop_frc_file`, `finidat`, `fsurdat`) is resolved to a path using **the same logic as its build block** (`ncdata` → `resolve_ic_path`; `finidat`/`fsurdat` → `cam_land_fv` IC dir; solar/pop_frc → verbatim), then existence-checked locally.
+
+Existence-check degradation (these scripts are generated locally but run on the HPC): a path with an **unexpanded `$VAR`**, or one whose parent dir **isn't present on the local machine**, is reported as a `·` SKIPPED note, not an error. Only a file whose parent dir *is* reachable but is itself absent counts as a hard failure. Config-restricted fields present under the wrong `config_type` (e.g. `finidat` on an aqua config) are noted as ignored, not checked.
+
+Verify mode runs the type/nc checks **before** `validate_case`, because `validate_case` coerces values to float (via `compute_pstd_from_spec`) and would raise on a mistyped numeric; `--verify` reports a clean `type:` message instead. `validate_case` only runs if types pass. Output: `OK:` / `FAIL:` per case, `-` lines for errors, `·` lines for skip notes, then a summary count.
+
+---
+
 ## Config types
 
 | `config_type` | Description |
@@ -186,6 +201,11 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 1. Add the parameter name to the `EXO_PARAMS` set in `build.py`.
 2. Ensure the corresponding `parameter ::` declaration exists in the `exoplanet_mod.F90` template.
 3. If it should be scanned into the registry, add it to `inspect_case()` in `scan.py` and to `_REGISTRY_GROUPS`.
+4. For `generate --verify` type checking, add it to `PARAM_TYPES` in `build.py` with its `bool`/`int`/`real`/`str` tag (params absent from `PARAM_TYPES` are not type-checked).
+
+### Adding a new netCDF file field to `--verify`
+1. Add `(field, resolver, restrict_config_types)` to `NCFILE_FIELDS` in `build.py`.
+2. The resolver must mirror how the field's build block turns the value into a path (reuse `resolve_ic_path` / `_resolve_clm_field` / `_resolve_verbatim_field` or add one). Existence checking is otherwise automatic, including local/HPC skip handling.
 
 ### Extending `query.py export` output fields
 1. Add the registry key to `_BASE_FIELD_ORDER` in `query.py`.

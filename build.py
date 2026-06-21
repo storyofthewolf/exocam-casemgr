@@ -50,6 +50,167 @@ SOLAR_FILE_STEMS = {
     'n42h2o':     'n42',
 }
 
+# --- Type verification (build.py generate --verify) -------------------------
+# Authoritative type tags for matrix values, checked by --verify. Keys not
+# listed here are not type-checked. 'bool' accepts python bool or the strings
+# true/false (any case); 'int' accepts ints or integral-valued strings; 'real'
+# accepts any numeric (int or float); 'str' must not be numeric/bool.
+PARAM_TYPES = {
+    # exoplanet_mod reals (gas bars, geophysical, orbital, RT tuning)
+    'exo_co2bar': 'real', 'exo_ch4bar': 'real', 'exo_c2h6bar': 'real',
+    'exo_nh3bar': 'real', 'exo_cobar': 'real', 'exo_h2bar': 'real',
+    'exo_o2bar': 'real', 'exo_n2bar_explicit': 'real',
+    'exo_surface_gravity': 'real', 'exo_planet_radius': 'real',
+    'exo_ndays': 'real', 'exo_porb': 'real', 'exo_sday': 'real',
+    'exo_scon': 'real', 'exo_eccen': 'real', 'exo_obliq': 'real',
+    'exo_mvelp': 'real', 'exo_ve': 'real',
+    'exo_convect_plim': 'real', 'exo_albdif': 'real', 'exo_albdir': 'real',
+    'Tmax': 'real', 'swFluxLimit': 'real', 'lwFluxLimit': 'real',
+    # exoplanet_mod ints
+    'exo_rad_step': 'int',
+    # exoplanet_mod logicals
+    'do_exo_synchronous': 'bool', 'do_exo_rt': 'bool', 'do_exo_atmconst': 'bool',
+    'do_exo_rt_clearsky': 'bool', 'do_exo_rt_spectral': 'bool',
+    'do_exo_rt_carma': 'bool', 'do_exo_gw': 'bool', 'do_exo_simplevolc': 'bool',
+    'do_carma_exort': 'bool',
+    # matrix run/control fields
+    'nlev': 'int', 'stop_n': 'int', 'rest_n': 'int', 'resubmit': 'int',
+    'ntasks': 'int',
+    'config_type': 'str', 'exort_pkg': 'str', 'mach': 'str',
+    'stop_option': 'str', 'rest_option': 'str', 'clone': 'str',
+    'run_type': 'str', 'run_refcase': 'str', 'run_refdate': 'str',
+}
+
+
+def _check_type(value, type_tag):
+    """Return None if value matches type_tag, else a short reason string."""
+    if type_tag == 'bool':
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, str) and value.strip().lower() in ('true', 'false'):
+            return None
+        return f"expected boolean, got {type(value).__name__} {value!r}"
+    if type_tag == 'int':
+        if isinstance(value, bool):
+            return f"expected int, got boolean {value!r}"
+        if isinstance(value, int):
+            return None
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return f"expected int, got {value!r}"
+        if f != int(f):
+            return f"expected int, got non-integral {value!r}"
+        return None
+    if type_tag == 'real':
+        if isinstance(value, bool):
+            return f"expected real, got boolean {value!r}"
+        if isinstance(value, (int, float)):
+            return None
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return f"expected real, got {value!r}"
+        return None
+    if type_tag == 'str':
+        if isinstance(value, bool):
+            return f"expected string, got boolean {value!r}"
+        if isinstance(value, (int, float)):
+            return f"expected string, got numeric {value!r}"
+        return None
+    return None
+
+
+def _expand_local_path(path):
+    """Expand $VARS and ~ in a path. Return (expanded, resolvable) where
+    resolvable is False if the result still contains an unexpanded shell var
+    (e.g. $EXOCAM not set in the local env) — such paths point at the HPC and
+    cannot be existence-checked locally."""
+    expanded = os.path.expandvars(os.path.expanduser(path))
+    return expanded, '$' not in expanded
+
+
+# NetCDF file fields and how each resolves to a path, mirroring the build
+# blocks. (field, resolver) where resolver(value, spec, paths) -> path str.
+def _resolve_ncdata_field(value, spec, paths):
+    return resolve_ic_path(value, spec.get('config_type', ''), paths)
+
+
+def _resolve_clm_field(value, spec, paths):
+    if value.startswith('/'):
+        return value
+    exocam = paths.get('exocam_root', '$EXOCAM')
+    return f"{exocam}/cesm1.2.1/initial_files/cam_land_fv/{value}"
+
+
+def _resolve_verbatim_field(value, spec, paths):
+    # exo_solar_file and som_pop_frc_file are used verbatim by the build blocks.
+    return value
+
+
+# (field, resolver, restrict_config_types or None for all)
+NCFILE_FIELDS = [
+    ('ncdata',          _resolve_ncdata_field,   None),
+    ('exo_solar_file',  _resolve_verbatim_field, None),
+    ('som_pop_frc_file', _resolve_verbatim_field,
+     ('cam_aqua_fv', 'cam_aqua_se_ne5', 'cam_aqua_se_ne16', 'cam_mixed_fv')),
+    ('finidat', _resolve_clm_field, ('cam_land_fv', 'cam_mixed_fv')),
+    ('fsurdat', _resolve_clm_field, ('cam_land_fv', 'cam_mixed_fv')),
+]
+
+
+def verify_case(spec, registry, paths):
+    """Coherency check for a single resolved case spec.
+
+    Checks (no geophysical/scientific validation):
+      1. Type tags: every matrix value with a PARAM_TYPES entry matches its type.
+      2. NetCDF existence: every nc-file field resolves to an existing local file.
+         Paths that can't be resolved locally (unexpanded $VARS, or a base dir
+         that isn't present on this machine) are SKIPPED, not failed — these
+         scripts are generated locally but run on the HPC.
+
+    Returns (errors, notes): both lists of strings. errors are hard failures;
+    notes are informational (skipped/unresolvable file checks).
+    """
+    errors = []
+    notes = []
+
+    # 1. Type checks
+    for key, type_tag in PARAM_TYPES.items():
+        if key not in spec:
+            continue
+        reason = _check_type(spec[key], type_tag)
+        if reason:
+            errors.append(f"type: {key}: {reason}")
+
+    # 2. NetCDF file existence
+    config_type = spec.get('config_type', '')
+    for field, resolver, restrict in NCFILE_FIELDS:
+        if field not in spec or not spec[field]:
+            continue
+        if restrict is not None and config_type not in restrict:
+            # field present but irrelevant for this config — note it, don't check
+            notes.append(
+                f"nc: {field} present but config_type={config_type or '?'} "
+                f"does not use it (ignored at build time)")
+            continue
+        raw = resolver(str(spec[field]), spec, paths)
+        local, resolvable = _expand_local_path(raw)
+        if not resolvable:
+            notes.append(f"nc: {field}: SKIPPED (unresolved path, runs on HPC): {raw}")
+            continue
+        # Resolvable: only check if the parent dir exists locally; otherwise this
+        # is almost certainly a remote/HPC path that happens to be var-free.
+        parent = os.path.dirname(local)
+        if parent and not os.path.isdir(parent):
+            notes.append(f"nc: {field}: SKIPPED (dir not on this machine): {local}")
+            continue
+        if not os.path.isfile(local):
+            errors.append(f"nc: {field}: file not found: {local}")
+
+    return errors, notes
+
+
 # Fortran parameter line pattern for replacement
 _RE_PARAM_LINE = re.compile(
     r'^(\s+(?:real\(r8\)|integer|logical)[^:]*parameter\s*::\s*)(\w+)(\s*=\s*)([^!\n]+)(.*)',
@@ -945,8 +1106,11 @@ def cmd_generate(args):
     template_base = (f"{exocam_root}/cesm1.2.1/configs"
                      if exocam_root else None)
 
+    verify_only = getattr(args, 'verify', False)
+
     generated = []
     errors_total = 0
+    verify_failed = 0
 
     for case_def in cases:
         case_name = case_def.get('name')
@@ -956,6 +1120,33 @@ def cmd_generate(args):
 
         spec = resolve_case(base, case_def)
         spec['_paths_override'] = paths_override
+
+        if verify_only:
+            paths = dict(registry.get('paths', {}))
+            for k in ['cesm_scripts', 'caseroot', 'exocam_root', 'exort_root']:
+                if k in paths_override:
+                    paths[k] = paths_override[k]
+            # Type + nc-file checks run first: they degrade gracefully on bad
+            # input, whereas validate_case coerces values to float and would
+            # raise on a mistyped numeric. Only run validate_case if types pass.
+            v_errors, v_notes = verify_case(spec, registry, paths)
+            if not v_errors:
+                try:
+                    v_errors = validate_case(spec, registry)
+                except (ValueError, TypeError) as exc:
+                    v_errors = [f"validation crashed (likely a bad value): {exc}"]
+            if v_errors:
+                verify_failed += 1
+                print(f"\nFAIL: {case_name}")
+                for e in v_errors:
+                    print(f"  - {e}")
+                for n in v_notes:
+                    print(f"  · {n}")
+            else:
+                print(f"OK:   {case_name}" + (f"  ({len(v_notes)} skipped)" if v_notes else ""))
+                for n in v_notes:
+                    print(f"  · {n}")
+            continue
 
         errors = validate_case(spec, registry)
         if errors:
@@ -1011,6 +1202,14 @@ def cmd_generate(args):
             )
         generated.append((case_name, script_path))
         print(f"Generated: {script_path}")
+
+    if verify_only:
+        named = sum(1 for c in cases if c.get('name'))
+        print(f"\nVerify: {named - verify_failed} OK, {verify_failed} failed "
+              f"of {named} case(s). No scripts generated.")
+        if verify_failed:
+            sys.exit(1)
+        return
 
     print(f"\n{len(generated)} script(s) generated, {errors_total} case(s) skipped due to errors.")
 
@@ -1149,6 +1348,9 @@ def main():
     p_gen.add_argument('matrix', nargs='?', help='experiment_matrix.yaml')
     p_gen.add_argument('--list', action='store_true',
                        help='List available blueprints and exit')
+    p_gen.add_argument('--verify', action='store_true',
+                       help='Check matrix coherency (value types + netCDF file '
+                            'existence) without generating any scripts')
 
     p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
     p_make.add_argument('--prefix', metavar='PREFIX',
