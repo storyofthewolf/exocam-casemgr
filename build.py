@@ -164,10 +164,11 @@ def verify_case(spec, registry, paths):
 
     Checks (no geophysical/scientific validation):
       1. Type tags: every matrix value with a PARAM_TYPES entry matches its type.
-      2. NetCDF existence: every nc-file field resolves to an existing local file.
-         Paths that can't be resolved locally (unexpanded $VARS, or a base dir
-         that isn't present on this machine) are SKIPPED, not failed — these
-         scripts are generated locally but run on the HPC.
+      2. NetCDF existence: every nc-file field resolves to an existing file.
+         --verify is intended to run on the HPC, where every input file should
+         live, so a var-free path whose file (or directory) is absent is a hard
+         FAILURE. Only paths that still contain an unexpanded $VAR (env var not
+         set) are SKIPPED — those genuinely can't be checked.
 
     Returns (errors, notes): both lists of strings. errors are hard failures;
     notes are informational (skipped/unresolvable file checks).
@@ -199,14 +200,17 @@ def verify_case(spec, registry, paths):
         if not resolvable:
             notes.append(f"nc: {field}: SKIPPED (unresolved path, runs on HPC): {raw}")
             continue
-        # Resolvable: only check if the parent dir exists locally; otherwise this
-        # is almost certainly a remote/HPC path that happens to be var-free.
-        parent = os.path.dirname(local)
-        if parent and not os.path.isdir(parent):
-            notes.append(f"nc: {field}: SKIPPED (dir not on this machine): {local}")
-            continue
+        # --verify is intended to run on the HPC, where every input file should be
+        # present. A var-free path whose file isn't there is a broken path that
+        # needs fixing — a hard failure, whether the parent dir is missing or the
+        # file alone is. (A missing parent dir is the more common symptom of a
+        # mistyped/transposed path.)
         if not os.path.isfile(local):
-            errors.append(f"nc: {field}: file not found: {local}")
+            parent = os.path.dirname(local)
+            if parent and not os.path.isdir(parent):
+                errors.append(f"nc: {field}: directory not found: {local}")
+            else:
+                errors.append(f"nc: {field}: file not found: {local}")
 
     return errors, notes
 
