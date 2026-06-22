@@ -621,13 +621,15 @@ def _build_run_script_block(spec):
     Return shell lines to patch SBATCH directives into ${CASE}.run after cesm_setup.
     account: upsert — replace existing #SBATCH --account= line, or append if absent.
     job_name (-J): upsert — replace existing #SBATCH -J line, or append if absent.
-    Both are skipped if absent from the spec.
+    The job name always defaults to the full case name (${CASE}) so that
+    `squeue --name <case>` uniquely identifies the job; an explicit matrix
+    job_name overrides it. account is skipped if absent from the spec.
     """
     lines = []
     account  = spec.get('account')
-    job_name = spec.get('job_name')
-    if not account and not job_name:
-        return lines
+    # Default -J to the full case name (CESM otherwise truncates it to a short,
+    # non-unique label that runmgr's squeue --name probe can't match).
+    job_name = spec.get('job_name') or '${CASE}'
     lines += [
         "",
         "# -----------------------------------------------------------",
@@ -643,11 +645,13 @@ def _build_run_script_block(spec):
             f"fi"
         )
     if job_name:
+        # Double-quote the sed expressions so a ${CASE} default expands at
+        # runtime; an explicit literal job_name is unaffected by double-quoting.
         lines.append(
             f"if grep -q '^#SBATCH -J ' ${{CASE}}.run; then\n"
-            f"    sed -i 's|^#SBATCH -J .*|#SBATCH -J {job_name}|' ${{CASE}}.run\n"
+            f'    sed -i "s|^#SBATCH -J .*|#SBATCH -J {job_name}|" ${{CASE}}.run\n'
             f"else\n"
-            f"    sed -i '0,/^#SBATCH /s|^#SBATCH |#SBATCH -J {job_name}\\n#SBATCH |' ${{CASE}}.run\n"
+            f'    sed -i "0,/^#SBATCH /s|^#SBATCH |#SBATCH -J {job_name}\\n#SBATCH |" ${{CASE}}.run\n'
             f"fi"
         )
     return lines

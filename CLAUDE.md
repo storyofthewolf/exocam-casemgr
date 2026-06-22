@@ -109,6 +109,8 @@ When the last CaseStatus event starts with `run started` or `run SUCCESSFUL`, `s
   - otherwise → status shown as `RUNNING?` (started but no longer queued — likely crashed without writing to CaseStatus)
 - **`FileNotFoundError`** (squeue not in PATH) or **non-zero exit code** → probe silently omitted, original status label retained
 
+**The probe matches on the SLURM job name (`-J`), so per-case correctness depends on `-J` equalling the case name.** `build.py` (`_build_run_script_block`) therefore defaults `#SBATCH -J` to the full case name (`${CASE}`) for every build — an explicit matrix `job_name` overrides it. Without this, CESM truncates `-J` to a short, non-unique label (e.g. all of `exocam_ML_grp3_pt*` collapse to `exocam_M`); `squeue --name <full_case>` then matches nothing and running cases show as `RUNNING?`. **Build scripts generated before this default must be regenerated** — the fix only affects newly rendered `.run` patch blocks, not `.run` files already on the HPC.
+
 ### WALLCLOCK detection (run.out)
 
 A SLURM wall-clock kill never updates `CaseStatus` (it would otherwise read `RUNNING?`), but it leaves a `CANCELLED ... DUE TO TIME LIMIT` line in `cases/<case>/run.out`. `_run_out_walltimeout(run_out_path)` resolves the `RUNNING?` ambiguity:
