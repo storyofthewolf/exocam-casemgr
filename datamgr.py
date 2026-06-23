@@ -1218,6 +1218,7 @@ def build_parser():
                         help='Override paths.long_term from config_registry')
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
+    sub.required = True
 
     # ---- report (read-only; no --execute; empty cases = all) ----
     p_report = sub.add_parser(
@@ -1381,12 +1382,6 @@ COMMANDS = {
 def main():
     parser = build_parser()
     args = parser.parse_args()
-
-    if args.command is None:
-        args.command = 'report'
-        args.cases = []
-        args.cached = False
-        args.usage_yaml = None
 
     paths = load_paths(args)
 

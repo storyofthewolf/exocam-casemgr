@@ -475,6 +475,7 @@ def build_parser():
                              '(shorthand for --registry retired.yaml)')
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
+    sub.required = True
 
     # ---- search ----
     p_search = sub.add_parser(
@@ -549,9 +550,6 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    if args.command is None:
-        parser.print_help()
-        sys.exit(0)
 
     if args.retired and args.registry != DEFAULT_REGISTRY:
         sys.exit("ERROR: --retired and --registry are mutually exclusive")

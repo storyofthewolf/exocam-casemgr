@@ -1026,6 +1026,7 @@ def build_parser():
                         help='Override paths.long_term from config_registry')
 
     top_sub = parser.add_subparsers(dest='group', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
+    top_sub.required = True
 
     # ---- check ----
     p_check = top_sub.add_parser(
@@ -1112,10 +1113,6 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-
-    if args.group is None:
-        parser.print_help()
-        sys.exit(0)
 
     paths = load_paths(args)
 
