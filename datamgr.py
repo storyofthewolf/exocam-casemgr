@@ -1246,6 +1246,7 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     cata_sub = p_cata.add_subparsers(dest='cata_command', metavar='CATA_SUBCOMMAND', help=argparse.SUPPRESS)
+    cata_sub.required = True
 
     # ---- cata purge-bld ----
     p_bld = cata_sub.add_parser(
@@ -1392,14 +1393,6 @@ def main():
               f"Set them in config_registry.yaml.", file=sys.stderr)
 
     if args.command == 'cata':
-        if args.cata_command is None:
-            for action in parser._subparsers._actions:
-                if hasattr(action, '_name_parser_map'):
-                    cata_parser = action._name_parser_map.get('cata')
-                    if cata_parser:
-                        cata_parser.print_help()
-                        break
-            sys.exit(0)
         CATA_COMMANDS[args.cata_command](args, paths)
     else:
         COMMANDS[args.command](args, paths)
