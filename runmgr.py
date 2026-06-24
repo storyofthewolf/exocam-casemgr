@@ -41,6 +41,7 @@ Run any subcommand with --help for full options, e.g.:
 import argparse
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -601,10 +602,21 @@ def _run_out_walltimeout(run_out_path):
     )
 
 
+_RE_HIST_DATE = re.compile(r'\.cam\.h0\.(\d{4}-\d{2})')
+
+
+def _hist_date(filename):
+    """Extract model date stem (YYYY-MM) from a cam.h0 hist filename, or None."""
+    m = _RE_HIST_DATE.search(filename)
+    return m.group(1) if m else None
+
+
 def _energy_balance(case, archive, n_months=12):
     """Compute global-mean energy balance from the last N atm h0 files.
 
-    Returns (ts_mean, fsnt_mean, flnt_mean, n_used) or None on any failure.
+    Returns (ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last)
+    or None on any failure. date_first/date_last are the model-date stems
+    (YYYY-MM) of the first and last selected files (None if unparseable).
     Prints a warning and returns None if ncra or netCDF4 is unavailable.
     """
     try:
@@ -641,6 +653,9 @@ def _energy_balance(case, archive, n_months=12):
     n_used = len(selected)
     if n_used < n_months:
         print(f"  {case}: WARNING: only {n_used} month(s) available (requested {n_months})")
+
+    date_first = _hist_date(selected[0])
+    date_last = _hist_date(selected[-1])
 
     input_paths = [os.path.join(hist_dir, f) for f in selected]
     tmp_path = os.path.join(tempfile.gettempdir(), f'runmgr_energy_{case}.nc')
@@ -703,7 +718,7 @@ def _energy_balance(case, archive, n_months=12):
             fsnt_mean = _gmean('FSNT')
             flnt_mean = _gmean('FLNT')
             ds.close()
-            return ts_mean, fsnt_mean, flnt_mean, n_used
+            return ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last
 
         except Exception as e:
             print(f"  {case}: WARNING: error reading variables ({e}) — skipping --energy")
@@ -821,8 +836,9 @@ def cmd_check(args, paths):
             (atm, lnd, ice) and restart set count.
 
     --energy: compute global-mean energy balance from the last 12 atm h0 files
-              via ncra + netCDF4. Reports TS and Etop = FSNT - FLNT. Requires
-              ncra in PATH and netCDF4 + numpy Python packages.
+              via ncra + netCDF4. Reports TS and Etop = FSNT - FLNT, plus the
+              model-date span (YYYY-MM) of the averaged files. Requires ncra in
+              PATH and netCDF4 + numpy Python packages.
 
     --dir DIR: drill down into a specific storage area for exactly one case.
                Lists individual files with sizes (sorted by name) and a total.
@@ -926,11 +942,16 @@ def cmd_check(args, paths):
         if do_energy and archive:
             result = _energy_balance(case, archive)
             if result is not None:
-                ts_mean, fsnt_mean, flnt_mean, n_used = result
+                ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last = result
                 etop = fsnt_mean - flnt_mean
                 sign = '+' if etop >= 0 else ''
+                if date_first and date_last:
+                    span = date_first if date_first == date_last else f"{date_first}–{date_last}"
+                    range_str = f"  [{span}]"
+                else:
+                    range_str = ""
                 energy_line = (f"  Last {n_used}mo:  TS = {ts_mean:.1f} K    "
-                               f"Etop = {sign}{etop:.1f} W/m²")
+                               f"Etop = {sign}{etop:.1f} W/m²{range_str}")
 
         results.append((case, status_label, status_ts, info_lines, energy_line))
 
