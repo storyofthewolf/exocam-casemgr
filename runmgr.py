@@ -19,6 +19,8 @@ SUBCOMMANDS
   check                 Show run status for cases (CaseStatus + SLURM probe);
                         defaults to all discoverable cases when given no names.
                         --dir lists individual files in a storage area for one case.
+  xml                   Query/change CESM XML variables ad hoc (no CONTINUE_RUN,
+                        no sbatch); --query VAR to inspect, --change VAR=VALUE to set
   continue              Set CONTINUE_RUN=TRUE and sbatch the run script;
                         optionally apply --set VAR=VALUE xmlchange calls first
   restart               Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch;
@@ -28,11 +30,13 @@ SUBCOMMANDS
 
 SAFETY
 ------
-  continue, restart, and submit require explicit case names or --prefix.
-  There is no --all flag. check is read-only and needs no --execute.
+  xml, continue, restart, and submit require explicit case names or --prefix.
+  There is no --all flag. check is read-only and needs no --execute; so is
+  `xml --query` (without --change).
 
 Run any subcommand with --help for full options, e.g.:
   python runmgr.py check --help
+  python runmgr.py xml --help
   python runmgr.py continue --help
   python runmgr.py restart --help
   python runmgr.py submit --help
@@ -77,6 +81,169 @@ def _read_xml_var(xml_path, var_name):
     return None
 
 
+def _resolve_cases(args, paths, verb):
+    """Resolve the case list from explicit names or --prefix.
+
+    Shared by every run-control subcommand. Enforces the project invariant that
+    cases must be named explicitly or matched by --prefix (no --all flag), and
+    that the two cannot be combined. Exits with an error message on misuse or no
+    match.
+    """
+    prefix_filter  = getattr(args, 'prefix', None)
+    explicit_cases = args.cases or []
+
+    if explicit_cases and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+
+    if prefix_filter:
+        all_cases = discover_cases(paths)
+        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
+        if not cases:
+            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
+        return cases
+    if explicit_cases:
+        return explicit_cases
+    sys.exit(f"ERROR: {verb} requires explicit case names or --prefix. No --all flag.")
+
+
+def _parse_set_pairs(items, flag='--set'):
+    """Parse a list of 'VAR=VALUE' strings into ordered (VAR, VALUE) tuples.
+
+    Exits on malformed entries (missing '=' or empty variable name).
+    """
+    pairs = []
+    for item in (items or []):
+        if '=' not in item:
+            sys.exit(f"ERROR: {flag} requires VAR=VALUE format, got: {item!r}")
+        var, _, val = item.partition('=')
+        var = var.strip()
+        if not var:
+            sys.exit(f"ERROR: empty variable name in {flag} {item!r}")
+        pairs.append((var, val.strip()))
+    return pairs
+
+
+def _apply_xmlchange(case_dir, var, val):
+    """Run ./xmlchange VAR=VALUE in case_dir. Raises RuntimeError on failure.
+
+    The single xmlchange code path shared by continue, restart, and xml.
+    """
+    result = subprocess.run(
+        ['./xmlchange', f'{var}={val}'],
+        cwd=case_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"xmlchange {var}={val} failed: {result.stderr.strip()}")
+
+
+def _probe_status(case_dir, case):
+    """Return the CaseStatus + SLURM-probe-derived status label for a case.
+
+    Mirrors the gate logic used across continue/restart/submit: reads the last
+    CaseStatus event, and for run started / run SUCCESSFUL refines via squeue +
+    run.out (RESUBMITTED / WALLCLOCK / RUNNING?). Returns 'NO_CASEDIR' if there
+    is no CaseStatus file.
+    """
+    cs = _parse_casestatus(os.path.join(case_dir, 'CaseStatus'))
+    if cs is None:
+        return 'NO_CASEDIR'
+    status_label = cs['status']
+    if cs['last_event'] and (
+        cs['last_event'].startswith('run started') or
+        cs['last_event'].startswith('run SUCCESSFUL')
+    ):
+        job_queued = _squeue_probe(case)
+        if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
+            status_label = 'RESUBMITTED'
+        elif job_queued is False and cs['last_event'].startswith('run started'):
+            run_out_path = os.path.join(case_dir, 'run.out')
+            status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
+    return status_label
+
+
+def cmd_xml(args, paths):
+    """
+    Query and/or change CESM XML variables ad hoc — no CONTINUE_RUN, no sbatch.
+
+    This is a thin wrapper over CESM's native xmlquery/xmlchange, scoped to a
+    set of cases. Unlike continue/restart, it does not force CONTINUE_RUN and
+    never submits a job: use it to inspect XML across a group (e.g. with
+    --prefix) and optionally rewrite it, without committing to a run.
+
+      --query VAR     (repeatable) print VAR's current value per case
+      --change VAR=V  (repeatable) set VAR=V via xmlchange
+
+    At least one of --query / --change is required; they may be combined.
+    --query is always read-only. --change defaults to preview; pass --execute
+    to apply. On --change --execute, RUNNING/RESUBMITTED cases are soft-blocked
+    (warn + per-case confirm) since an in-flight job's XML edit only takes
+    effect on the next segment — query mode never gates.
+
+    Requires explicit case names or --prefix — no --all flag.
+    """
+    caseroot = paths.get('caseroot', '')
+    if not caseroot:
+        sys.exit("ERROR: caseroot path not configured.")
+
+    cases       = _resolve_cases(args, paths, 'xml')
+    query_vars  = list(args.query or [])
+    change_vars = _parse_set_pairs(args.change, flag='--change')
+
+    if not query_vars and not change_vars:
+        sys.exit("ERROR: xml requires at least one --query VAR or --change VAR=VALUE.")
+
+    for case in cases:
+        case_dir = os.path.join(caseroot, case)
+        if not os.path.isdir(case_dir):
+            print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            continue
+
+        env_run = os.path.join(case_dir, 'env_run.xml')
+
+        # Read current values for everything we're about to show or change.
+        cur_q = {var: (_read_xml_var(env_run, var) or '?') for var in query_vars}
+        cur_c = {var: (_read_xml_var(env_run, var) or '?') for var, _ in change_vars}
+
+        print(f"  {case}")
+        for var in query_vars:
+            print(f"    {var} = {cur_q[var]}")
+        for var, new_val in change_vars:
+            print(f"    {var}: {cur_c[var]} -> {new_val}")
+
+        if not change_vars or not args.execute:
+            continue
+
+        # Soft block: editing XML on an active job only takes effect next segment.
+        status_label = _probe_status(case_dir, case)
+        if status_label in ('RUNNING', 'RESUBMITTED'):
+            print(f"    WARNING: status is [{status_label}] — a job is active; "
+                  f"XML edits apply on the next segment.")
+            try:
+                answer = input(f"    Change XML anyway for {case}? [yes/no]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                print(f"    Skipping {case}.")
+                continue
+            if answer not in ('yes', 'y'):
+                print(f"    Skipping {case}.")
+                continue
+
+        try:
+            for var, val in change_vars:
+                _apply_xmlchange(case_dir, var, val)
+        except RuntimeError as e:
+            print(f"    ERROR: {e}")
+            continue
+        print(f"    applied {len(change_vars)} change(s)")
+
+    if change_vars and not args.execute:
+        print("\n(preview only — rerun with --execute to apply changes)")
+
+
 def cmd_continue(args, paths):
     """
     Set CONTINUE_RUN=TRUE and submit the run script via sbatch.
@@ -96,32 +263,8 @@ def cmd_continue(args, paths):
     if not caseroot:
         sys.exit("ERROR: caseroot path not configured.")
 
-    prefix_filter = getattr(args, 'prefix', None)
-    explicit_cases = args.cases or []
-
-    if explicit_cases and prefix_filter:
-        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
-
-    if prefix_filter:
-        all_cases = discover_cases(paths)
-        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
-        if not cases:
-            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
-    elif explicit_cases:
-        cases = explicit_cases
-    else:
-        sys.exit("ERROR: continue requires explicit case names or --prefix. No --all flag.")
-
-    # Parse --set VAR=VALUE pairs
-    set_vars = []
-    for item in (args.set or []):
-        if '=' not in item:
-            sys.exit(f"ERROR: --set requires VAR=VALUE format, got: {item!r}")
-        var, _, val = item.partition('=')
-        var = var.strip()
-        if not var:
-            sys.exit(f"ERROR: empty variable name in --set {item!r}")
-        set_vars.append((var, val.strip()))
+    cases    = _resolve_cases(args, paths, 'continue')
+    set_vars = _parse_set_pairs(args.set)
 
     for case in cases:
         case_dir = os.path.join(caseroot, case)
@@ -133,24 +276,7 @@ def cmd_continue(args, paths):
         cur_continue = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
         cur_vals = {var: (_read_xml_var(env_run, var) or '?') for var, _ in set_vars}
 
-        # Status gate
-        casestatus_path = os.path.join(case_dir, 'CaseStatus')
-        cs = _parse_casestatus(casestatus_path)
-        if cs is None:
-            status_label = 'NO_CASEDIR'
-        else:
-            status_label = cs['status']
-            if cs['last_event'] and (
-                cs['last_event'].startswith('run started') or
-                cs['last_event'].startswith('run SUCCESSFUL')
-            ):
-                job_queued = _squeue_probe(case)
-                if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
-                    status_label = 'RESUBMITTED'
-                elif job_queued is False and cs['last_event'].startswith('run started'):
-                    run_out_path = os.path.join(case_dir, 'run.out')
-                    status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
-
+        status_label = _probe_status(case_dir, case)
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
@@ -179,22 +305,10 @@ def cmd_continue(args, paths):
                 continue
 
         # Apply xmlchange calls
-        def _xmlchange(var, val):
-            result = subprocess.run(
-                ['./xmlchange', f'{var}={val}'],
-                cwd=case_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"xmlchange {var}={val} failed: {result.stderr.strip()}")
-
         try:
-            _xmlchange('CONTINUE_RUN', 'TRUE')
+            _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'TRUE')
             for var, val in set_vars:
-                _xmlchange(var, val)
+                _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
             print(f"    ERROR: {e}")
             continue
@@ -251,33 +365,8 @@ def cmd_restart(args, paths):
     if not caseroot:
         sys.exit("ERROR: caseroot path not configured.")
 
-    prefix_filter  = getattr(args, 'prefix', None)
-    explicit_cases = args.cases or []
-
-    if explicit_cases and prefix_filter:
-        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
-
-    if prefix_filter:
-        all_cases = discover_cases(paths)
-        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
-        if not cases:
-            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
-    elif explicit_cases:
-        cases = explicit_cases
-    else:
-        sys.exit("ERROR: restart requires explicit case names or --prefix. No --all flag.")
-
-    # Parse --set VAR=VALUE pairs
-    set_vars = []  # list of (VAR, VALUE) in order
-    for item in (args.set or []):
-        if '=' not in item:
-            sys.exit(f"ERROR: --set requires VAR=VALUE format, got: {item!r}")
-        var, _, val = item.partition('=')
-        var = var.strip()
-        val = val.strip()
-        if not var:
-            sys.exit(f"ERROR: empty variable name in --set {item!r}")
-        set_vars.append((var, val))
+    cases    = _resolve_cases(args, paths, 'restart')
+    set_vars = _parse_set_pairs(args.set)
 
     for case in cases:
         case_dir = os.path.join(caseroot, case)
@@ -289,28 +378,9 @@ def cmd_restart(args, paths):
 
         # Read current values for CONTINUE_RUN and each var being changed
         cur_continue = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
-        cur_vals = {}
-        for var, _ in set_vars:
-            cur_vals[var] = _read_xml_var(env_run, var) or '?'
+        cur_vals = {var: (_read_xml_var(env_run, var) or '?') for var, _ in set_vars}
 
-        # Status gate
-        casestatus_path = os.path.join(case_dir, 'CaseStatus')
-        cs = _parse_casestatus(casestatus_path)
-        if cs is None:
-            status_label = 'NO_CASEDIR'
-        else:
-            status_label = cs['status']
-            if cs['last_event'] and (
-                cs['last_event'].startswith('run started') or
-                cs['last_event'].startswith('run SUCCESSFUL')
-            ):
-                job_queued = _squeue_probe(case)
-                if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
-                    status_label = 'RESUBMITTED'
-                elif job_queued is False and cs['last_event'].startswith('run started'):
-                    run_out_path = os.path.join(case_dir, 'run.out')
-                    status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
-
+        status_label = _probe_status(case_dir, case)
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
@@ -341,22 +411,10 @@ def cmd_restart(args, paths):
                 continue
 
         # Apply xmlchange calls
-        def _xmlchange(var, val):
-            result = subprocess.run(
-                ['./xmlchange', f'{var}={val}'],
-                cwd=case_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"xmlchange {var}={val} failed: {result.stderr.strip()}")
-
         try:
-            _xmlchange('CONTINUE_RUN', 'FALSE')
+            _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'FALSE')
             for var, val in set_vars:
-                _xmlchange(var, val)
+                _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
             print(f"    ERROR: {e}")
             continue
@@ -414,21 +472,7 @@ def cmd_submit(args, paths):
     if not caseroot:
         sys.exit("ERROR: caseroot path not configured.")
 
-    prefix_filter  = getattr(args, 'prefix', None)
-    explicit_cases = args.cases or []
-
-    if explicit_cases and prefix_filter:
-        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
-
-    if prefix_filter:
-        all_cases = discover_cases(paths)
-        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
-        if not cases:
-            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
-    elif explicit_cases:
-        cases = explicit_cases
-    else:
-        sys.exit("ERROR: submit requires explicit case names or --prefix. No --all flag.")
+    cases = _resolve_cases(args, paths, 'submit')
 
     for case in cases:
         case_dir = os.path.join(caseroot, case)
@@ -442,24 +486,7 @@ def cmd_submit(args, paths):
                   f"Run build.py make first.")
             continue
 
-        # Status gate
-        casestatus_path = os.path.join(case_dir, 'CaseStatus')
-        cs = _parse_casestatus(casestatus_path)
-        if cs is None:
-            status_label = 'NO_CASEDIR'
-        else:
-            status_label = cs['status']
-            if cs['last_event'] and (
-                cs['last_event'].startswith('run started') or
-                cs['last_event'].startswith('run SUCCESSFUL')
-            ):
-                job_queued = _squeue_probe(case)
-                if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
-                    status_label = 'RESUBMITTED'
-                elif job_queued is False and cs['last_event'].startswith('run started'):
-                    run_out_path = os.path.join(case_dir, 'run.out')
-                    status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
-
+        status_label = _probe_status(case_dir, case)
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
@@ -1073,6 +1100,27 @@ def build_parser():
                                f'{", ".join(_DIR_RESOLVERS)}. '
                                'Requires exactly one case name; incompatible with --prefix.'))
 
+    # ---- xml ----
+    p_xml = top_sub.add_parser(
+        'xml',
+        help=argparse.SUPPRESS,
+        description=cmd_xml.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_xml.add_argument('cases', nargs='*',
+                       help='Case name(s) to query/change (or use --prefix; no --all flag)')
+    p_xml.add_argument('--prefix', metavar='STR', default=None,
+                       help='Case-insensitive prefix filter; '
+                            'cannot combine with explicit case names')
+    p_xml.add_argument('--query', dest='query', action='append', metavar='VAR',
+                       help='Print VAR\'s current value per case (repeatable, read-only); '
+                            'e.g. --query STOP_N --query RESUBMIT')
+    p_xml.add_argument('--change', dest='change', action='append', metavar='VAR=VALUE',
+                       help='Set VAR=VALUE via xmlchange (repeatable); no CONTINUE_RUN, '
+                            'no sbatch; e.g. --change STOP_N=12')
+    p_xml.add_argument('--execute', action='store_true',
+                       help='Actually apply --change (default is preview only)')
+
     # ---- continue ----
     p_cont = top_sub.add_parser(
         'continue',
@@ -1145,6 +1193,9 @@ def main():
 
     if args.group == 'check':
         cmd_check(args, paths)
+
+    elif args.group == 'xml':
+        cmd_xml(args, paths)
 
     elif args.group == 'continue':
         cmd_continue(args, paths)
