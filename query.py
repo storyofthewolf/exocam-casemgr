@@ -39,7 +39,7 @@ _REGISTRY_GROUPS = [
 
 DEFAULT_REGISTRY = 'active.yaml'
 RETIRED_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'retired.yaml')
-DEFAULT_BLUEPRINT_DIR = 'blueprints'
+DEFAULT_EXP_MATRIX_DIR = 'exp_matrices'
 DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'config_registry.yaml')
 
@@ -383,8 +383,8 @@ def cmd_export(args, rows, config_registry_path):
 
     if args.output:
         if not os.path.dirname(args.output):
-            os.makedirs(DEFAULT_BLUEPRINT_DIR, exist_ok=True)
-            args.output = os.path.join(DEFAULT_BLUEPRINT_DIR, args.output)
+            os.makedirs(DEFAULT_EXP_MATRIX_DIR, exist_ok=True)
+            args.output = os.path.join(DEFAULT_EXP_MATRIX_DIR, args.output)
         with open(args.output, 'w') as f:
             f.write(out_text)
         if missing:
@@ -394,7 +394,7 @@ def cmd_export(args, rows, config_registry_path):
             print(f"Wrote {args.output} ({len(cases_list)} case(s))")
     else:
         print(out_text)
-        print("  (output above printed to stdout — use -o FILE to write blueprint)",
+        print("  (output above printed to stdout — use -o FILE to write experiment matrix)",
               file=sys.stderr)
 
     # Warn about exort_pkg '*' suffix after output so the warning is visible at the end.

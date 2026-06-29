@@ -28,7 +28,7 @@ Python 3.8+.
 | `query.py` | Registry search and experiment matrix export |
 | `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
-| `blueprints/experiment_matrix.example.yaml` | Annotated template for writing experiment matrices |
+| `exp_matrices/experiment_matrix.example.yaml` | Annotated template for writing experiment matrices |
 
 ---
 
@@ -54,10 +54,10 @@ paths:
 Copy the example and edit:
 
 ```bash
-cp blueprints/experiment_matrix.example.yaml blueprints/my_runs.yaml
+cp exp_matrices/experiment_matrix.example.yaml exp_matrices/my_runs.yaml
 ```
 
-The matrix has a `base` section (shared defaults) and a `cases` list. Each case inherits all base values and can override any of them. See `blueprints/experiment_matrix.example.yaml` for the full annotated parameter set, organized into these groups:
+The matrix has a `base` section (shared defaults) and a `cases` list. Each case inherits all base values and can override any of them. See `exp_matrices/experiment_matrix.example.yaml` for the full annotated parameter set, organized into these groups:
 
 | Group | Keys |
 |---|---|
@@ -95,7 +95,7 @@ The build script handles all config-specific file path updates:
 - Land/mixed: `user_nl_clm` (finidat, fsurdat)
 - Aqua/mixed: `user_docn.streams.txt.som` (pop_frc file path and name)
 
-**Review the generated scripts before running.** To list available blueprint matrices:
+**Review the generated scripts before running.** To list available experiment matrices:
 
 ```bash
 python build.py generate --list

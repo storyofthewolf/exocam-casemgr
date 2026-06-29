@@ -1063,22 +1063,22 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
 
 
 def cmd_generate(args):
-    blueprints_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'blueprints')
+    exp_matrices_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exp_matrices')
 
     if args.list:
-        yamls = sorted(f for f in os.listdir(blueprints_dir)
-                       if f.endswith('.yaml')) if os.path.isdir(blueprints_dir) else []
+        yamls = sorted(f for f in os.listdir(exp_matrices_dir)
+                       if f.endswith('.yaml')) if os.path.isdir(exp_matrices_dir) else []
         if yamls:
             print('\n'.join(yamls))
         else:
-            print(f"No .yaml files found in {blueprints_dir}")
+            print(f"No .yaml files found in {exp_matrices_dir}")
         sys.exit(0)
 
     if not args.matrix:
         sys.exit("error: the following arguments are required: matrix")
 
     if not os.path.exists(args.matrix):
-        candidate = os.path.join(blueprints_dir, args.matrix)
+        candidate = os.path.join(exp_matrices_dir, args.matrix)
         if os.path.exists(candidate):
             args.matrix = candidate
         else:
@@ -1355,7 +1355,7 @@ def main():
     p_gen = sub.add_parser('generate', help='Generate build scripts from an experiment matrix')
     p_gen.add_argument('matrix', nargs='?', help='experiment_matrix.yaml')
     p_gen.add_argument('--list', action='store_true',
-                       help='List available blueprints and exit')
+                       help='List available experiment matrices and exit')
     p_gen.add_argument('--verify', action='store_true',
                        help='Check matrix coherency (value types + netCDF file '
                             'existence) without generating any scripts')

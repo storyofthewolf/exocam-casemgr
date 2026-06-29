@@ -11,7 +11,7 @@ make sense once you hold three ideas in mind: **two formats, one bridge.**
 
 ### The two formats hold different things
 
-| | **Experiment matrix** (`blueprints/*.yaml`) | **Registry** (`active.yaml` / `retired.yaml`) |
+| | **Experiment matrix** (`exp_matrices/*.yaml`) | **Registry** (`active.yaml` / `retired.yaml`) |
 |---|---|---|
 | Direction | **input** — what you intend to build | **output** — what was actually built |
 | Author | **you**, by hand | **`scan.py`**, by walking live CASE dirs |
@@ -85,7 +85,7 @@ and *running it* are separate steps.
 # Build scripts
 python build.py generate experiment_matrix.yaml        # generate shell scripts into build_scripts/
 python build.py --scripts-dir scripts/ generate matrix.yaml
-python build.py generate --list                        # list blueprint matrices
+python build.py generate --list                        # list experiment matrices
 python build.py make                                   # run all *_build.sh (with confirmation)
 python build.py make --prefix ExoCAM_thai              # run only matching scripts
 
@@ -145,7 +145,7 @@ Dependencies: `pip install pyyaml` (required); `pip install netCDF4` (optional, 
 
 ## Experiment matrix format
 
-Start from `blueprints/experiment_matrix.example.yaml`. Each case inherits all `base` values; any key in a case dict overrides the base.
+Start from `exp_matrices/experiment_matrix.example.yaml`. Each case inherits all `base` values; any key in a case dict overrides the base.
 
 **Top-level keys:**
 

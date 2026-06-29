@@ -23,8 +23,9 @@ cases.yaml
 build_scripts/*
 !build_scripts/README
 
-blueprints/*
-!blueprints/README
+exp_matrices/*
+!exp_matrices/README
+!exp_matrices/experiment_matrix.example.yaml
 
 # ignore commonly used stem for depreciated files I am not quite ready to delete
 *old*
