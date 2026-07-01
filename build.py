@@ -547,7 +547,29 @@ def _build_nl_upsert_block(spec):
 
 
 def _format_nl_value(val):
-    """Format a Python value as a CESM namelist RHS (for use inside echo "...")."""
+    """
+    Format a Python value as a CESM namelist RHS (for use inside echo "...").
+    Multi-valued entries (nhtfrq, mfilt, fincl*, ...) may be given as a YAML
+    list — each element is formatted by the scalar rules and joined with
+    commas, so [0, -24] -> 0, -24 and [TS, FSNT] -> 'TS', 'FSNT'.
+    A plain string containing commas (YAML reads nhtfrq: 0,-24 as a string)
+    is treated as an array only if every piece coerces to a number or Fortran
+    logical; otherwise it is quoted whole like any genuine string. String
+    arrays must therefore use YAML list syntax, not a comma-joined string.
+    """
+    if isinstance(val, (list, tuple)):
+        return ', '.join(_format_nl_scalar(v) for v in val)
+    if isinstance(val, str) and ',' in val:
+        parts = [p.strip() for p in val.split(',')]
+        if all(parts):
+            formatted = [_format_nl_scalar(p) for p in parts]
+            if not any(f.startswith("'") for f in formatted):
+                return ', '.join(formatted)
+    return _format_nl_scalar(val)
+
+
+def _format_nl_scalar(val):
+    """Format a single scalar value as a namelist RHS token."""
     # bool must be checked before int (bool is a subclass of int in Python)
     if isinstance(val, bool):
         return '.true.' if val else '.false.'
@@ -562,6 +584,12 @@ def _format_nl_value(val):
     s = str(val)
     if s.lower() in ('.true.', '.false.'):
         return s
+    # integer-looking strings stay integers: Fortran reads 1 into a real
+    # fine, but errors reading 1.0 into an integer (nhtfrq, mfilt, ...)
+    try:
+        return str(int(s))
+    except ValueError:
+        pass
     try:
         f = float(s)
         formatted = f'{f:g}'
@@ -584,6 +612,7 @@ def _nl_append_lines(param_dict, target='user_nl_cam'):
     - str logical -> .true. / .false.  (unquoted, passed through)
     - str numeric -> bare number       (unquoted, coerced)
     - str other   -> 'value'           (single-quoted, e.g. file paths)
+    - list/tuple  -> comma-separated array, each element by the rules above
     """
     lines = []
     for key, val in param_dict.items():
