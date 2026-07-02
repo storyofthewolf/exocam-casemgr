@@ -63,6 +63,7 @@ cases/ + rundir/ + archive/ on HPC
 
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
 - `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt). `make` **builds but does not submit** — submission is a separate step (`runmgr.py submit`, or `make --send-it` to fold both together). The run verbs are distinct: `submit` (launch a built case as-is, no xmlchange), `continue` (CONTINUE_RUN=TRUE), `restart` (CONTINUE_RUN=FALSE + fixes). `xml` is the odd one out — it changes/queries XML but **never** launches a job, so it has no `submit`/`continue`/`restart` semantics and only soft-warns (never hard-blocks) on RUNNING cases.
+- `build.py make` accepts explicit `NAME` positionals (bare case name or full `*_build.sh` filename) to run a named subset, in addition to `--prefix`. If neither `NAME` args nor `--prefix` nor `--all` is given, it just **lists** the scripts in `scripts-dir` and exits — it does not run anything. `--all` is required to intentionally run every script in `scripts-dir` at once, mirroring the "no implicit --all" convention used by destructive `datamgr.py`/`runmgr.py` subcommands.
 - All destructive `datamgr.py` operations (including `cata`) default to **preview mode**; `--execute` required to act.
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics (grep/sed/echo) rather than plain append, to avoid duplicate keys.
@@ -242,6 +243,16 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 `build_exort_fileset` constructs the ExoRT reference as `{exort_root}/3dmodels/src.cam.{exort_pkg}/`. Experimental branches outside this path cause RT detection to silently return `{}` — affected files appear as `CASE ONLY`. Cases with non-standard RT are flagged with `*` in `query.py search` output. Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml`.
 
 ---
+
+## Session handoff — 2026-07-02
+
+**`build.py make` named-subset + explicit `--all` (build.py):** `make` previously only ran all scripts in `scripts-dir` or an `--prefix`-filtered subset, and a bare `make` with no filter would (after a confirmation prompt) build/submit *everything*. Two changes:
+
+1. Added `names` positional (`nargs='*'`): `build.py make foo bar_build.sh baz --send-it` runs exactly those cases, resolved against `scripts-dir` (bare names get `_build.sh` appended). Unknown names abort before anything runs. `--prefix` is ignored if `names` are given.
+2. Added `--all`: a bare `make` call (no `names`, no `--prefix`, no `--all`) now just **lists** the scripts in `scripts-dir` and exits — useful for browsing — instead of silently offering to build/submit everything. `--all` is required to intentionally run the full directory, matching the "no implicit --all" convention already used by destructive `datamgr.py`/`runmgr.py` subcommands (see "Design invariants" above, which is about those tools specifically — `make` is not destructive in the same sense but adopts the same UX guard since `--send-it` can submit many jobs at once).
+
+### Good starting points for next session
+- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`.
 
 ## Session handoff — 2026-06-19
 
