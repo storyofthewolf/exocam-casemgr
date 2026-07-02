@@ -1277,6 +1277,15 @@ def cmd_make(args):
         prefix_lower = args.prefix.lower()
         all_scripts = [s for s in all_scripts
                        if os.path.basename(s).lower().startswith(prefix_lower)]
+    elif not args.all:
+        if not all_scripts:
+            sys.exit(f"No *_build.sh scripts found in {scripts_dir}")
+        print(f"{len(all_scripts)} script(s) in {scripts_dir}:")
+        for s in all_scripts:
+            print(f"  {os.path.basename(s)}")
+        print("\nNo NAME, --prefix, or --all given — nothing will be run. "
+              "Pass --all to run every script above, or list names / use --prefix to select a subset.")
+        return
 
     if not all_scripts:
         sys.exit(f"No matching *_build.sh scripts found in {scripts_dir}")
@@ -1406,11 +1415,13 @@ def main():
 
     p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
     p_make.add_argument('names', nargs='*', metavar='NAME',
-                        help='Explicit case names or *_build.sh filenames to run '
-                             '(default: all scripts in scripts-dir, optionally filtered by --prefix)')
+                        help='Explicit case names or *_build.sh filenames to run')
     p_make.add_argument('--prefix', metavar='PREFIX',
                         help='Only run scripts whose filename starts with PREFIX (case-insensitive); '
                              'ignored if NAME arguments are given')
+    p_make.add_argument('--all', action='store_true',
+                        help='Run every *_build.sh script in scripts-dir; required if no NAME '
+                             'or --prefix is given (a bare call with none of these just lists scripts)')
     p_make.add_argument('--send-it', action='store_true',
                         help='Submit each successfully built case via sbatch after building')
 
