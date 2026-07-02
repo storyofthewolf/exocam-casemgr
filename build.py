@@ -1258,7 +1258,22 @@ def cmd_make(args):
     pattern = os.path.join(scripts_dir, '*_build.sh')
     all_scripts = sorted(glob.glob(pattern))
 
-    if args.prefix:
+    if args.names:
+        wanted = []
+        for name in args.names:
+            wanted.append(name if name.endswith('_build.sh') else f"{name}_build.sh")
+        by_basename = {os.path.basename(s): s for s in all_scripts}
+        all_scripts = []
+        missing = []
+        for basename in wanted:
+            script_path = by_basename.get(basename)
+            if script_path:
+                all_scripts.append(script_path)
+            else:
+                missing.append(basename)
+        if missing:
+            sys.exit(f"Scripts not found in {scripts_dir}: {', '.join(missing)}")
+    elif args.prefix:
         prefix_lower = args.prefix.lower()
         all_scripts = [s for s in all_scripts
                        if os.path.basename(s).lower().startswith(prefix_lower)]
@@ -1390,8 +1405,12 @@ def main():
                             'existence) without generating any scripts')
 
     p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
+    p_make.add_argument('names', nargs='*', metavar='NAME',
+                        help='Explicit case names or *_build.sh filenames to run '
+                             '(default: all scripts in scripts-dir, optionally filtered by --prefix)')
     p_make.add_argument('--prefix', metavar='PREFIX',
-                        help='Only run scripts whose filename starts with PREFIX (case-insensitive)')
+                        help='Only run scripts whose filename starts with PREFIX (case-insensitive); '
+                             'ignored if NAME arguments are given')
     p_make.add_argument('--send-it', action='store_true',
                         help='Submit each successfully built case via sbatch after building')
 
