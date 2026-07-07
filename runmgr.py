@@ -34,6 +34,13 @@ SAFETY
   There is no --all flag. check is read-only and needs no --execute; so is
   `xml --query` (without --change).
 
+  Double-gate ergonomics (matching build.py make): these verbs first print a
+  per-case preview, then --execute prints ONE batch [yes/no] confirmation
+  before acting on the whole set. RUNNING/RESUBMITTED cases are hard-blocked
+  (dropped from the set); surprising statuses (non-COMPLETE, non-BUILT, ...)
+  are flagged in the preview but not separately prompted — the single batch
+  confirm covers them.
+
 Run any subcommand with --help for full options, e.g.:
   python runmgr.py check --help
   python runmgr.py xml --help
@@ -128,13 +135,16 @@ def _apply_xmlchange(case_dir, var, val):
 
     The single xmlchange code path shared by continue, restart, and xml.
     """
-    result = subprocess.run(
-        ['./xmlchange', f'{var}={val}'],
-        cwd=case_dir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-    )
+    try:
+        result = subprocess.run(
+            ['./xmlchange', f'{var}={val}'],
+            cwd=case_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError("./xmlchange not found in case dir")
     if result.returncode != 0:
         raise RuntimeError(
             f"xmlchange {var}={val} failed: {result.stderr.strip()}")
@@ -165,6 +175,22 @@ def _probe_status(case_dir, case):
     return status_label
 
 
+def _batch_confirm(action, n):
+    """Single batch [yes/no] gate for the run-control verbs.
+
+    Mirrors build.py make's one-prompt-before-the-batch ergonomics (and the
+    --execute-then-confirm double gate used across the package): the caller
+    prints a per-case preview first, then calls this once before acting on the
+    whole set. Returns True to proceed. EOF/interrupt is treated as 'no'.
+    """
+    try:
+        answer = input(f"\n{action} {n} case(s)? [yes/no]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ('yes', 'y')
+
+
 def cmd_xml(args, paths):
     """
     Query and/or change CESM XML variables ad hoc — no CONTINUE_RUN, no sbatch.
@@ -179,9 +205,10 @@ def cmd_xml(args, paths):
 
     At least one of --query / --change is required; they may be combined.
     --query is always read-only. --change defaults to preview; pass --execute
-    to apply. On --change --execute, RUNNING/RESUBMITTED cases are soft-blocked
-    (warn + per-case confirm) since an in-flight job's XML edit only takes
-    effect on the next segment — query mode never gates.
+    to apply. On --change --execute, the per-case preview (which flags any
+    RUNNING/RESUBMITTED cases whose XML edits only take effect next segment) is
+    followed by a single batch [yes/no] before any change is applied — the same
+    double-gate ergonomics as the other run-control verbs. Query mode never gates.
 
     Requires explicit case names or --prefix — no --all flag.
     """
@@ -196,6 +223,8 @@ def cmd_xml(args, paths):
     if not query_vars and not change_vars:
         sys.exit("ERROR: xml requires at least one --query VAR or --change VAR=VALUE.")
 
+    # Phase 1 — preview every case; collect the ones eligible for --change.
+    actionable = []  # case_dirs that have a real dir and pending changes
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
@@ -208,40 +237,44 @@ def cmd_xml(args, paths):
         cur_q = {var: (_read_xml_var(env_run, var) or '?') for var in query_vars}
         cur_c = {var: (_read_xml_var(env_run, var) or '?') for var, _ in change_vars}
 
-        print(f"  {case}")
+        # Flag active jobs in the preview — edits only apply on the next segment.
+        status_note = ''
+        if change_vars:
+            status_label = _probe_status(case_dir, case)
+            if status_label in ('RUNNING', 'RESUBMITTED'):
+                status_note = f"  [{status_label} — edits apply next segment]"
+
+        print(f"  {case}{status_note}")
         for var in query_vars:
             print(f"    {var} = {cur_q[var]}")
         for var, new_val in change_vars:
             print(f"    {var}: {cur_c[var]} -> {new_val}")
 
-        if not change_vars or not args.execute:
-            continue
+        if change_vars:
+            actionable.append((case, case_dir))
 
-        # Soft block: editing XML on an active job only takes effect next segment.
-        status_label = _probe_status(case_dir, case)
-        if status_label in ('RUNNING', 'RESUBMITTED'):
-            print(f"    WARNING: status is [{status_label}] — a job is active; "
-                  f"XML edits apply on the next segment.")
-            try:
-                answer = input(f"    Change XML anyway for {case}? [yes/no]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                print(f"    Skipping {case}.")
-                continue
-            if answer not in ('yes', 'y'):
-                print(f"    Skipping {case}.")
-                continue
+    if not change_vars:
+        return
+    if not args.execute:
+        print("\n(preview only — rerun with --execute to apply changes)")
+        return
+    if not actionable:
+        print("\nNo cases to change.")
+        return
 
+    # Phase 2 — single batch gate, then apply.
+    if not _batch_confirm("Apply XML changes to", len(actionable)):
+        print("Aborted.")
+        return
+
+    for case, case_dir in actionable:
         try:
             for var, val in change_vars:
                 _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
-            print(f"    ERROR: {e}")
+            print(f"  {case}: ERROR: {e}")
             continue
-        print(f"    applied {len(change_vars)} change(s)")
-
-    if change_vars and not args.execute:
-        print("\n(preview only — rerun with --execute to apply changes)")
+        print(f"  {case}: applied {len(change_vars)} change(s)")
 
 
 def cmd_continue(args, paths):
@@ -252,12 +285,14 @@ def cmd_continue(args, paths):
     submitting — e.g. --set STOP_N=10 --set RESUBMIT=9.
 
     Status gating (checked via CaseStatus + SLURM probe):
-      RUNNING / RESUBMITTED  — hard block: skipped with error message
-      COMPLETE               — proceeds without warning
-      anything else          — soft block: per-case confirmation prompt
+      RUNNING / RESUBMITTED  — hard block: skipped, never submitted
+      COMPLETE               — the normal case
+      anything else          — flagged in the preview (not blocked)
 
-    Without --execute, prints a preview and exits. Requires explicit case
-    names or --prefix — no --all flag.
+    The per-case preview is followed by a single batch [yes/no] before any job
+    is submitted (the same double-gate as build.py make). Without --execute,
+    prints the preview and exits. Requires explicit case names or --prefix —
+    no --all flag.
     """
     caseroot = paths.get('caseroot', '')
     if not caseroot:
@@ -266,6 +301,8 @@ def cmd_continue(args, paths):
     cases    = _resolve_cases(args, paths, 'continue')
     set_vars = _parse_set_pairs(args.set)
 
+    # Phase 1 — preview; hard-block active jobs; collect actionable cases.
+    actionable = []  # (case, case_dir)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
@@ -282,61 +319,40 @@ def cmd_continue(args, paths):
             continue
 
         run_script = os.path.join(case_dir, f'{case}.run')
-        print(f"  {case}  [{status_label}]")
+        flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
+        print(f"  {case}  [{status_label}]{flag}")
         print(f"    CONTINUE_RUN: {cur_continue} -> TRUE")
         for var, new_val in set_vars:
             print(f"    {var}: {cur_vals[var]} -> {new_val}")
         print(f"    sbatch: {run_script}")
+        actionable.append((case, case_dir))
 
-        if not args.execute:
-            continue
+    if not args.execute:
+        print("\n(preview only — rerun with --execute to submit)")
+        return
+    if not actionable:
+        print("\nNo cases to submit.")
+        return
 
-        # Soft block: warn and confirm for non-COMPLETE statuses
-        if status_label != 'COMPLETE':
-            print(f"    WARNING: status is [{status_label}], not COMPLETE.")
-            try:
-                answer = input(f"    Continue anyway for {case}? [yes/no]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                print(f"    Skipping {case}.")
-                continue
-            if answer not in ('yes', 'y'):
-                print(f"    Skipping {case}.")
-                continue
+    # Phase 2 — single batch gate, then apply xmlchange + sbatch.
+    if not _batch_confirm("Continue (CONTINUE_RUN=TRUE) and submit", len(actionable)):
+        print("Aborted.")
+        return
 
-        # Apply xmlchange calls
+    for case, case_dir in actionable:
         try:
             _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'TRUE')
             for var, val in set_vars:
                 _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
-            print(f"    ERROR: {e}")
+            print(f"  {case}: ERROR: {e}")
             continue
 
-        # sbatch
-        try:
-            result = subprocess.run(
-                ['sbatch', f'{case}.run'],
-                cwd=case_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
-        except FileNotFoundError:
-            print(f"    ERROR: sbatch not found in PATH")
-            continue
-
-        if result.returncode != 0:
-            print(f"    ERROR: sbatch failed: {result.stderr.strip()}")
-            continue
-
-        import re as _re
-        m = _re.search(r'Submitted batch job (\d+)', result.stdout)
-        job_id = m.group(1) if m else result.stdout.strip()
-        print(f"    submitted: job {job_id}")
-
-    if not args.execute:
-        print("\n(preview only — rerun with --execute to submit)")
+        ok, detail = submit_case(case_dir, case)
+        if ok:
+            print(f"  {case}: submitted job {detail}")
+        else:
+            print(f"  {case}: ERROR: {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -354,12 +370,14 @@ def cmd_restart(args, paths):
     CONTINUE_RUN=FALSE is always applied first; --set changes follow in order.
 
     Status gating (checked via CaseStatus + SLURM probe):
-      RUNNING / RESUBMITTED  — hard block: skipped with error message
-      COMPLETE               — proceeds without warning (normal case)
-      anything else          — soft block: per-case confirmation prompt
+      RUNNING / RESUBMITTED  — hard block: skipped, never submitted
+      COMPLETE               — the normal case
+      anything else          — flagged in the preview (not blocked)
 
-    Without --execute, prints a preview and exits. Requires explicit case
-    names or --prefix — no --all flag.
+    The per-case preview is followed by a single batch [yes/no] before any job
+    is submitted (the same double-gate as build.py make). Without --execute,
+    prints the preview and exits. Requires explicit case names or --prefix —
+    no --all flag.
     """
     caseroot = paths.get('caseroot', '')
     if not caseroot:
@@ -368,6 +386,8 @@ def cmd_restart(args, paths):
     cases    = _resolve_cases(args, paths, 'restart')
     set_vars = _parse_set_pairs(args.set)
 
+    # Phase 1 — preview; hard-block active jobs; collect actionable cases.
+    actionable = []  # (case, case_dir)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
@@ -385,64 +405,42 @@ def cmd_restart(args, paths):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        # Preview
         run_script = os.path.join(case_dir, f'{case}.run')
-        print(f"  {case}  [{status_label}]")
+        flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
+        print(f"  {case}  [{status_label}]{flag}")
         print(f"    CONTINUE_RUN: {cur_continue} -> FALSE")
         for var, new_val in set_vars:
             cur = cur_vals.get(var, '?')
             print(f"    {var}: {cur} -> {new_val}")
         print(f"    sbatch: {run_script}")
+        actionable.append((case, case_dir))
 
-        if not args.execute:
-            continue
+    if not args.execute:
+        print("\n(preview only — rerun with --execute to submit)")
+        return
+    if not actionable:
+        print("\nNo cases to submit.")
+        return
 
-        # Soft block for non-COMPLETE statuses
-        if status_label != 'COMPLETE':
-            print(f"    WARNING: status is [{status_label}], not COMPLETE.")
-            try:
-                answer = input(f"    Restart anyway for {case}? [yes/no]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                print(f"    Skipping {case}.")
-                continue
-            if answer not in ('yes', 'y'):
-                print(f"    Skipping {case}.")
-                continue
+    # Phase 2 — single batch gate, then apply xmlchange + sbatch.
+    if not _batch_confirm("Restart (CONTINUE_RUN=FALSE) and submit", len(actionable)):
+        print("Aborted.")
+        return
 
-        # Apply xmlchange calls
+    for case, case_dir in actionable:
         try:
             _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'FALSE')
             for var, val in set_vars:
                 _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
-            print(f"    ERROR: {e}")
+            print(f"  {case}: ERROR: {e}")
             continue
 
-        # sbatch
-        try:
-            result = subprocess.run(
-                ['sbatch', f'{case}.run'],
-                cwd=case_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
-        except FileNotFoundError:
-            print(f"    ERROR: sbatch not found in PATH")
-            continue
-
-        if result.returncode != 0:
-            print(f"    ERROR: sbatch failed: {result.stderr.strip()}")
-            continue
-
-        import re as _re
-        m = _re.search(r'Submitted batch job (\d+)', result.stdout)
-        job_id = m.group(1) if m else result.stdout.strip()
-        print(f"    submitted: job {job_id}")
-
-    if not args.execute:
-        print("\n(preview only — rerun with --execute to submit)")
+        ok, detail = submit_case(case_dir, case)
+        if ok:
+            print(f"  {case}: submitted job {detail}")
+        else:
+            print(f"  {case}: ERROR: {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -460,13 +458,15 @@ def cmd_submit(args, paths):
 
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped (a job is already active)
-      BUILT / COMPLETE       — proceeds without warning (BUILT is the normal
-                               post-make state; COMPLETE covers re-launch and
-                               clones that inherit the source's CaseStatus)
-      anything else          — soft block: per-case confirmation prompt
+      BUILT / COMPLETE       — the normal case (BUILT is the normal post-make
+                               state; COMPLETE covers re-launch and clones that
+                               inherit the source's CaseStatus)
+      anything else          — flagged in the preview (not blocked)
 
-    Without --execute, prints a preview and exits. Requires explicit case
-    names or --prefix — no --all flag.
+    The per-case preview is followed by a single batch [yes/no] before any job
+    is submitted (the same double-gate as build.py make). Without --execute,
+    prints the preview and exits. Requires explicit case names or --prefix —
+    no --all flag.
     """
     caseroot = paths.get('caseroot', '')
     if not caseroot:
@@ -474,6 +474,8 @@ def cmd_submit(args, paths):
 
     cases = _resolve_cases(args, paths, 'submit')
 
+    # Phase 1 — preview; hard-block active jobs and unbuilt cases; collect the rest.
+    actionable = []  # (case, case_dir)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
@@ -491,33 +493,29 @@ def cmd_submit(args, paths):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        print(f"  {case}  [{status_label}]")
+        flag = '' if status_label in ('BUILT', 'COMPLETE') else '  <- not BUILT/COMPLETE'
+        print(f"  {case}  [{status_label}]{flag}")
         print(f"    sbatch: {run_script}")
-
-        if not args.execute:
-            continue
-
-        # Soft block: warn and confirm for statuses other than the expected ones
-        if status_label not in ('BUILT', 'COMPLETE'):
-            print(f"    WARNING: status is [{status_label}], not BUILT/COMPLETE.")
-            try:
-                answer = input(f"    Submit anyway for {case}? [yes/no]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                print(f"    Skipping {case}.")
-                continue
-            if answer not in ('yes', 'y'):
-                print(f"    Skipping {case}.")
-                continue
-
-        ok, detail = submit_case(case_dir, case)
-        if ok:
-            print(f"    submitted: job {detail}")
-        else:
-            print(f"    ERROR: {detail}")
+        actionable.append((case, case_dir))
 
     if not args.execute:
         print("\n(preview only — rerun with --execute to submit)")
+        return
+    if not actionable:
+        print("\nNo cases to submit.")
+        return
+
+    # Phase 2 — single batch gate, then sbatch.
+    if not _batch_confirm("Submit", len(actionable)):
+        print("Aborted.")
+        return
+
+    for case, case_dir in actionable:
+        ok, detail = submit_case(case_dir, case)
+        if ok:
+            print(f"  {case}: submitted job {detail}")
+        else:
+            print(f"  {case}: ERROR: {detail}")
 
 
 # ---------------------------------------------------------------------------

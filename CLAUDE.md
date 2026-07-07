@@ -62,7 +62,7 @@ cases/ + rundir/ + archive/ on HPC
 ### Key non-obvious behaviors
 
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
-- `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt). `make` **builds but does not submit** — submission is a separate step (`runmgr.py submit`, or `make --send-it` to fold both together). The run verbs are distinct: `submit` (launch a built case as-is, no xmlchange), `continue` (CONTINUE_RUN=TRUE), `restart` (CONTINUE_RUN=FALSE + fixes). `xml` is the odd one out — it changes/queries XML but **never** launches a job, so it has no `submit`/`continue`/`restart` semantics and only soft-warns (never hard-blocks) on RUNNING cases.
+- `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt). `make` **builds but does not submit** — submission is a separate step (`runmgr.py submit`, or `make --send-it` to fold both together). The run verbs are distinct: `submit` (launch a built case as-is, no xmlchange), `continue` (CONTINUE_RUN=TRUE), `restart` (CONTINUE_RUN=FALSE + fixes). `xml` is the odd one out — it changes/queries XML but **never** launches a job, so it has no `submit`/`continue`/`restart` semantics; on `--change --execute` it uses the same single batch `[yes/no]` gate as the other verbs (RUNNING/RESUBMITTED cases are flagged in the preview, not hard-blocked). See "Run-control gating" below.
 - `build.py make` accepts explicit `NAME` positionals (bare case name or full `*_build.sh` filename) to run a named subset, in addition to `--prefix`. If neither `NAME` args nor `--prefix` nor `--all` is given, it just **lists** the scripts in `scripts-dir` and exits — it does not run anything. `--all` is required to intentionally run every script in `scripts-dir` at once, mirroring the "no implicit --all" convention used by destructive `datamgr.py`/`runmgr.py` subcommands.
 - All destructive `datamgr.py` operations (including `cata`) default to **preview mode**; `--execute` required to act.
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
@@ -119,7 +119,21 @@ A SLURM wall-clock kill never updates `CaseStatus` (it would otherwise read `RUN
 1. `run.out` is **appended to on every run attempt**, so only the segment after the **last** `CSM EXECUTION BEGINS HERE` line is examined — a timeout in an earlier segment followed by a fresh success must not register.
 2. Returns `True` if any line in that last segment contains **both** `CANCELLED` and `DUE TO TIME LIMIT`. Missing/unreadable file → `False`.
 
-`WALLCLOCK` is a probe-derived label (like `RESUBMITTED`/`RUNNING?`), not a `CaseStatus` event mapping. It is non-`COMPLETE`, so the run-control verbs (`continue`/`restart`/`submit`) soft-block (warn + confirm) on it, the same as `FAILED` — appropriate for a timed-out case the user wants to relaunch. Wired into all four probe sites: `check`, `continue`, `restart`, `submit`.
+`WALLCLOCK` is a probe-derived label (like `RESUBMITTED`/`RUNNING?`), not a `CaseStatus` event mapping. It is non-`COMPLETE`, so the run-control verbs (`continue`/`restart`/`submit`) **flag** it in the per-case preview (`<- not COMPLETE`/`<- not BUILT/COMPLETE`), the same as `FAILED` — appropriate for a timed-out case the user wants to relaunch. Wired into all four probe sites: `check`, `continue`, `restart`, `submit`.
+
+## Run-control gating (continue / restart / submit / xml --change)
+
+All four run-control verbs use the **same double-gate ergonomics as `build.py make`**, so `--execute` behaves consistently across the package:
+
+1. **Gate 1 — `--execute`.** Without it, the verb prints the per-case preview and exits (`(preview only — rerun with --execute …)`).
+2. **Gate 2 — a single batch `[yes/no]`.** With `--execute`, after the preview the verb asks **one** confirmation (`Continue … and submit N case(s)? [yes/no]`, `Submit N case(s)?`, `Apply XML changes to N case(s)?`) covering the whole set, then acts. Answering no → `Aborted.`, nothing submitted. This replaced the old per-case soft-block prompts.
+
+Status handling within the preview:
+- **RUNNING / RESUBMITTED** → **hard block**: dropped from the set, never submitted (a job is already active).
+- **COMPLETE** (and **BUILT** for `submit`) → the normal, unflagged case.
+- **anything else** (FAILED, WALLCLOCK, RUNNING?, …) → **flagged** in the preview line (`<- not COMPLETE`), but not separately prompted — the single batch confirm covers it.
+
+`xml --query` (no `--change`) is read-only and never gates. `_batch_confirm(action, n)` in `runmgr.py` is the shared gate helper; `submit_case()` (in `manage_utils.py`) is the single `sbatch` path used by all three submitting verbs — `continue`/`restart` no longer carry their own inline `subprocess.run(['sbatch', …])` block. `_apply_xmlchange` raises `RuntimeError` (caught per-case) when `./xmlchange` is missing, so a bad case dir reports an error instead of crashing the batch.
 
 ### --energy computation
 
