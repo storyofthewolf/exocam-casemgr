@@ -767,7 +767,7 @@ def _rundir_info(case, rundir):
     import re
     run_dir = os.path.join(rundir, case, 'run')
     if not os.path.isdir(run_dir):
-        return ["  run/:       (not found)"]
+        return ["  run/:       (not found)"], 0
     file_pairs = []  # list of (filename, size_bytes)
     try:
         with os.scandir(run_dir) as it:
@@ -778,7 +778,7 @@ def _rundir_info(case, rundir):
                 except OSError:
                     pass
     except OSError:
-        return ["  run/:       (error reading directory)"]
+        return ["  run/:       (error reading directory)"], 0
 
     hist_files = [(f, sz) for f, sz in file_pairs
                   if re.match(rf'^{re.escape(case)}\.cam\.h0\.\d{{4}}-\d{{2}}.*\.nc$', f)]
@@ -821,7 +821,8 @@ def _rundir_info(case, rundir):
                  f"({fmt_size(rest_size)}){date_suffix}")
 
     total_run_size = dir_size_bytes(run_dir)
-    return [hist_line, rest_line, f"  run/total:         {fmt_size(total_run_size)}"]
+    lines = [hist_line, rest_line, f"  run/total:         {fmt_size(total_run_size)}"]
+    return lines, total_run_size
 
 
 # Maps the short label used on the CLI to a callable returning the absolute
@@ -860,7 +861,8 @@ def cmd_check(args, paths):
     run.out segment) is shown as WALLCLOCK rather than the generic RUNNING?.
 
     --info: additionally print per-model hist file count, year span, and size
-            (atm, lnd, ice) and restart set count.
+            (atm, lnd, ice) and restart set count, led by a TOTAL line summing
+            bytes across every reported location (archive hist + rest + run).
 
     --energy: compute global-mean energy balance from the last 12 atm h0 files
               via ncra + netCDF4. Reports TS and Etop = FSNT - FLNT, plus the
@@ -946,6 +948,7 @@ def cmd_check(args, paths):
 
         info_lines = []
         if do_info and archive:
+            grand_total = 0  # bytes summed across every reported location
             for model in AVG_HIST_DEFAULT_MODELS:
                 hist_dir = os.path.join(archive, case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
@@ -953,6 +956,7 @@ def cmd_check(args, paths):
                 if not non_avg:
                     info_lines.append(f"  {model}/hist:    0 files")
                     continue
+                grand_total += total
                 years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
                 span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
                 avg_note = ", avg present" if any('avg' in f for f in files) else ""
@@ -960,10 +964,14 @@ def cmd_check(args, paths):
                     f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
             sets = restart_sets(case, paths)
             rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
+            grand_total += rest_total
             info_lines.append(f"  rest:      {len(sets):>4} folder(s)  ({fmt_size(rest_total)})")
             rundir = paths.get('rundir', '')
             if rundir:
-                info_lines.extend(_rundir_info(case, rundir))
+                run_lines, run_total = _rundir_info(case, rundir)
+                info_lines.extend(run_lines)
+                grand_total += run_total
+            info_lines.insert(0, f"  TOTAL:     {fmt_size(grand_total)}  (all locations)")
 
         energy_line = None
         if do_energy and archive:
