@@ -258,6 +258,24 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ---
 
+## Session handoff — 2026-07-08
+
+**`datamgr.py clean` bulk selection + batch ergonomics (datamgr.py, manage_utils.py).** The `clean` verbs' help promised `--prefix`, but it was never wired in — a real `clean purge-hist --prefix …` errored `unrecognized arguments: --prefix`. Four related changes, all UX/ergonomics (no change to what gets deleted):
+
+1. **`--prefix` on all clean verbs.** Added to `_add_destructive_args`; `_require_cases()` (manage_utils.py) now honors it with the same explicit-names-vs-`--prefix` mutual exclusion + no-`--all` guard `retire` already used. `retire`'s bespoke selection block now delegates to `_require_cases` (its duplicate `--prefix` arg removed); it still branches on `prefix_filter` for its batch-vs-per-case confirm.
+2. **`--models all`.** `_add_models_arg` accepts the literal `all`; new `_resolve_models(args, default)` expands `all` (and the omitted case) to the verb's own default set — `HIST_MODELS` for purge-hist/purge-logs/move-hist (`rest/` excluded), `AVG_HIST_DEFAULT_MODELS` for avg. Satisfies purge-hist's `--keep-years`/`--models` guard without typing the full component list.
+3. **Single batch confirm.** All five clean verbs (`purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`) switched from per-case `confirm()` to the two-pass pattern retire/runmgr use: build deferred per-case closures during the preview pass, then under `--execute` ask **one** `batch_confirm()` (`Delete … for N case(s)? [yes/no]`) covering the whole set. New helpers: `_run_batch()` (datamgr.py) and `batch_confirm()` (manage_utils.py). `confirm()` is no longer used in datamgr.py (kept in manage_utils.py).
+4. **Trailing `--execute` hint.** `preview_hint()` (manage_utils.py) prints one `(preview only — rerun with --execute …)` line after the last `[preview]` block; no-op under `--execute`.
+
+All five commits are on `main` and pushed (`fb7d45c`..`b4a5d20`). Verified end-to-end against a temp-archive fixture: preview lists all cases with no prompts; `--execute`+`no` aborts leaving files intact; `--execute`+`yes` deletes the whole batch after one prompt.
+
+### Good starting points for next session
+- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`.
+- `avg`'s `--models all` expands to `AVG_HIST_DEFAULT_MODELS` (atm/lnd/ice), i.e. "all that avg targets by default" — not the full 9-component set. Revisit if a literal-all-components meaning is wanted there.
+- `confirm()` in manage_utils.py is now dead code (no caller in the package). Left in place; could be removed in a cleanup pass.
+
+---
+
 ## Session handoff — 2026-07-02
 
 **`build.py make` named-subset + explicit `--all` (build.py):** `make` previously only ran all scripts in `scripts-dir` or an `--prefix`-filtered subset, and a bare `make` with no filter would (after a confirmation prompt) build/submit *everything*. Two changes:

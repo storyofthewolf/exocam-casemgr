@@ -269,17 +269,18 @@ python datamgr.py report case1 case2   # specific cases only
 
 #### Purge and move files (datamgr.py clean)
 
-All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes, and each case prompts for confirmation before acting. There is no `--all` flag — case names must always be listed explicitly.
+All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes. There is no `--all` flag — cases must be selected explicitly, either by name or with a `--prefix` bulk filter (the two are mutually exclusive). Under `--execute` you get a **single** confirmation covering the whole set (not one prompt per case).
 
 ```bash
 # Preview what each command would do (safe default — nothing is changed)
 python datamgr.py clean purge-bld my_case
 python datamgr.py clean purge-restarts my_case --keep 1
 python datamgr.py clean purge-hist my_case --models atm lnd
+python datamgr.py clean purge-hist --prefix exovolc --models all   # bulk: every matching case, all hist components
 python datamgr.py clean purge-logs my_case
 python datamgr.py clean move-hist my_case --models atm
 
-# Add --execute to actually perform the action (prompts yes/no per case)
+# Add --execute to actually perform the action (one yes/no confirmation for the whole batch)
 python datamgr.py clean purge-bld my_case --execute
 python datamgr.py clean purge-restarts my_case --keep 1 --execute
 python datamgr.py clean move-hist my_case --models atm --execute
@@ -303,7 +304,7 @@ python datamgr.py avg my_case --last 10 --execute     # average last 10 timestep
 | `runmgr.py restart` | Set `CONTINUE_RUN=FALSE`, apply `--set VAR=VALUE` `xmlchange` calls, then `sbatch`. Use to fix and rerun from scratch after a completed or failed run. Same gating as `continue`. |
 | `datamgr.py clean purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `datamgr.py clean purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
-| `datamgr.py clean purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/`. Requires `--keep-years N` or `--models` as a safety guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |
+| `datamgr.py clean purge-hist` | Delete history NetCDF files from `archive/<case>/<model>/hist/` (all history streams — `.h0.`, `.h1.`, … — for the targeted components). Requires `--keep-years N` or `--models` as a safety guard; `--models all` targets every history component (`rest/` excluded) and satisfies the guard. `--keep-years N` retains the N most recent model years (cutoff shared across all targeted components). |
 | `datamgr.py clean purge-logs` | Delete log files from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`. Both locations safe to purge after a run. `--no-archive-logs` / `--no-case-logs` skip one side. |
 | `datamgr.py clean move-hist` | Move history files to long-term storage, preserving directory structure. Source hist/ is left empty. |
 | `datamgr.py retire` | Retire a completed case (three tiers — see below). |

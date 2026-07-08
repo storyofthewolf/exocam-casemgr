@@ -128,6 +128,7 @@ python datamgr.py clean purge-bld my_case --execute
 python datamgr.py clean purge-bld my_case --logs-only --execute
 python datamgr.py clean purge-restarts my_case --keep 1 --execute
 python datamgr.py clean purge-hist my_case --models atm --execute
+python datamgr.py clean purge-hist --prefix exovolc --models all --execute  # bulk: all matching cases, all hist components
 python datamgr.py clean purge-logs my_case --execute
 python datamgr.py clean move-hist my_case --models atm --execute
 
@@ -366,7 +367,9 @@ Avg files (filenames containing `"avg"`) are always moved to long-term unconditi
 - `clean purge-logs` — delete logs from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`
 - `clean move-hist` — move history files to long-term storage
 
-All `clean` subcommands: preview mode by default, `--execute` required to act, confirmation prompt per case. Finer-grained than `retire` (which acts on a whole case); all take explicit case names or a `--prefix` bulk filter.
+All `clean` subcommands: preview mode by default, `--execute` required to act. Finer-grained than `retire` (which acts on a whole case); all take explicit case names **or** a `--prefix` bulk filter (mutually exclusive; enforced by `_require_cases`). Under `--execute` they print every case's preview, then ask a **single batch `[yes/no]`** covering the whole set (not one prompt per case) — driven by `_run_batch()` over `batch_confirm()`. In preview mode a single `preview_hint()` reminder prints after the last `[preview]` block.
+
+`--models` (on `purge-hist`, `purge-logs`, `move-hist`) accepts component names or the literal `all`, which expands to the verb's default component set (`HIST_MODELS` — `rest/` excluded). `purge-hist` additionally requires `--keep-years N` or `--models` (a guard against nuking all history by omission); `--models all` satisfies it.
 
 ---
 
@@ -397,8 +400,10 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 - `restart_sets(case, paths)` — list restart sets as `(date_str, path)` tuples, sorted
 
 **Safety helpers:**
-- `confirm(prompt, execute)` — show preview or prompt for yes/no
-- `_require_cases(all_cases, args)` — return cases from args, fail if none provided (no `--all` flag for destructive ops)
+- `confirm(prompt, execute)` — per-case gate: show preview or prompt for yes/no. Still exported; no longer used by `datamgr.py` clean verbs (they use `batch_confirm` instead).
+- `batch_confirm(action, n)` — single `[yes/no]` gate over a whole case set (`"<action> N case(s)? [yes/no]"`); EOF/interrupt → no. The clean-verb counterpart to runmgr's `_batch_confirm`.
+- `preview_hint(execute)` — print one `(preview only — rerun with --execute …)` reminder; no-op under `--execute`.
+- `_require_cases(all_cases, args)` — resolve cases from explicit `args.cases` **or** an `args.prefix` bulk filter (mutually exclusive; errors if neither given — no `--all` flag for destructive ops). Shared by every `datamgr.py` destructive verb including all `clean` verbs and `retire`.
 
 ---
 
