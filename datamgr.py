@@ -67,7 +67,7 @@ from manage_utils import (
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, _hist_keep_years_filter, restart_sets,
-    confirm, _require_cases,
+    confirm, preview_hint, _require_cases,
 )
 
 DEFAULT_USAGE_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -203,6 +203,8 @@ def cmd_purge_bld(args, paths):
                 shutil.rmtree(bld)
                 print(f"  {case}: bld/ deleted ({fmt_size(size)} freed)")
 
+    preview_hint(args.execute)
+
 
 # ---------------------------------------------------------------------------
 # Subcommand: clean purge-restarts
@@ -251,6 +253,8 @@ def cmd_purge_restarts(args, paths):
             for _, path in to_delete:
                 shutil.rmtree(path)
             print(f"    deleted {len(to_delete)} sets ({fmt_size(delete_size)} freed)")
+
+    preview_hint(args.execute)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +341,8 @@ def cmd_purge_hist(args, paths):
                     os.remove(os.path.join(hist, f))
             print(f"    deleted ({fmt_size(case_total)} freed)")
 
+    preview_hint(args.execute)
+
 
 # ---------------------------------------------------------------------------
 # Subcommand: clean purge-logs
@@ -408,6 +414,8 @@ def cmd_purge_logs(args, paths):
                     os.remove(fp)
             print(f"    deleted ({fmt_size(case_total)} freed)")
 
+    preview_hint(args.execute)
+
 
 # ---------------------------------------------------------------------------
 # Subcommand: clean move-hist
@@ -452,6 +460,8 @@ def cmd_move_hist(args, paths):
                 for f in files:
                     shutil.move(os.path.join(src, f), os.path.join(dst, f))
                 print(f"    moved {len(files)} file(s)")
+
+    preview_hint(args.execute)
 
 
 # ---------------------------------------------------------------------------
