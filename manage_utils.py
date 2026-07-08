@@ -223,6 +223,22 @@ def preview_hint(execute):
         print("\n  (preview only — rerun with --execute to perform these actions)")
 
 
+def batch_confirm(action, n):
+    """Single batch [yes/no] gate covering a whole case set.
+
+    The caller prints all per-case previews first, then calls this once before
+    acting on the entire batch — one confirmation instead of one per case.
+    `action` is a verb phrase; rendered as "<action> N case(s)? [yes/no]:".
+    Returns True to proceed. EOF/interrupt is treated as 'no'.
+    """
+    try:
+        answer = input(f"\n  {action} {n} case(s)? [yes/no]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer in ('yes', 'y')
+
+
 # ---------------------------------------------------------------------------
 # Case selection helper (destructive subcommands only)
 # ---------------------------------------------------------------------------

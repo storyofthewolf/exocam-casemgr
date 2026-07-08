@@ -67,7 +67,7 @@ from manage_utils import (
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, _hist_keep_years_filter, restart_sets,
-    confirm, preview_hint, _require_cases,
+    preview_hint, batch_confirm, _require_cases,
 )
 
 DEFAULT_USAGE_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -157,6 +157,32 @@ def load_usage_yaml(path):
 
 
 # ---------------------------------------------------------------------------
+# Batch execution for clean verbs
+# ---------------------------------------------------------------------------
+
+def _run_batch(actions, confirm_phrase, execute):
+    """Gate and run a list of deferred per-case delete/move callables.
+
+    `actions` is the list of zero-arg callables built during the preview pass
+    (each prints its own result). Ergonomics match retire / the runmgr
+    run-control verbs: preview by default, and under --execute a *single* batch
+    [yes/no] covering the whole set — not one prompt per case.
+    """
+    if not actions:
+        # Nothing actionable; previews (skips) already printed by the caller.
+        preview_hint(execute)
+        return
+    if not execute:
+        preview_hint(execute)
+        return
+    if not batch_confirm(confirm_phrase, len(actions)):
+        print("  Aborted.")
+        return
+    for do in actions:
+        do()
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: clean purge-bld
 # ---------------------------------------------------------------------------
 
@@ -179,6 +205,7 @@ def cmd_purge_bld(args, paths):
     if not cases:
         return
 
+    actions = []
     for case in cases:
         bld = os.path.join(rundir, case, 'bld')
         if not os.path.exists(bld):
@@ -192,18 +219,23 @@ def cmd_purge_bld(args, paths):
                     if f.endswith(('.o', '.mod')):
                         obj_files.append(os.path.join(dirpath, f))
             obj_size = sum(os.path.getsize(f) for f in obj_files)
-            action = f"delete {len(obj_files)} object files ({fmt_size(obj_size)}) from {bld}"
-            if confirm(action, args.execute):
+            print(f"  [preview] would: delete {len(obj_files)} object files "
+                  f"({fmt_size(obj_size)}) from {bld}")
+
+            def _do(case=case, obj_files=obj_files, obj_size=obj_size):
                 for f in obj_files:
                     os.remove(f)
                 print(f"  {case}: removed {len(obj_files)} object files ({fmt_size(obj_size)} freed)")
         else:
-            action = f"delete entire bld/ directory ({fmt_size(size)}) for {case}"
-            if confirm(action, args.execute):
+            print(f"  [preview] would: delete entire bld/ directory "
+                  f"({fmt_size(size)}) for {case}")
+
+            def _do(case=case, bld=bld, size=size):
                 shutil.rmtree(bld)
                 print(f"  {case}: bld/ deleted ({fmt_size(size)} freed)")
+        actions.append(_do)
 
-    preview_hint(args.execute)
+    _run_batch(actions, 'Delete build artifacts for', args.execute)
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +260,7 @@ def cmd_purge_restarts(args, paths):
     if not cases:
         return
 
+    actions = []
     for case in cases:
         sets = restart_sets(case, paths)
         if not sets:
@@ -248,13 +281,13 @@ def cmd_purge_restarts(args, paths):
         print(f"  {case}: {len(sets)} restart set(s) — keeping {keep_names}, "
               f"purging {len(to_delete)} ({fmt_size(delete_size)}): {delete_names}")
 
-        action = f"delete {len(to_delete)} restart set(s) ({fmt_size(delete_size)}) for {case}"
-        if confirm(action, args.execute):
+        def _do(case=case, to_delete=to_delete, delete_size=delete_size):
             for _, path in to_delete:
                 shutil.rmtree(path)
-            print(f"    deleted {len(to_delete)} sets ({fmt_size(delete_size)} freed)")
+            print(f"    {case}: deleted {len(to_delete)} sets ({fmt_size(delete_size)} freed)")
+        actions.append(_do)
 
-    preview_hint(args.execute)
+    _run_batch(actions, 'Delete restart sets for', args.execute)
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +325,7 @@ def cmd_purge_hist(args, paths):
     if not cases:
         return
 
+    actions = []
     for case in cases:
         archive_path = os.path.join(archive, case)
 
@@ -334,14 +368,14 @@ def cmd_purge_hist(args, paths):
         for hist, files, size in targets:
             print(f"    {hist}  ({len(files)} file(s), {fmt_size(size)})")
 
-        action = f"DELETE {fmt_size(case_total)} of history files for {case}"
-        if confirm(action, args.execute):
+        def _do(case=case, targets=targets, case_total=case_total):
             for hist, files, _ in targets:
                 for f in files:
                     os.remove(os.path.join(hist, f))
-            print(f"    deleted ({fmt_size(case_total)} freed)")
+            print(f"    {case}: deleted ({fmt_size(case_total)} freed)")
+        actions.append(_do)
 
-    preview_hint(args.execute)
+    _run_batch(actions, 'Delete history files for', args.execute)
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +407,7 @@ def cmd_purge_logs(args, paths):
     if not cases:
         return
 
+    actions = []
     for case in cases:
         case_total = 0
         targets = []  # (label, path, [files], size)
@@ -406,15 +441,15 @@ def cmd_purge_logs(args, paths):
         for label, path, files, size in targets:
             print(f"    {label}  ({len(files)} file(s), {fmt_size(size)})")
 
-        action = f"DELETE {fmt_size(case_total)} of log files for {case}"
-        if confirm(action, args.execute):
+        def _do(case=case, targets=targets, case_total=case_total):
             for label, path, files, _ in targets:
                 for f in files:
                     fp = f if os.path.isabs(f) else os.path.join(path, f)
                     os.remove(fp)
-            print(f"    deleted ({fmt_size(case_total)} freed)")
+            print(f"    {case}: deleted ({fmt_size(case_total)} freed)")
+        actions.append(_do)
 
-    preview_hint(args.execute)
+    _run_batch(actions, 'Delete log files for', args.execute)
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +480,7 @@ def cmd_move_hist(args, paths):
     if not cases:
         return
 
+    actions = []
     for case in cases:
         for model in models:
             src = os.path.join(archive, case, model, 'hist')
@@ -454,14 +490,15 @@ def cmd_move_hist(args, paths):
             dst = os.path.join(long_term, case, model, 'hist')
             print(f"  {case}/{model}/hist: {len(files)} file(s), {fmt_size(total)}")
             print(f"    -> {dst}")
-            action = f"move {len(files)} file(s) ({fmt_size(total)}) to {dst}"
-            if confirm(action, args.execute):
+
+            def _do(src=src, dst=dst, files=files):
                 os.makedirs(dst, exist_ok=True)
                 for f in files:
                     shutil.move(os.path.join(src, f), os.path.join(dst, f))
-                print(f"    moved {len(files)} file(s)")
+                print(f"    moved {len(files)} file(s) to {dst}")
+            actions.append(_do)
 
-    preview_hint(args.execute)
+    _run_batch(actions, 'Move history files for', args.execute)
 
 
 # ---------------------------------------------------------------------------
