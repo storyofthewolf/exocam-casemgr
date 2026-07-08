@@ -217,14 +217,27 @@ def confirm(prompt, execute):
 # ---------------------------------------------------------------------------
 
 def _require_cases(all_cases, args):
-    """Return cases from args.cases that exist on disk.
+    """Return cases to act on, from explicit args.cases or a --prefix filter.
 
-    Exits with an error if no case names are provided. There is no --all flag.
+    Selection is either explicit case names or a case-insensitive --prefix bulk
+    filter — the two are mutually exclusive. Exits with an error if neither is
+    given (there is no --all flag for destructive operations).
     """
     requested = getattr(args, 'cases', None) or []
-    if not requested:
-        sys.exit("ERROR: specify case name(s). No --all flag is provided for "
-                 "destructive operations — list cases explicitly.")
+    prefix_filter = getattr(args, 'prefix', None)
+
+    if requested and prefix_filter:
+        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
+    if not requested and not prefix_filter:
+        sys.exit("ERROR: specify case name(s) or --prefix. No --all flag is "
+                 "provided for destructive operations — select cases explicitly.")
+
+    if prefix_filter:
+        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
+        if not cases:
+            print(f"No cases matching prefix '{prefix_filter}'.")
+        return cases
+
     missing = [c for c in requested if c not in all_cases]
     if missing:
         print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)

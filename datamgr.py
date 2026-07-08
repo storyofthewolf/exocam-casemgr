@@ -800,31 +800,15 @@ def cmd_retire_case(args, paths):
         sys.exit("ERROR: --purge is mutually exclusive with --keep-config, "
                  "--keep-years, and --keep-restarts.")
 
-    cases_requested = args.cases
     prefix_filter = getattr(args, 'prefix', None)
-
-    if cases_requested and prefix_filter:
-        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
-    if not cases_requested and not prefix_filter:
-        sys.exit("ERROR: retire-case requires explicit case name(s).")
 
     registry_path = getattr(args, 'registry', None) or DEFAULT_RETIRE_REGISTRY
 
-    all_on_disk = discover_cases(paths)
-
-    if prefix_filter:
-        cases = [c for c in all_on_disk if c.lower().startswith(prefix_filter.lower())]
-        if not cases:
-            print(f"No cases matching prefix '{prefix_filter}'.")
-            return
-    else:
-        missing = [c for c in cases_requested if c not in all_on_disk]
-        if missing:
-            print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
-        cases = [c for c in cases_requested if c in all_on_disk]
-        if not cases:
-            print("No cases found on disk.")
-            return
+    # _require_cases enforces prefix/names mutual exclusion and the no-selection
+    # error; prefix_filter is retained below as the batch-vs-per-case mode flag.
+    cases = _require_cases(discover_cases(paths), args)
+    if not cases:
+        return
 
     # In prefix mode, build all plans first, print them all, then confirm once.
     # In non-prefix mode, confirm per-case after printing each plan.
@@ -1205,9 +1189,12 @@ def cmd_avg_hist(args, paths):
 # ---------------------------------------------------------------------------
 
 def _add_destructive_args(p):
-    """Add cases positional and --execute. No --all flag."""
+    """Add cases positional, --prefix bulk filter, and --execute. No --all flag."""
     p.add_argument('cases', nargs='*',
-                   help='Case name(s) to act on (required; no --all flag)')
+                   help='Case name(s) to act on (or use --prefix; no --all flag)')
+    p.add_argument('--prefix', metavar='STR', default=None,
+                   help='Case-insensitive prefix filter; cannot combine with '
+                        'explicit case names')
     p.add_argument('--execute', action='store_true',
                    help='Actually perform actions (default is preview only)')
 
@@ -1358,9 +1345,6 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_destructive_args(p_arc)
-    p_arc.add_argument('--prefix', metavar='STR', default=None,
-                       help='Case-insensitive prefix filter; retire all matched cases with a '
-                            'single batch confirmation (cannot combine with explicit case names)')
     p_arc.add_argument('--purge', action='store_true',
                        help='COMPLETE ERASURE: delete everything from cesm_scratch and write '
                             'nothing to long-term. Mutually exclusive with all --keep-* flags.')
