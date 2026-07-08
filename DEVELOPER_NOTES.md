@@ -124,12 +124,12 @@ python runmgr.py check --info                         # include CESM event log t
 python runmgr.py check --energy                       # include energy balance (TS/FSNT/FLNT)
 python runmgr.py continue case1 --set STOP_N=10 --set RESUBMIT=5  # CONTINUE_RUN=TRUE + xmlchange
 python runmgr.py restart case1 --set RUN_STARTDATE=0001-01-01 --execute  # CONTINUE_RUN=FALSE + xmlchange
-python runmgr.py cata purge-bld my_case --execute
-python runmgr.py cata purge-bld my_case --logs-only --execute
-python runmgr.py cata purge-restarts my_case --keep 1 --execute
-python runmgr.py cata purge-hist my_case --models atm --execute
-python runmgr.py cata purge-logs my_case --execute
-python runmgr.py cata move-hist my_case --models atm --execute
+python datamgr.py clean purge-bld my_case --execute
+python datamgr.py clean purge-bld my_case --logs-only --execute
+python datamgr.py clean purge-restarts my_case --keep 1 --execute
+python datamgr.py clean purge-hist my_case --models atm --execute
+python datamgr.py clean purge-logs my_case --execute
+python datamgr.py clean move-hist my_case --models atm --execute
 
 # SourceMods diff (before retiring)
 python diff.py my_case                                 # summary: MODIFIED / CASE ONLY per file
@@ -359,6 +359,15 @@ Avg files (filenames containing `"avg"`) are always moved to long-term unconditi
 - `report my_case` or `report --prefix STR`: prints only, never writes `usage.yaml`
 - `report --cached`: reads `usage.yaml`, no disk scan; incompatible with explicit case names
 
+**`clean` subcommand group (surgical output housekeeping):**
+- `clean purge-bld` — delete build objects from `rundir/<case>/bld/`
+- `clean purge-restarts` — trim old restart sets in `archive/<case>/rest/`
+- `clean purge-hist` — delete history files from `archive/<case>/<model>/hist/`
+- `clean purge-logs` — delete logs from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`
+- `clean move-hist` — move history files to long-term storage
+
+All `clean` subcommands: preview mode by default, `--execute` required to act, confirmation prompt per case. Finer-grained than `retire` (which acts on a whole case); all take explicit case names or a `--prefix` bulk filter.
+
 ---
 
 ## manage_utils.py — shared utilities
@@ -395,7 +404,7 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 
 ## runmgr.py — run lifecycle management
 
-Subcommands: `check`, `continue`, `restart`, and nested `cata` subcommand group.
+Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output purge/move lives in `datamgr.py clean` — see above.)
 
 **`check` subcommand:**
 - Probes SLURM for running jobs (`squeue --name <case> -h`)
@@ -425,15 +434,6 @@ Subcommands: `check`, `continue`, `restart`, and nested `cata` subcommand group.
 - Example: `--set RUN_STARTDATE=0001-01-01 --set RESUBMIT=9`
 - Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; others → soft-warn with per-case confirmation
 - Preview mode by default; `--execute` required to submit
-
-**`cata` subcommand group (case archival):**
-- `cata purge-bld` — delete build objects from `rundir/<case>/bld/`
-- `cata purge-restarts` — trim old restart sets in `archive/<case>/rest/`
-- `cata purge-hist` — delete history files from `archive/<case>/<model>/hist/`
-- `cata purge-logs` — delete logs from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`
-- `cata move-hist` — move history files to long-term storage
-
-All cata subcommands: preview mode by default, `--execute` required to act, confirmation prompt per case.
 
 ---
 

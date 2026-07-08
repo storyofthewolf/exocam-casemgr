@@ -19,19 +19,20 @@ every command only reports what it would do.
 
 SUBCOMMANDS
 -----------
-  report              Show disk usage per case; saves snapshot to usage.yaml
-                      (--cached prints last snapshot without scanning disk)
-  cata purge-bld      Delete build artifacts in rundir/<case>/bld/
-  cata purge-restarts Trim old restart sets in archive/<case>/rest/; keep last N
-  cata purge-hist     Delete history NetCDF files in archive/<case>/<model>/hist/
-  cata purge-logs     Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
-  cata move-hist      Move history files to long-term storage
-  avg                 Inspect or compute permanent time-averaged history files using ncra
-  retire              Retire a case to long-term storage, then delete from
-                      cesm_scratch. Three tiers:
-                        bare        write case.yaml tombstone only
-                        --keep-*    case.yaml + selected artifacts
-                        --purge     COMPLETE ERASURE (no record written)
+  report                Show disk usage per case; saves snapshot to usage.yaml
+                        (--cached prints last snapshot without scanning disk)
+  clean                 Surgical output housekeeping (subcommand group):
+                          purge-bld       Delete build artifacts in rundir/<case>/bld/
+                          purge-restarts  Trim old restart sets; keep last N
+                          purge-hist      Delete history NetCDF files
+                          purge-logs      Delete log files (archive + $CASE/logs/)
+                          move-hist       Move history files to long-term storage
+  avg                   Inspect or compute permanent time-averaged history files using ncra
+  retire                Retire a case to long-term storage, then delete from
+                        cesm_scratch. Three tiers:
+                          bare        write case.yaml tombstone only
+                          --keep-*    case.yaml + selected artifacts
+                          --purge     COMPLETE ERASURE (no record written)
 
 SAFETY
 ------
@@ -47,7 +48,7 @@ SAFETY
 
 Run any subcommand with --help for full options, e.g.:
   python datamgr.py report --help
-  python datamgr.py cata purge-bld --help
+  python datamgr.py clean purge-bld --help
   python datamgr.py retire --help
 """
 
@@ -71,6 +72,26 @@ from manage_utils import (
 
 DEFAULT_USAGE_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'usage.yaml')
+
+CLEAN_GROUP_DESC = """\
+clean — surgical output housekeeping for one or more cases
+
+Selectively purge or relocate individual data artifacts of a case, more
+finely than `retire` (which archives/erases a whole case). Every subcommand
+takes explicit case name(s) or a --prefix bulk filter, previews by default,
+and requires --execute to act.
+
+SUBCOMMANDS
+-----------
+  purge-bld       Delete build artifacts in rundir/<case>/bld/
+  purge-restarts  Trim old restart sets in archive/<case>/rest/; keep last N
+  purge-hist      Delete history NetCDF files in archive/<case>/<model>/hist/
+  purge-logs      Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/
+  move-hist       Move history files to long-term storage
+
+Run any subcommand with --help for full options, e.g.:
+  datamgr.py clean purge-bld --help
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +157,7 @@ def load_usage_yaml(path):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: cata purge-bld
+# Subcommand: clean purge-bld
 # ---------------------------------------------------------------------------
 
 def cmd_purge_bld(args, paths):
@@ -184,7 +205,7 @@ def cmd_purge_bld(args, paths):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: cata purge-restarts
+# Subcommand: clean purge-restarts
 # ---------------------------------------------------------------------------
 
 def cmd_purge_restarts(args, paths):
@@ -233,7 +254,7 @@ def cmd_purge_restarts(args, paths):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: cata purge-hist
+# Subcommand: clean purge-hist
 # ---------------------------------------------------------------------------
 
 def cmd_purge_hist(args, paths):
@@ -318,7 +339,7 @@ def cmd_purge_hist(args, paths):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: cata purge-logs
+# Subcommand: clean purge-logs
 # ---------------------------------------------------------------------------
 
 def cmd_purge_logs(args, paths):
@@ -389,7 +410,7 @@ def cmd_purge_logs(args, paths):
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: cata move-hist
+# Subcommand: clean move-hist
 # ---------------------------------------------------------------------------
 
 def cmd_move_hist(args, paths):
@@ -1239,19 +1260,20 @@ def build_parser():
                           help=f'Path to usage.yaml snapshot '
                                f'(default: usage.yaml next to this script)')
 
-    # ---- cata subcommand group ----
-    p_cata = sub.add_parser(
-        'cata',
+    # ---- clean subcommand group ----
+    p_clean = sub.add_parser(
+        'clean',
         help=argparse.SUPPRESS,
+        description=CLEAN_GROUP_DESC,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    cata_sub = p_cata.add_subparsers(dest='cata_command', metavar='CATA_SUBCOMMAND', help=argparse.SUPPRESS)
-    cata_sub.required = True
+    clean_sub = p_clean.add_subparsers(dest='clean_command', metavar='CLEAN_SUBCOMMAND')
+    clean_sub.required = True
 
-    # ---- cata purge-bld ----
-    p_bld = cata_sub.add_parser(
+    # ---- clean purge-bld ----
+    p_bld = clean_sub.add_parser(
         'purge-bld',
-        help=argparse.SUPPRESS,
+        help='Delete build artifacts in rundir/<case>/bld/',
         description=cmd_purge_bld.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1259,10 +1281,10 @@ def build_parser():
     p_bld.add_argument('--logs-only', action='store_true',
                        help='Remove only .o/.mod binary files, keep log files')
 
-    # ---- cata purge-restarts ----
-    p_rest = cata_sub.add_parser(
+    # ---- clean purge-restarts ----
+    p_rest = clean_sub.add_parser(
         'purge-restarts',
-        help=argparse.SUPPRESS,
+        help='Trim old restart sets in archive/<case>/rest/; keep last N',
         description=cmd_purge_restarts.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1270,10 +1292,10 @@ def build_parser():
     p_rest.add_argument('--keep', type=int, default=1, metavar='N',
                         help='Number of most-recent restart sets to keep (default: 1)')
 
-    # ---- cata purge-hist ----
-    p_hist = cata_sub.add_parser(
+    # ---- clean purge-hist ----
+    p_hist = clean_sub.add_parser(
         'purge-hist',
-        help=argparse.SUPPRESS,
+        help='Delete history NetCDF files in archive/<case>/<model>/hist/',
         description=cmd_purge_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1284,10 +1306,10 @@ def build_parser():
                         help='Keep files from the N most recent model years; '
                              'cutoff is shared across all targeted components')
 
-    # ---- cata purge-logs ----
-    p_logs = cata_sub.add_parser(
+    # ---- clean purge-logs ----
+    p_logs = clean_sub.add_parser(
         'purge-logs',
-        help=argparse.SUPPRESS,
+        help='Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/',
         description=cmd_purge_logs.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1298,10 +1320,10 @@ def build_parser():
     p_logs.add_argument('--no-case-logs', action='store_true', dest='no_case_logs',
                         help='Skip $CASE/logs/ (only purge archive logs)')
 
-    # ---- cata move-hist ----
-    p_mvhist = cata_sub.add_parser(
+    # ---- clean move-hist ----
+    p_mvhist = clean_sub.add_parser(
         'move-hist',
-        help=argparse.SUPPRESS,
+        help='Move history files to long-term storage',
         description=cmd_move_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1365,7 +1387,7 @@ def build_parser():
 # Entry point
 # ---------------------------------------------------------------------------
 
-CATA_COMMANDS = {
+CLEAN_COMMANDS = {
     'purge-bld':      cmd_purge_bld,
     'purge-restarts': cmd_purge_restarts,
     'purge-hist':     cmd_purge_hist,
@@ -1392,8 +1414,8 @@ def main():
         print(f"WARNING: paths not configured: {', '.join(missing_paths)}. "
               f"Set them in config_registry.yaml.", file=sys.stderr)
 
-    if args.command == 'cata':
-        CATA_COMMANDS[args.cata_command](args, paths)
+    if args.command == 'clean':
+        CLEAN_COMMANDS[args.clean_command](args, paths)
     else:
         COMMANDS[args.command](args, paths)
 

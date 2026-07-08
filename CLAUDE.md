@@ -41,7 +41,7 @@ CASE directories on HPC
 
 cases/ + rundir/ + archive/ on HPC
        ↓
-  datamgr.py cata             ← surgical output housekeeping: purge-bld, purge-restarts,
+  datamgr.py clean            ← surgical output housekeeping: purge-bld, purge-restarts,
   │                             purge-hist, purge-logs, move-hist
   datamgr.py                  ← disk reporting, averaging, retirement lifecycle
   diff.py                    ← SourceMods diff before retiring
@@ -53,7 +53,7 @@ cases/ + rundir/ + archive/ on HPC
 - **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
-- **`datamgr.py`** — case data management: `report` (disk survey), `cata` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
+- **`datamgr.py`** — case data management: `report` (disk survey), `clean` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
 - **`manage_utils.py`** — shared utility layer imported by `datamgr.py`, `runmgr.py`, and `build.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `_require_cases()`, `submit_case()` (the single `sbatch` code path, shared by `runmgr.py submit` and `build.py make --send-it`)
 - **`runmgr.py`** — run control tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `xml` subcommand (ad-hoc `--query VAR` / `--change VAR=VALUE` over a case set — no CONTINUE_RUN forcing, no sbatch; the only way to inspect/edit XML without launching a run); `submit` subcommand (sbatch a built case as-is, no xmlchange — the launch step after `build.py make`; requires `<case>.run`); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch). Shared helpers `_resolve_cases()` (explicit-names-or-`--prefix`, no `--all`), `_parse_set_pairs()`, `_apply_xmlchange()` (the single `./xmlchange` code path), and `_probe_status()` (CaseStatus + SLURM probe) back all the run-control subcommands.
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
@@ -64,7 +64,7 @@ cases/ + rundir/ + archive/ on HPC
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
 - `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt). `make` **builds but does not submit** — submission is a separate step (`runmgr.py submit`, or `make --send-it` to fold both together). The run verbs are distinct: `submit` (launch a built case as-is, no xmlchange), `continue` (CONTINUE_RUN=TRUE), `restart` (CONTINUE_RUN=FALSE + fixes). `xml` is the odd one out — it changes/queries XML but **never** launches a job, so it has no `submit`/`continue`/`restart` semantics; on `--change --execute` it uses the same single batch `[yes/no]` gate as the other verbs (RUNNING/RESUBMITTED cases are flagged in the preview, not hard-blocked). See "Run-control gating" below.
 - `build.py make` accepts explicit `NAME` positionals (bare case name or full `*_build.sh` filename) to run a named subset, in addition to `--prefix`. If neither `NAME` args nor `--prefix` nor `--all` is given, it just **lists** the scripts in `scripts-dir` and exits — it does not run anything. `--all` is required to intentionally run every script in `scripts-dir` at once, mirroring the "no implicit --all" convention used by destructive `datamgr.py`/`runmgr.py` subcommands.
-- All destructive `datamgr.py` operations (including `cata`) default to **preview mode**; `--execute` required to act.
+- All destructive `datamgr.py` operations (including `clean`) default to **preview mode**; `--execute` required to act.
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics (grep/sed/echo) rather than plain append, to avoid duplicate keys.
 - `exort_pkg` ending in `*` signals custom RT copied into SourceMods. In newcase mode this is a validation error; in clone mode it is allowed and triggers `_build_usr_src_fix_block` to rewrite the inherited `-usr_src` path.
@@ -234,7 +234,7 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 ## Design invariants — do not violate
 
 - `parse_utils.py` must remain free of filesystem side effects. It reads files via paths passed to it; it never discovers or writes files itself.
-- All destructive `datamgr.py` operations (including `cata`) require `--execute`. Without it, every command only prints what it would do.
+- All destructive `datamgr.py` operations (including `clean`) require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations in either tool. Cases must be named explicitly.
 - `build.py generate` generates scripts but never executes them. `build.py make` runs them (with confirmation prompt).
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
