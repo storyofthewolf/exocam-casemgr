@@ -280,10 +280,10 @@ def cmd_purge_hist(args, paths):
         sys.exit(
             "ERROR: purge-hist requires --keep-years N or --models to prevent accidental\n"
             "       deletion of all history files. To explicitly target all components,\n"
-            "       pass: --models " + " ".join(HIST_MODELS)
+            "       pass: --models all   (or list them: --models " + " ".join(HIST_MODELS) + ")"
         )
 
-    models = args.models if args.models else HIST_MODELS
+    models = _resolve_models(args, HIST_MODELS)
     cases  = _require_cases(discover_cases(paths), args)
     if not cases:
         return
@@ -362,7 +362,7 @@ def cmd_purge_logs(args, paths):
         sys.exit("ERROR: --no-archive-logs and --no-case-logs together leave "
                  "nothing to do.")
 
-    models = args.models if args.models else HIST_MODELS
+    models = _resolve_models(args, HIST_MODELS)
     cases  = _require_cases(discover_cases(paths), args)
     if not cases:
         return
@@ -432,7 +432,7 @@ def cmd_move_hist(args, paths):
         sys.exit("ERROR: long_term path not configured. Set paths.long_term in "
                  "config_registry.yaml or use --long-term.")
 
-    models = args.models if args.models else HIST_MODELS
+    models = _resolve_models(args, HIST_MODELS)
     cases  = _require_cases(discover_cases(paths), args)
     if not cases:
         return
@@ -1102,7 +1102,7 @@ def cmd_avg_hist(args, paths):
             print("No cases found on disk.")
             return
 
-    models = args.models if args.models else AVG_HIST_DEFAULT_MODELS
+    models = _resolve_models(args, AVG_HIST_DEFAULT_MODELS)
 
     # --- --info mode ---
     if has_info:
@@ -1201,8 +1201,22 @@ def _add_destructive_args(p):
 
 def _add_models_arg(p, help_prefix='Restrict to these model components'):
     p.add_argument('--models', nargs='+', metavar='MODEL',
-                   choices=ARCHIVE_MODELS,
-                   help=f'{help_prefix} (choices: {", ".join(ARCHIVE_MODELS)})')
+                   choices=ARCHIVE_MODELS + ['all'],
+                   help=f'{help_prefix} (choices: {", ".join(ARCHIVE_MODELS)}; '
+                        f'or "all" for every component this command targets by default)')
+
+
+def _resolve_models(args, default):
+    """Resolve --models into a concrete component list.
+
+    Returns `default` when --models is omitted or given as the literal "all"
+    (so `--models all` explicitly targets every component the verb handles by
+    default — for purge-hist/move-hist that is HIST_MODELS, i.e. rest/ excluded).
+    Otherwise returns the explicit component list as given.
+    """
+    if not args.models or args.models == ['all']:
+        return default
+    return args.models
 
 
 # ---------------------------------------------------------------------------
