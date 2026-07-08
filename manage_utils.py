@@ -206,7 +206,7 @@ def restart_sets(case, paths):
 def confirm(prompt, execute):
     """Return True if the action should proceed."""
     if not execute:
-        print(f"  [preview] would: {prompt}")
+        print(f"  [preview] would: {prompt}  (rerun with --execute to perform this)")
         return False
     answer = input(f"  Confirm: {prompt} [yes/no]: ").strip().lower()
     return answer == 'yes'
