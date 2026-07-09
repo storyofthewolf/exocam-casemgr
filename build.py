@@ -21,7 +21,8 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import compute_pstd_bar
-from manage_utils import submit_case
+from manage_utils import (submit_case, load_paths, discover_cases,
+                          _require_cases, batch_confirm, preview_hint)
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {
@@ -471,6 +472,96 @@ def render_exoplanet_mod(template_path, spec, is_clone=False):
             lines_out.append(line)
 
     return ''.join(lines_out)
+
+
+# ---------------------------------------------------------------------------
+# In-place SourceMods patching (build.py patch)
+# ---------------------------------------------------------------------------
+#
+# `generate` renders exoplanet_mod.F90 from a template into a fresh build
+# script whose first act is create_newcase/create_clone -- running it against a
+# live case would recreate it and destroy the run. `patch` is the in-place
+# counterpart: it edits <case>/SourceMods/src.share/exoplanet_mod.F90 directly
+# and recompiles via <case>.build. exo_convect_plim and friends are Fortran
+# `parameter` constants baked into the binary, so there is no xmlchange or
+# user_nl path that could change them -- editing + rebuilding is the only way.
+#
+# Per project convention: no clean_build. Changing a parameter in a file that
+# already exists under SourceMods only requires <case>.build.
+
+EXO_MOD_RELPATH = os.path.join('SourceMods', 'src.share', 'exoplanet_mod.F90')
+
+
+def patch_exoplanet_mod(exo_path, updates):
+    """Rewrite `parameter ::` lines in an existing exoplanet_mod.F90 in place.
+
+    `updates` maps param name -> new value. Only active (uncommented) parameter
+    lines are touched, using the same regex and value formatter as
+    render_exoplanet_mod, so declaration spacing and trailing !! comments are
+    preserved exactly.
+
+    Returns (new_text, applied) where `applied` maps param name -> (old_rhs,
+    new_rhs) for each line actually rewritten. Params in `updates` that never
+    matched a line are absent from `applied` -- the caller reports those.
+    """
+    applied = {}
+    lines_out = []
+    with open(exo_path) as f:
+        for line in f:
+            stripped = line.lstrip()
+            if stripped.startswith('!') or not stripped.strip():
+                lines_out.append(line)
+                continue
+
+            m = _RE_PARAM_LINE.match(line)
+            if m:
+                param_name = m.group(2)
+                if param_name in updates:
+                    prefix  = m.group(1)
+                    spaces  = m.group(3)
+                    old_rhs = m.group(4)
+                    suffix  = m.group(5)
+
+                    # group(4) is [^!]+, so it greedily absorbs the run of
+                    # spaces separating the value from a trailing !! comment.
+                    # Hand that gap back to the suffix, or the rewritten line
+                    # reads `5.0_r8!! Sets the minimum...`.
+                    gap = old_rhs[len(old_rhs.rstrip()):]
+                    new_val = _fortran_value(param_name, updates[param_name])
+                    applied[param_name] = (old_rhs.strip(), new_val)
+                    lines_out.append(
+                        f"{prefix}{param_name}{spaces}{new_val}{gap}{suffix}\n")
+                    continue
+
+            lines_out.append(line)
+
+    return ''.join(lines_out), applied
+
+
+def rebuild_case(case_dir, case_name):
+    """Run ./<case_name>.build in case_dir. Returns (ok, detail).
+
+    No clean_build: for parameters in a file already present under SourceMods,
+    the CESM dependency scan picks up the change and recompiles dependents.
+    """
+    script = f'./{case_name}.build'
+    if not os.path.exists(os.path.join(case_dir, f'{case_name}.build')):
+        return False, f'{case_name}.build not found'
+    try:
+        result = subprocess.run(
+            [script],
+            cwd=case_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+        )
+    except OSError as e:
+        return False, f'build failed to launch: {e}'
+    if result.returncode != 0:
+        tail = (result.stdout or '').strip().splitlines()
+        tail = tail[-1] if tail else 'no output'
+        return False, f'build failed (exit {result.returncode}): {tail}'
+    return True, 'built'
 
 
 def _build_nl_append_block(spec):
@@ -1397,6 +1488,126 @@ def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
     print(f"  {submitted} job{'s' if submitted != 1 else ''} submitted.")
 
 
+def _parse_patch_pairs(items):
+    """Parse ['VAR=VALUE', ...] into an ordered dict, validating against
+    EXO_PARAMS and PARAM_TYPES. Exits on unknown param, bad format, or type
+    mismatch -- the same type tags --verify enforces on the matrix."""
+    updates = {}
+    for item in (items or []):
+        if '=' not in item:
+            sys.exit(f"ERROR: --set requires VAR=VALUE format, got: {item!r}")
+        var, _, val = item.partition('=')
+        var, val = var.strip(), val.strip()
+        if not var:
+            sys.exit(f"ERROR: empty variable name in --set {item!r}")
+        if var not in EXO_PARAMS:
+            sys.exit(f"ERROR: {var!r} is not a known exoplanet_mod parameter "
+                     f"(not in EXO_PARAMS).")
+        type_tag = PARAM_TYPES.get(var)
+        if type_tag:
+            reason = _check_type(val, type_tag)
+            if reason:
+                sys.exit(f"ERROR: --set {var}={val!r}: {reason}")
+        updates[var] = val
+    if not updates:
+        sys.exit("ERROR: patch requires at least one --set VAR=VALUE.")
+    return updates
+
+
+def cmd_patch(args):
+    # Validate the flags before touching the registry, so a malformed --set
+    # reports the real problem rather than a missing-caseroot error.
+    updates = _parse_patch_pairs(args.set)
+
+    paths = load_paths(args)
+    caseroot = paths.get('caseroot', '')
+    if not caseroot:
+        sys.exit("ERROR: caseroot path not configured.")
+
+    cases = _require_cases(discover_cases(paths), args)
+    if not cases:
+        return
+
+    # Gas bars are the only EXO_PARAMS coupled to another rendered value:
+    # exo_n2bar was computed at generate time as target - sum(gases). Patching a
+    # gas in place leaves n2bar fixed, so total surface pressure shifts by the
+    # delta. Harmless at ppm (the model self-adjusts); not at 0.1 bar. Warn with
+    # the magnitude rather than refusing -- the caller decides.
+    gas_touched = [g for g in updates if g in GAS_BAR_PARAMS]
+    if gas_touched:
+        print("  WARNING: patching gas bar param(s): " + ', '.join(gas_touched))
+        print("           exo_n2bar is NOT recomputed; total surface pressure "
+              "shifts by the delta.")
+        print("           Safe at trace (ppm) magnitudes. For a composition "
+              "change, regenerate instead.\n")
+
+    from runmgr import _probe_status
+
+    actions, flagged = [], []
+    for case in cases:
+        case_dir = os.path.join(caseroot, case)
+        exo_path = os.path.join(case_dir, EXO_MOD_RELPATH)
+        if not os.path.exists(exo_path):
+            print(f"  {case}: ERROR: not found: {EXO_MOD_RELPATH}")
+            continue
+
+        new_text, applied = patch_exoplanet_mod(exo_path, updates)
+        missing = [p for p in updates if p not in applied]
+        if missing:
+            print(f"  {case}: ERROR: no active parameter line for: "
+                  f"{', '.join(missing)}")
+            continue
+
+        status = _probe_status(case_dir, case)
+        note = ''
+        if status in ('RUNNING', 'RUNNING?'):
+            note = f'  <- {status}: job is live, recompiling swaps the binary mid-run'
+            flagged.append(case)
+        elif status == 'RESUBMITTED':
+            note = f'  <- {status}: queued; next segment picks up the new binary'
+            flagged.append(case)
+
+        changes = ', '.join(f"{p}: {o} -> {n}" for p, (o, n) in applied.items())
+        print(f"  [{'patch' if args.execute else 'preview'}] {case}: {changes}{note}")
+        actions.append((case, case_dir, exo_path, new_text))
+
+    if not actions:
+        return
+    if not args.execute:
+        preview_hint(args.execute)
+        return
+
+    if flagged:
+        print(f"\n  {len(flagged)} case(s) have an active or queued job "
+              f"(see flags above).")
+    if not batch_confirm(f"Patch exoplanet_mod.F90 and rebuild", len(actions)):
+        print("Aborted.")
+        return
+
+    built = 0
+    failed = []
+    for case, case_dir, exo_path, new_text in actions:
+        with open(exo_path, 'w') as f:
+            f.write(new_text)
+        ok, detail = rebuild_case(case_dir, case)
+        print(f"  {case}: {'OK' if ok else 'ERROR'}: {detail}")
+        if ok:
+            built += 1
+        else:
+            failed.append(case)
+
+    print(f"\n  Patched {', '.join(updates)} in {len(actions)} case(s); "
+          f"{built} rebuilt.")
+    if failed:
+        # The F90 edit landed even where the build failed -- rerunning
+        # <case>.build after fixing the cause is enough; no re-patch needed.
+        print(f"  {len(failed)} build(s) FAILED: {', '.join(failed)}")
+        print("  The source edit was written; rerun <case>.build once the "
+              "build error is resolved.")
+    print("  NOTE: experiment matrices are NOT updated -- edit the matrix "
+          "`base:` block to keep future regenerates consistent.")
+
+
 def main():
     parser = argparse.ArgumentParser(description='ExoCAM build script generator and runner')
     parser.add_argument('--scripts-dir', default='build_scripts',
@@ -1425,12 +1636,30 @@ def main():
     p_make.add_argument('--send-it', action='store_true',
                         help='Submit each successfully built case via sbatch after building')
 
+    p_patch = sub.add_parser(
+        'patch',
+        help='Edit exoplanet_mod.F90 in existing case(s) in place and rebuild')
+    p_patch.add_argument('cases', nargs='*', metavar='CASE',
+                         help='Explicit case names to patch')
+    p_patch.add_argument('--prefix', metavar='PREFIX',
+                         help='Patch all cases whose name starts with PREFIX '
+                              '(case-insensitive); cannot be combined with CASE names')
+    p_patch.add_argument('--set', action='append', metavar='VAR=VALUE',
+                         help='exoplanet_mod parameter to set; repeatable')
+    p_patch.add_argument('--execute', action='store_true',
+                         help='Apply the edit and rebuild (default: preview only)')
+    p_patch.add_argument('--caseroot', metavar='DIR', help='Override paths.caseroot')
+    p_patch.add_argument('--config-registry', dest='config_registry',
+                         metavar='FILE', help='Override config_registry.yaml path')
+
     args = parser.parse_args()
 
     if args.command == 'generate':
         cmd_generate(args)
     elif args.command == 'make':
         cmd_make(args)
+    elif args.command == 'patch':
+        cmd_patch(args)
 
 
 if __name__ == '__main__':
