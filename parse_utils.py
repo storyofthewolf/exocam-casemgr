@@ -59,7 +59,7 @@ def _coerce_nl_value(s):
     """
     Coerce a namelist string value to the appropriate Python type.
     - Fortran logicals (.true./.false.) -> Fortran-style strings '.true.'/'.false.'
-      (not Python bool, so _nl_append_lines in build.py emits correct namelist syntax)
+      (not Python bool, so _nl_upsert_lines in build.py emits correct namelist syntax)
     - Integer strings -> Python int
     - Float strings -> Python float
     - Anything else -> str (unchanged)

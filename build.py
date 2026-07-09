@@ -83,6 +83,14 @@ PARAM_TYPES = {
 }
 
 
+# Approximate lower bound on exo_convect_plim (Pa) when ozone is present. With
+# a stratospheric inversion, convection must be cut off near the tropopause;
+# allowing it higher is a numerical stability hazard. Values above this are
+# safe (convection is simply clamped lower), so this is a floor, not an
+# equality. Without ozone the parameter is freely tunable.
+OZONE_CONVECT_PLIM_FLOOR = 4.0e3
+
+
 def _check_type(value, type_tag):
     """Return None if value matches type_tag, else a short reason string."""
     if type_tag == 'bool':
@@ -160,6 +168,79 @@ NCFILE_FIELDS = [
 ]
 
 
+def _verify_o2_ozone(spec):
+    """Warn on an O2 / ozone combination that is scientifically contradictory.
+
+    Ozone is photochemically produced from O2, so the two must agree:
+
+      exo_o2bar == 0.0  ->  prescribed_ozone_file must be a zeroVMR file
+      exo_o2bar >  0.0  ->  prescribed_ozone_file must NOT be a zeroVMR file
+
+    Keyed on the presence of the substring 'zeroVMR' in the filename, which is
+    the canonical marker for a no-ozone run. The stock ozone filename is
+    deliberately not matched against -- that tag drifts between input datasets,
+    whereas the zeroVMR convention is stable.
+
+    This is a WARNING, not a failure: it flags a combination the user should
+    justify, and --verify does not presume to know the science. Returns a list
+    of warning strings (empty when consistent, or when either side is absent --
+    a silent matrix inherits from the config template, which is not inspected).
+    """
+    if 'exo_o2bar' not in spec:
+        return []
+    nl_cam = spec.get('nl_cam_params') or {}
+    ozone_file = nl_cam.get('prescribed_ozone_file')
+    if not ozone_file:
+        return []
+
+    try:
+        o2 = float(spec['exo_o2bar'])
+    except (TypeError, ValueError):
+        return []  # a bad type is already reported by the type check
+
+    is_zero_vmr = 'zeroVMR' in str(ozone_file)
+
+    if o2 == 0.0 and not is_zero_vmr:
+        return [f"o2/ozone: exo_o2bar = 0.0 (no O2) but prescribed_ozone_file = "
+                f"'{ozone_file}' supplies ozone. Ozone is produced from O2 -- "
+                f"expected a zeroVMR file. Verify this is intended."]
+    if o2 > 0.0 and is_zero_vmr:
+        return [f"o2/ozone: exo_o2bar = {o2} (O2 present) but "
+                f"prescribed_ozone_file = '{ozone_file}' is a zeroVMR (no ozone) "
+                f"file. Verify this is intended."]
+    return []
+
+
+def _verify_ozone_convect_plim(spec):
+    """Warn when ozone is present but exo_convect_plim sits below its floor.
+
+    With ozone the stratospheric temperature inversion demands that convection
+    be cut off around the tropopause; letting it reach higher is a numerical
+    stability hazard. 4.e3 Pa is the established approximate floor. Values at or
+    above it are fine (convection is merely clamped lower). Only the matrix is
+    inspected -- if it is silent on either param, the config template supplies
+    the value and no warning is issued.
+    """
+    if 'exo_convect_plim' not in spec:
+        return []
+    nl_cam = spec.get('nl_cam_params') or {}
+    ozone_file = nl_cam.get('prescribed_ozone_file')
+    if not ozone_file or 'zeroVMR' in str(ozone_file):
+        return []  # no ozone -> exo_convect_plim is free to be tuned
+
+    try:
+        plim = float(spec['exo_convect_plim'])
+    except (TypeError, ValueError):
+        return []
+
+    if plim < OZONE_CONVECT_PLIM_FLOOR:
+        return [f"ozone/plim: prescribed_ozone_file supplies ozone but "
+                f"exo_convect_plim = {plim} is below the ~{OZONE_CONVECT_PLIM_FLOOR:g} Pa "
+                f"floor; convection reaching the stratosphere is a numerical "
+                f"stability hazard."]
+    return []
+
+
 def verify_case(spec, registry, paths):
     """Coherency check for a single resolved case spec.
 
@@ -170,11 +251,15 @@ def verify_case(spec, registry, paths):
          live, so a var-free path whose file (or directory) is absent is a hard
          FAILURE. Only paths that still contain an unexpanded $VAR (env var not
          set) are SKIPPED — those genuinely can't be checked.
+      3. Consistency warnings: O2 vs ozone, and ozone vs exo_convect_plim.
+         These are questions, not verdicts — they never fail a case.
 
-    Returns (errors, notes): both lists of strings. errors are hard failures;
-    notes are informational (skipped/unresolvable file checks).
+    Returns (errors, warnings, notes): all lists of strings. errors are hard
+    failures; warnings flag combinations to justify; notes are informational
+    (skipped/unresolvable file checks).
     """
     errors = []
+    warnings = []
     notes = []
 
     # 1. Type checks
@@ -213,7 +298,11 @@ def verify_case(spec, registry, paths):
             else:
                 errors.append(f"nc: {field}: file not found: {local}")
 
-    return errors, notes
+    # 3. Scientific consistency warnings (never fail the case)
+    warnings.extend(_verify_o2_ozone(spec))
+    warnings.extend(_verify_ozone_convect_plim(spec))
+
+    return errors, warnings, notes
 
 
 # Fortran parameter line pattern for replacement
@@ -564,37 +653,20 @@ def rebuild_case(case_dir, case_name):
     return True, 'built'
 
 
-def _build_nl_append_block(spec):
-    """
-    Return shell lines to append carma_params, volc_params, and/or nl_cam_params
-    to user_nl_cam (and cice_params to user_nl_cice) via echo >>. Returns an
-    empty list if none are present.
-    Used by generate_shell_script (newcase path) where the namelist is a fresh
-    template that never contains these entries, so plain append is correct.
-    """
-    lines = []
-    for group_key in ('carma_params', 'volc_params', 'nl_cam_params'):
-        params = spec.get(group_key)
-        if params:
-            lines.append(f"")
-            lines.append(f"# Append {group_key} to user_nl_cam")
-            lines.extend(_nl_append_lines(params))
-    cice_params = spec.get('cice_params')
-    if cice_params:
-        lines.append(f"")
-        lines.append(f"# Append cice_params to user_nl_cice")
-        lines.extend(_nl_append_lines(cice_params, target='user_nl_cice'))
-    return lines
-
-
 def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     """
     Return shell lines that upsert key = value entries into a namelist file
     (default user_nl_cam; pass target='user_nl_cice' etc. for others).
     For each key: replace the existing line if present, otherwise append.
-    Used by generate_clone_script because create_clone copies the namelist
-    verbatim from the source case, so appending a key that already exists
-    would create duplicate entries.
+    Guarantees exactly one line per key -- never a duplicate.
+
+    Type dispatch via _format_nl_value:
+    - bool        -> .true. / .false.  (unquoted Fortran logical)
+    - int/float   -> bare number       (no quotes)
+    - str logical -> .true. / .false.  (unquoted, passed through)
+    - str numeric -> bare number       (unquoted, coerced)
+    - str other   -> 'value'           (single-quoted, e.g. file paths)
+    - list/tuple  -> comma-separated array, each element by the rules above
     """
     lines = []
     for key, val in param_dict.items():
@@ -619,8 +691,15 @@ def _build_nl_upsert_block(spec):
     Return shell lines to upsert carma_params, volc_params, and/or nl_cam_params
     into user_nl_cam (and cice_params into user_nl_cice) using replace-or-append
     semantics.
-    Used by generate_clone_script where the namelist already contains entries
-    inherited from the clone source.
+
+    Used by BOTH build paths. Clone needs it because create_clone copies the
+    namelist verbatim from the source case. Newcase needs it too: the namelist
+    copied from ${EXOCAM}/.../${CONFIG_TYPE}/namelist_files/ is not empty --
+    cam_mixed_fv ships prescribed_ozone_* set to modern Earth. A plain append
+    there would leave two lines for the same key, and the resulting value would
+    depend on how the namelist reader treats duplicates. Upsert guarantees one
+    line per key, so a matrix nl_cam_params entry always overrides the shipped
+    default rather than racing it.
     """
     lines = []
     for group_key in ('carma_params', 'volc_params', 'nl_cam_params'):
@@ -691,25 +770,6 @@ def _format_nl_scalar(val):
         pass
     # Genuine string (file path etc.) — single-quote it
     return f"'{s.replace(chr(39), chr(92) + chr(39))}'"
-
-
-def _nl_append_lines(param_dict, target='user_nl_cam'):
-    """
-    Return a list of shell lines that append key = value entries to a namelist
-    file (default user_nl_cam; pass target='user_nl_cice' etc. for others).
-    Type dispatch via _format_nl_value:
-    - bool        -> .true. / .false.  (unquoted Fortran logical)
-    - int/float   -> bare number       (no quotes)
-    - str logical -> .true. / .false.  (unquoted, passed through)
-    - str numeric -> bare number       (unquoted, coerced)
-    - str other   -> 'value'           (single-quoted, e.g. file paths)
-    - list/tuple  -> comma-separated array, each element by the rules above
-    """
-    lines = []
-    for key, val in param_dict.items():
-        nl_val = _format_nl_value(val)
-        lines.append(f'echo "{key} = {nl_val}" >> {target}')
-    return lines
 
 
 def _build_clm_update_block(spec, paths):
@@ -988,7 +1048,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "",
         "# Update ncdata path in user_nl_cam",
         f"sed -i \"s|ncdata = '.*'|ncdata = '{ic_path}'|\" user_nl_cam",
-        *_build_nl_append_block(spec),
+        *_build_nl_upsert_block(spec),
         *_build_clm_update_block(spec, paths),
         *_build_docn_update_block(spec),
         "",
@@ -1239,6 +1299,7 @@ def cmd_generate(args):
     generated = []
     errors_total = 0
     verify_failed = 0
+    verify_warned = 0
 
     for case_def in cases:
         case_name = case_def.get('name')
@@ -1257,23 +1318,30 @@ def cmd_generate(args):
             # Type + nc-file checks run first: they degrade gracefully on bad
             # input, whereas validate_case coerces values to float and would
             # raise on a mistyped numeric. Only run validate_case if types pass.
-            v_errors, v_notes = verify_case(spec, registry, paths)
+            v_errors, v_warnings, v_notes = verify_case(spec, registry, paths)
             if not v_errors:
                 try:
                     v_errors = validate_case(spec, registry)
                 except (ValueError, TypeError) as exc:
                     v_errors = [f"validation crashed (likely a bad value): {exc}"]
+            if v_warnings:
+                verify_warned += 1
             if v_errors:
                 verify_failed += 1
                 print(f"\nFAIL: {case_name}")
                 for e in v_errors:
                     print(f"  - {e}")
-                for n in v_notes:
-                    print(f"  · {n}")
             else:
-                print(f"OK:   {case_name}" + (f"  ({len(v_notes)} skipped)" if v_notes else ""))
-                for n in v_notes:
-                    print(f"  · {n}")
+                tags = []
+                if v_warnings:
+                    tags.append(f"{len(v_warnings)} warning(s)")
+                if v_notes:
+                    tags.append(f"{len(v_notes)} skipped")
+                print(f"OK:   {case_name}" + (f"  ({', '.join(tags)})" if tags else ""))
+            for w in v_warnings:
+                print(f"  ! {w}")
+            for n in v_notes:
+                print(f"  · {n}")
             continue
 
         errors = validate_case(spec, registry)
@@ -1333,8 +1401,13 @@ def cmd_generate(args):
 
     if verify_only:
         named = sum(1 for c in cases if c.get('name'))
-        print(f"\nVerify: {named - verify_failed} OK, {verify_failed} failed "
-              f"of {named} case(s). No scripts generated.")
+        summary = (f"\nVerify: {named - verify_failed} OK, {verify_failed} failed "
+                   f"of {named} case(s).")
+        if verify_warned:
+            # Warnings are questions for the user, not verdicts — they never
+            # affect the exit code.
+            summary += f" {verify_warned} case(s) raised warnings."
+        print(summary + " No scripts generated.")
         if verify_failed:
             sys.exit(1)
         return
