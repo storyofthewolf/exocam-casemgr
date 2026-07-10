@@ -32,6 +32,10 @@ experiment_matrix.yaml
 
 CASE directories on HPC
        ↓
+  build.py patch             ← in-place exoplanet_mod.F90 edit + <case>.build
+                               (the only way to change a compiled-in parameter
+                                without recreating the case)
+       ↓
   scan.py
        ↓
   active.yaml                ← queryable YAML registry (active cases)
@@ -50,7 +54,7 @@ cases/ + rundir/ + archive/ on HPC
 ### Module roles
 
 - **`parse_utils.py`** — pure parsing primitives; no filesystem side effects (invariant)
-- **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating
+- **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating; `patch` edits `exoplanet_mod.F90` in place in existing cases and rebuilds
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
 - **`datamgr.py`** — case data management: `report` (disk survey), `clean` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
@@ -148,18 +152,42 @@ Status handling within the preview:
 
 ---
 
+## build.py patch — in-place SourceMods edit + rebuild
+
+```
+build.py patch --prefix noO3_grp3 --set exo_convect_plim=5.0 --execute
+build.py patch case_a case_b --set do_exo_rt_clearsky=true --execute
+```
+
+Rewrites the matching `parameter ::` line in `<case>/SourceMods/src.share/exoplanet_mod.F90` and runs `./<case>.build`. **No `clean_build`** — for a file already present under `SourceMods`, the CESM dependency scan picks up the change. (Other scenarios do require a clean rebuild; `patch` does not cover them.)
+
+- `--set VAR=VALUE`, repeatable, over any `EXO_PARAMS` member. Validated against `PARAM_TYPES` — the same tags `generate --verify` enforces — before anything is touched.
+- Case selection via `_require_cases()`: explicit names or `--prefix`, mutually exclusive, no `--all`. Same convention as every destructive verb.
+- Preview by default; `--execute` adds a single batch `[yes/no]` over the whole set.
+- Reuses `_RE_PARAM_LINE` + `_fortran_value`, so declaration spacing and trailing `!!` comments survive. Commented-out `parameter` lines are never touched.
+- **Gas bars warn.** `exo_n2bar` was computed at generate time as `target − sum(gases)` and is *not* recomputed here, so patching a gas shifts total surface pressure by the delta. Harmless at trace (ppm) magnitudes — the model self-adjusts — but a real composition change should go through `generate`.
+- `RUNNING`/`RESUBMITTED` are **flagged with a count before the confirm, not blocked**. Recompiling a queued case so its next resubmit segment picks up the new binary is a deliberate, supported use. (Contrast the run-control verbs, which hard-block these.)
+- A failed `.build` is reported per-case without aborting the batch. The source edit has already landed, so rerunning `<case>.build` after fixing the cause suffices — no re-patch needed.
+- Experiment matrices are **not** updated; a reminder prints. Close the drift by hand or a future `generate` silently reverts the change.
+
+**Known wart:** `render_exoplanet_mod` has the same whitespace bug `patch_exoplanet_mod` fixes — `_RE_PARAM_LINE`'s value group `([^!\n]+)` greedily eats the spaces before a trailing `!!` comment. Invisible in `generate` because it renders into a throwaway heredoc from a pristine template. Fixing it would change generated-script bytes for every case.
+
+---
+
 ## build.py generate --verify
 
-`build.py generate <matrix> --verify` checks matrix coherency and **generates no scripts** (exits 1 if any case fails). It catches transposition mistakes — wrong value types, missing input files — before they reach the rendered build scripts. It does **not** check geophysical/scientific coherency.
+`build.py generate <matrix> --verify` checks matrix coherency and **generates no scripts** (exits 1 if any case fails). It catches transposition mistakes — wrong value types, missing input files — before they reach the rendered build scripts. Beyond those hard checks it raises a small number of **scientific-consistency warnings** (see below), which never fail a case or affect the exit code — `--verify` asks, it does not presume to know the science.
 
-Two checks per resolved case spec (`verify_case` in `build.py`):
+Three checks per resolved case spec (`verify_case` in `build.py`), returning `(errors, warnings, notes)`:
 
 1. **Type tags** — every matrix value with a `PARAM_TYPES` entry is checked against `bool` / `int` / `real` / `str` (`_check_type`). `bool` accepts python bool or the strings `true`/`false`; `int` accepts ints or integral-valued numerics (rejects `26.5`); `real` accepts any numeric; `str` rejects numeric/bool. `PARAM_TYPES` is the authoritative table — add new params there. (A python bool is explicitly rejected for int/real/str since `bool` is an `int` subclass.)
 2. **NetCDF file existence** — each field in `NCFILE_FIELDS` (`ncdata`, `exo_solar_file`, `som_pop_frc_file`, `finidat`, `fsurdat`) is resolved to a path using **the same logic as its build block** (`ncdata` → `resolve_ic_path`; `finidat`/`fsurdat` → `cam_land_fv` IC dir; solar/pop_frc → verbatim), then existence-checked locally.
 
 Existence checking assumes `--verify` runs on the HPC, where every input file should live. A var-free path whose file **or its parent directory** is absent is a hard **failure** (`file not found` / `directory not found`) — a missing dir is the common symptom of a mistyped/transposed path. The only SKIPPED (`·` note) case is a path that still contains an **unexpanded `$VAR`** (the env var isn't set, so it genuinely can't be resolved). Config-restricted fields present under the wrong `config_type` (e.g. `finidat` on an aqua config) are noted as ignored, not checked.
 
-Verify mode runs the type/nc checks **before** `validate_case`, because `validate_case` coerces values to float (via `compute_pstd_from_spec`) and would raise on a mistyped numeric; `--verify` reports a clean `type:` message instead. `validate_case` only runs if types pass. Output: `OK:` / `FAIL:` per case, `-` lines for errors, `·` lines for skip notes, then a summary count.
+3. **Scientific consistency** (`_verify_o2_ozone`, `_verify_ozone_convect_plim`) — O2 vs ozone, and ozone vs `exo_convect_plim`. **Warnings only.** See "Composition inheritance → `--verify` consistency warnings" above for the rules.
+
+Verify mode runs the type/nc checks **before** `validate_case`, because `validate_case` coerces values to float (via `compute_pstd_from_spec`) and would raise on a mistyped numeric; `--verify` reports a clean `type:` message instead. `validate_case` only runs if types pass. Output: `OK:` / `FAIL:` per case, `-` lines for errors, `!` lines for warnings, `·` lines for skip notes, then a summary count. A case with warnings but no errors still reports `OK` and exits 0.
 
 ---
 
@@ -185,6 +213,39 @@ Config-conditional logic (present in both `build.py` and `scan.py`):
 - neither → `unknown`
 
 **This decision tree is the authoritative source for config_type — it must stay consistent with `config_registry.yaml` entries.**
+
+---
+
+## Composition inheritance — the matrix is the sole arbiter
+
+**For a newcase, the experiment matrix is the only source of atmospheric composition. Nothing is inherited from the ExoCAM config templates.** Silence in the matrix uniformly means *no O2, no O3*.
+
+This is enforced in two places, by two different mechanisms, because composition arrives through two different files:
+
+| Parameter | Lives in | Silence in matrix → |
+|---|---|---|
+| `GAS_BAR_PARAMS` (`exo_o2bar`, `exo_co2bar`, …) | `exoplanet_mod.F90` | forced to `0.0` (`render_exoplanet_mod`) |
+| `prescribed_ozone_file` / `_datapath` | `user_nl_cam` | forced to the zeroVMR file (`generate_shell_script`) |
+
+The ozone default is `{exocam_root}/cesm1.2.1/initial_files/cam_aqua_fv/ozone_1.9x2.5_L26_zeroVMR.nc` — a single shared file used by *every* config_type. `ZERO_OZONE_IC_DIR` / `ZERO_OZONE_FILE` in `build.py` are the only constants to change if the ExoCAM `initial_files` tree is reorganized. The datapath is derived from `paths.exocam_root`, never hardcoded.
+
+The two ozone keys are defaulted **as a unit**: a matrix naming either one owns the whole ozone setting and must supply its own datapath. `prescribed_ozone_cycle_yr` / `_name` / `_type` ship with the namelist and are never touched.
+
+**Why this matters.** `cam_mixed_fv`'s shipped `namelist_files/user_nl_cam` carries modern-Earth ozone. Before this rule, a matrix mentioning neither `exo_o2bar` nor ozone produced a case with **no O2 and full ozone** — incoherent, since ozone is photochemically produced from O2, and silently so. The config templates deliberately retain their per-config defaults (aqua/land neutral, mixed Earth-like); those serve users driving ExoCAM by hand, and casemgr simply ignores them.
+
+**Clone is exempt.** `generate_clone_script` never applies these defaults. A clone preserves its source case's composition — that is the point of cloning. See "Pressure and N2 handling" below for the corresponding `is_clone` split in `render_exoplanet_mod`.
+
+**Consequence:** matrices written before this rule that relied on inheriting Earth-like ozone will produce no-ozone cases when regenerated. Audit before regenerating.
+
+### `--verify` consistency warnings
+
+`generate --verify` raises **warnings** (never failures; exit code unaffected) for combinations that are scientifically contradictory. `_effective_ozone_file()` models the newcase default, so a matrix silent on ozone is checkable rather than unknown:
+
+- `exo_o2bar == 0.0` with a non-zeroVMR ozone file → ozone without its precursor.
+- `exo_o2bar > 0.0` with a zeroVMR file (**including by default**) → O2 without the ozone it would produce.
+- ozone present and `exo_convect_plim < 4.e3` Pa → convection reaching the stratosphere is a numerical stability hazard. This is a **floor, not an equality**: values above `4.e3` merely clamp convection lower and are safe. Without ozone the parameter is freely tunable and nothing is warned.
+
+Detection keys on the **absence of the `zeroVMR` substring**, never on the stock ozone filename — that tag drifts between input datasets; the zeroVMR convention is stable.
 
 ---
 
@@ -219,6 +280,7 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 2. Ensure the corresponding `parameter ::` declaration exists in the `exoplanet_mod.F90` template.
 3. If it should be scanned into the registry, add it to `inspect_case()` in `scan.py` and to `_REGISTRY_GROUPS`.
 4. For `generate --verify` type checking, add it to `PARAM_TYPES` in `build.py` with its `bool`/`int`/`real`/`str` tag (params absent from `PARAM_TYPES` are not type-checked).
+5. If it is a radiatively-active gas partial pressure, add it to `GAS_BAR_PARAMS` — otherwise newcase will not zero it (breaking "matrix is sole arbiter") and it will not be subtracted from the N2 fill (silently shifting total surface pressure). Adding to `GAS_BAR_PARAMS` also makes `build.py patch` warn when it is patched in place.
 
 ### Adding a new netCDF file field to `--verify`
 1. Add `(field, resolver, restrict_config_types)` to `NCFILE_FIELDS` in `build.py`.
@@ -237,6 +299,8 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 - All destructive `datamgr.py` operations (including `clean`) require `--execute`. Without it, every command only prints what it would do.
 - No `--all` flag exists for destructive operations in either tool. Cases must be selected explicitly — either by name or via a `--prefix` bulk filter (mutually exclusive). `_require_cases()` (manage_utils.py) enforces this for every `datamgr.py` destructive verb, including all `clean` verbs and `retire`.
 - `build.py generate` generates scripts but never executes them. `build.py make` runs them (with confirmation prompt).
+- `build.py patch` is the **only** way to change an `exoplanet_mod.F90` parameter in an already-built case. `generate` cannot: it renders the F90 into a fresh build script whose first act is `create_newcase`/`create_clone`, which would recreate the case and destroy the run. These are Fortran `parameter` constants compiled into the binary — no `xmlchange` or `user_nl` path can reach them.
+- For a newcase, the experiment matrix is the sole arbiter of atmospheric composition. Nothing is inherited from the config templates. See "Composition inheritance" above.
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
 
@@ -255,6 +319,26 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ### diff.py: non-standard ExoRT package directory paths
 `build_exort_fileset` constructs the ExoRT reference as `{exort_root}/3dmodels/src.cam.{exort_pkg}/`. Experimental branches outside this path cause RT detection to silently return `{}` — affected files appear as `CASE ONLY`. Cases with non-standard RT are flagged with `*` in `query.py search` output. Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml`.
+
+---
+
+## Session handoff — 2026-07-09
+
+**`build.py patch`, newcase namelist upsert, and composition inheritance closed.** Three commits on `main`.
+
+1. **`build.py patch` (`6a8c8cd`).** New subcommand: edits `exoplanet_mod.F90` in place in existing cases and reruns `<case>.build`. Motivated by a real incident — a batch of no-O3 cases was built with `exo_convect_plim = 4.e3` (the with-ozone value) because the matrix wasn't switched back. These are compiled-in Fortran `parameter` constants; no `xmlchange`/`user_nl` path reaches them, and `generate` would recreate the case. See the "build.py patch" section above.
+
+2. **Newcase upserts `nl_cam_params` (`eafd3ef`, bug fix).** `_build_nl_append_block` asserted "the newcase namelist never contains these entries, so plain append is correct." True for CARMA/volc keys; **false** for `prescribed_ozone_*`, which `cam_mixed_fv`'s shipped `namelist_files/user_nl_cam` carries. A matrix setting `prescribed_ozone_file` produced *two* lines for the key, and the winner depended on the namelist reader's duplicate handling. Newcase now uses `_build_nl_upsert_block`, as clone already did. `_build_nl_append_block`/`_nl_append_lines` removed (no other callers).
+
+3. **Composition inheritance closed (`b3d1da6`).** The matrix was already the arbiter for gases (newcase force-zeroes unspecified `GAS_BAR_PARAMS`) but *not* for ozone, which was inherited from the shipped namelist. A `cam_mixed_fv` matrix mentioning neither produced **no O2 and full ozone** — incoherent, and silent. Newcase now injects the zeroVMR no-ozone default unless the matrix names an ozone key. Silence uniformly means "no O2, no O3." `--verify` gained warnings for O2/ozone contradictions and the ozone/`exo_convect_plim` floor. Config templates keep their per-config defaults for users driving ExoCAM by hand; casemgr ignores them.
+
+All three changes affect **newly generated scripts only** — existing `*_build.sh` on the HPC must be regenerated.
+
+### Good starting points for next session
+- **Audit existing matrices before regenerating.** Any that relied on inheriting Earth-like ozone will now produce no-ozone cases. This is the one migration hazard introduced by `b3d1da6`.
+- **Regenerate the affected no-O3 build scripts** and confirm `prescribed_ozone_file` + `exo_convect_plim` agree in the rendered output.
+- `render_exoplanet_mod` still eats the whitespace before trailing `!!` comments (`_RE_PARAM_LINE` group 4 is `([^!\n]+)`). `patch_exoplanet_mod` fixes it locally; the `generate` path does not. Fixing it changes generated-script bytes for every case — do it deliberately, alone.
+- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py` (now more visible — ozone settings live there); whether `datamgr.py avg` should move to `runmgr.py`; `confirm()` in `manage_utils.py` is dead code.
 
 ---
 
