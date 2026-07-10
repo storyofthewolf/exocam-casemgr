@@ -36,7 +36,11 @@ DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 def load_paths(args):
     """Load paths from config_registry.yaml, then apply any CLI overrides."""
     paths = {}
-    cfg_path = getattr(args, 'config_registry', DEFAULT_CONFIG)
+    # `or DEFAULT_CONFIG`, not just getattr's default: an argparse flag declared
+    # without a default leaves the attribute *present* and None, which getattr
+    # happily returns. Falling back on a None keeps a subcommand that forgot
+    # `default=DEFAULT_CONFIG` from silently loading no paths at all.
+    cfg_path = getattr(args, 'config_registry', None) or DEFAULT_CONFIG
     if cfg_path and os.path.exists(cfg_path):
         with open(cfg_path) as f:
             data = yaml.safe_load(f) or {}

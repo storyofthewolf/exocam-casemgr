@@ -22,7 +22,8 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import compute_pstd_bar
 from manage_utils import (submit_case, load_paths, discover_cases,
-                          _require_cases, batch_confirm, preview_hint)
+                          _require_cases, batch_confirm, preview_hint,
+                          DEFAULT_CONFIG)
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {
@@ -1741,6 +1742,14 @@ def main():
     parser.add_argument('--scripts-dir', default='build_scripts',
                         metavar='DIR',
                         help='Directory for generated scripts and logs (default: build_scripts/)')
+    # Path overrides live on the top-level parser with an explicit default, the
+    # same shape datamgr.py and runmgr.py use — so no subcommand has to be given
+    # --caseroot / --config-registry per invocation.
+    parser.add_argument('--config-registry', default=DEFAULT_CONFIG,
+                        dest='config_registry', metavar='FILE',
+                        help='Path to config_registry.yaml')
+    parser.add_argument('--caseroot', metavar='DIR',
+                        help='Override paths.caseroot from config_registry')
     sub = parser.add_subparsers(dest='command', metavar='COMMAND')
     sub.required = True
 
@@ -1776,9 +1785,6 @@ def main():
                          help='exoplanet_mod parameter to set; repeatable')
     p_patch.add_argument('--execute', action='store_true',
                          help='Apply the edit and rebuild (default: preview only)')
-    p_patch.add_argument('--caseroot', metavar='DIR', help='Override paths.caseroot')
-    p_patch.add_argument('--config-registry', dest='config_registry',
-                         metavar='FILE', help='Override config_registry.yaml path')
 
     args = parser.parse_args()
 
