@@ -83,6 +83,35 @@ PARAM_TYPES = {
 }
 
 
+# No-ozone default for newcase builds. exocam-casemgr takes the experiment
+# matrix as the sole arbiter of atmospheric composition, so a newcase inherits
+# nothing: unspecified gases are forced to 0.0 (see render_exoplanet_mod), and
+# ozone is likewise forced off unless the matrix asks for it. Without this, a
+# cam_mixed_fv newcase would silently inherit modern-Earth ozone from the
+# shipped namelist_files/user_nl_cam while its O2 was being zeroed -- an
+# incoherent atmosphere (ozone is photochemically produced from O2).
+#
+# The zeroVMR file is a single shared file living under the cam_aqua_fv IC
+# directory, used by every config_type. If the ExoCAM initial_files tree is
+# ever reorganized, this is the only place that needs to change.
+ZERO_OZONE_IC_DIR = 'cam_aqua_fv'
+ZERO_OZONE_FILE = 'ozone_1.9x2.5_L26_zeroVMR.nc'
+
+
+def _zero_ozone_defaults(paths):
+    """Return the prescribed_ozone_* keys that turn ozone off for a newcase.
+
+    Only _datapath and _file are defaulted; _cycle_yr, _name and _type ship with
+    namelist_files/user_nl_cam and are left alone. The datapath is derived from
+    paths.exocam_root rather than hardcoded, so it tracks config_registry.yaml.
+    """
+    root = paths.get('exocam_root', '$EXOCAM')
+    return {
+        'prescribed_ozone_datapath': f"{root}/cesm1.2.1/initial_files/{ZERO_OZONE_IC_DIR}",
+        'prescribed_ozone_file': ZERO_OZONE_FILE,
+    }
+
+
 # Approximate lower bound on exo_convect_plim (Pa) when ozone is present. With
 # a stratospheric inversion, convection must be cut off near the tropopause;
 # allowing it higher is a numerical stability hazard. Values above this are
@@ -168,6 +197,17 @@ NCFILE_FIELDS = [
 ]
 
 
+def _effective_ozone_file(spec):
+    """The prescribed_ozone_file a newcase build will actually end up with.
+
+    The matrix value if it sets one, else the zeroVMR no-ozone default that
+    generate_shell_script injects. Lets the consistency checks reason about a
+    silent matrix instead of skipping it.
+    """
+    nl_cam = spec.get('nl_cam_params') or {}
+    return nl_cam.get('prescribed_ozone_file') or ZERO_OZONE_FILE
+
+
 def _verify_o2_ozone(spec):
     """Warn on an O2 / ozone combination that is scientifically contradictory.
 
@@ -182,15 +222,15 @@ def _verify_o2_ozone(spec):
     whereas the zeroVMR convention is stable.
 
     This is a WARNING, not a failure: it flags a combination the user should
-    justify, and --verify does not presume to know the science. Returns a list
-    of warning strings (empty when consistent, or when either side is absent --
-    a silent matrix inherits from the config template, which is not inspected).
+    justify, and --verify does not presume to know the science.
+
+    A matrix silent on prescribed_ozone_file gets no ozone, since newcase
+    injects the zeroVMR default (_zero_ozone_defaults). Silence is therefore
+    checkable, not unknown, and a silent matrix with O2 present still warns.
+    Only a matrix silent on exo_o2bar is skipped -- there the gas is zeroed and
+    ozone is off, which is coherent.
     """
     if 'exo_o2bar' not in spec:
-        return []
-    nl_cam = spec.get('nl_cam_params') or {}
-    ozone_file = nl_cam.get('prescribed_ozone_file')
-    if not ozone_file:
         return []
 
     try:
@@ -198,6 +238,7 @@ def _verify_o2_ozone(spec):
     except (TypeError, ValueError):
         return []  # a bad type is already reported by the type check
 
+    ozone_file = _effective_ozone_file(spec)
     is_zero_vmr = 'zeroVMR' in str(ozone_file)
 
     if o2 == 0.0 and not is_zero_vmr:
@@ -205,9 +246,11 @@ def _verify_o2_ozone(spec):
                 f"'{ozone_file}' supplies ozone. Ozone is produced from O2 -- "
                 f"expected a zeroVMR file. Verify this is intended."]
     if o2 > 0.0 and is_zero_vmr:
+        default_note = '' if 'prescribed_ozone_file' in (spec.get('nl_cam_params') or {}) \
+            else ' (the newcase no-ozone default; set prescribed_ozone_file to add ozone)'
         return [f"o2/ozone: exo_o2bar = {o2} (O2 present) but "
                 f"prescribed_ozone_file = '{ozone_file}' is a zeroVMR (no ozone) "
-                f"file. Verify this is intended."]
+                f"file{default_note}. Verify this is intended."]
     return []
 
 
@@ -217,15 +260,14 @@ def _verify_ozone_convect_plim(spec):
     With ozone the stratospheric temperature inversion demands that convection
     be cut off around the tropopause; letting it reach higher is a numerical
     stability hazard. 4.e3 Pa is the established approximate floor. Values at or
-    above it are fine (convection is merely clamped lower). Only the matrix is
-    inspected -- if it is silent on either param, the config template supplies
-    the value and no warning is issued.
+    above it are fine (convection is merely clamped lower).
+
+    A matrix silent on prescribed_ozone_file gets the zeroVMR default, i.e. no
+    ozone, so exo_convect_plim is then freely tunable and nothing is warned.
     """
     if 'exo_convect_plim' not in spec:
         return []
-    nl_cam = spec.get('nl_cam_params') or {}
-    ozone_file = nl_cam.get('prescribed_ozone_file')
-    if not ozone_file or 'zeroVMR' in str(ozone_file):
+    if 'zeroVMR' in str(_effective_ozone_file(spec)):
         return []  # no ozone -> exo_convect_plim is free to be tuned
 
     try:
@@ -975,6 +1017,19 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
 
     config_type = spec['config_type']
     cfg = registry.get('cesm_config', {}).get(config_type, {})
+
+    # Force ozone off unless the matrix asks for it, so a newcase inherits no
+    # composition from the shipped namelist. The two keys are defaulted as a
+    # unit: a matrix that names prescribed_ozone_file owns the whole ozone
+    # setting, and must supply its own datapath rather than silently keeping the
+    # zeroVMR directory. Copied, not mutated in place -- spec is the caller's
+    # and is read again for verification and reporting.
+    spec = dict(spec)
+    nl_cam = dict(spec.get('nl_cam_params') or {})
+    if not any(k in nl_cam for k in ('prescribed_ozone_file',
+                                     'prescribed_ozone_datapath')):
+        nl_cam.update(_zero_ozone_defaults(paths))
+    spec['nl_cam_params'] = nl_cam
 
     exort_pkg   = spec['exort_pkg']
     nlev        = spec['nlev']
