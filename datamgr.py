@@ -182,6 +182,24 @@ def _run_batch(actions, confirm_phrase, execute):
         do()
 
 
+# Status labels that mean a job is active for the case right now.
+ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED')
+
+
+def _probe_case_status(case, paths):
+    """CaseStatus + SLURM-probe status label for a case, or None.
+
+    Lazily imports runmgr._probe_status (the same pattern build.py patch
+    uses) so datamgr carries no import-time dependency on the run-control
+    tool. Returns None when caseroot is not configured.
+    """
+    caseroot = paths.get('caseroot', '')
+    if not caseroot:
+        return None
+    from runmgr import _probe_status
+    return _probe_status(os.path.join(caseroot, case), case)
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: clean purge-bld
 # ---------------------------------------------------------------------------
@@ -252,10 +270,14 @@ def cmd_purge_restarts(args, paths):
     deleted oldest-first.
 
     Default: --keep 1 (keep only the most recent restart set).
+    --keep 0 is an explicit delete-all: every restart set is purged, and the
+    preview says so. Negative values are rejected.
     """
     archive = paths.get('archive', '')
     if not archive:
         sys.exit("ERROR: archive path not configured.")
+    if args.keep < 0:
+        sys.exit("ERROR: --keep must be >= 0 (0 = explicit delete-all).")
 
     cases = _require_cases(discover_cases(paths), args)
     if not cases:
@@ -268,8 +290,8 @@ def cmd_purge_restarts(args, paths):
             print(f"  {case}: no restart sets found, skipping")
             continue
 
-        to_keep   = sets[-args.keep:]
-        to_delete = sets[:-args.keep] if args.keep > 0 else sets
+        to_keep   = sets[-args.keep:] if args.keep > 0 else []
+        to_delete = sets[:-args.keep] if args.keep > 0 else list(sets)
 
         keep_names   = [s[0] for s in to_keep]
         delete_names = [s[0] for s in to_delete]
@@ -278,9 +300,12 @@ def cmd_purge_restarts(args, paths):
             print(f"  {case}: {len(sets)} set(s), nothing to purge (keep={args.keep})")
             continue
 
+        status = _probe_case_status(case, paths)
+        note = f"  <- {status}: job is active" if status in ACTIVE_STATUSES else ""
+        keep_label = keep_names if keep_names else "NONE (explicit delete-all)"
         delete_size = sum(dir_size_bytes(s[1]) for s in to_delete)
-        print(f"  {case}: {len(sets)} restart set(s) — keeping {keep_names}, "
-              f"purging {len(to_delete)} ({fmt_size(delete_size)}): {delete_names}")
+        print(f"  {case}: {len(sets)} restart set(s) — keeping {keep_label}, "
+              f"purging {len(to_delete)} ({fmt_size(delete_size)}): {delete_names}{note}")
 
         def _do(case=case, to_delete=to_delete, delete_size=delete_size):
             for _, path in to_delete:
@@ -305,7 +330,14 @@ def cmd_purge_hist(args, paths):
 
     Use --keep-years N to retain files from the N most recent model years
     (cutoff determined across all targeted components jointly). Files whose
-    year cannot be parsed from the filename are always kept.
+    year cannot be parsed from the filename are always kept. --keep-years 0
+    is an explicit delete-all; negative values are rejected.
+
+    Avg files (filenames containing "avg") are ordinary hist files here and
+    ARE deleted — purge-hist is targeted deletion with no special-casing
+    (contrast retire, which always preserves avg files to long-term). Under
+    --keep-years they happen to survive, because their filenames carry no
+    parseable model year.
 
     WARNING: history files are not recoverable once deleted. Without --execute
     this command only previews what would be removed.
@@ -313,6 +345,8 @@ def cmd_purge_hist(args, paths):
     archive = paths.get('archive', '')
     if not archive:
         sys.exit("ERROR: archive path not configured.")
+    if args.keep_years is not None and args.keep_years < 0:
+        sys.exit("ERROR: --keep-years must be >= 0 (0 = explicit delete-all).")
 
     if args.keep_years is None and not args.models:
         sys.exit(
@@ -336,7 +370,10 @@ def cmd_purge_hist(args, paths):
             if not per_model:
                 print(f"  {case}: no hist/ directories found, skipping")
                 continue
-            print(f"  {case}: keeping years {keep_years if keep_years else '(none parsed)'}")
+            if args.keep_years == 0:
+                print(f"  {case}: keeping NO years (explicit --keep-years 0 delete-all)")
+            else:
+                print(f"  {case}: keeping years {keep_years if keep_years else '(none parsed)'}")
             targets = []
             case_total = 0
             for model, info in per_model.items():
@@ -364,8 +401,10 @@ def cmd_purge_hist(args, paths):
             print(f"  {case}: nothing to delete, skipping")
             continue
 
+        status = _probe_case_status(case, paths)
+        note = f"  <- {status}: job is active" if status in ACTIVE_STATUSES else ""
         print(f"  {case}: {sum(len(t[1]) for t in targets)} file(s) to delete, "
-              f"{fmt_size(case_total)} total")
+              f"{fmt_size(case_total)} total{note}")
         for hist, files, size in targets:
             print(f"    {hist}  ({len(files)} file(s), {fmt_size(size)})")
 
@@ -466,6 +505,9 @@ def cmd_move_hist(args, paths):
     The source hist/ directory is left empty after the move (not deleted),
     so the archive structure remains intact.
 
+    Files already present in long-term are never overwritten: they are
+    SKIPPED (flagged in the preview) and left in the archive for inspection.
+
     Use --models to restrict to specific components.
     """
     archive   = paths.get('archive', '')
@@ -483,20 +525,43 @@ def cmd_move_hist(args, paths):
 
     actions = []
     for case in cases:
+        status = _probe_case_status(case, paths)
+        if status in ACTIVE_STATUSES:
+            print(f"  {case}: [{status}] — job is active; the archive may still "
+                  f"be written to")
+
+        case_moves = []  # (src, dst, files)
         for model in models:
             src = os.path.join(archive, case, model, 'hist')
             files, total = list_files_with_size(src)
             if not files:
                 continue
             dst = os.path.join(long_term, case, model, 'hist')
+            collisions = sum(1 for f in files
+                             if os.path.exists(os.path.join(dst, f)))
             print(f"  {case}/{model}/hist: {len(files)} file(s), {fmt_size(total)}")
             print(f"    -> {dst}")
+            if collisions:
+                print(f"    ! {collisions} file(s) already exist in long-term — "
+                      f"will be SKIPPED (left in archive)")
+            case_moves.append((src, dst, files))
 
-            def _do(src=src, dst=dst, files=files):
-                os.makedirs(dst, exist_ok=True)
-                for f in files:
-                    shutil.move(os.path.join(src, f), os.path.join(dst, f))
-                print(f"    moved {len(files)} file(s) to {dst}")
+        if case_moves:
+            def _do(case=case, case_moves=case_moves):
+                for src, dst, files in case_moves:
+                    os.makedirs(dst, exist_ok=True)
+                    moved = skipped = 0
+                    for f in files:
+                        dst_f = os.path.join(dst, f)
+                        if os.path.exists(dst_f):
+                            skipped += 1
+                            continue
+                        shutil.move(os.path.join(src, f), dst_f)
+                        moved += 1
+                    msg = f"    {case}: moved {moved} file(s) to {dst}"
+                    if skipped:
+                        msg += f"  ({skipped} skipped — already present, left in archive)"
+                    print(msg)
             actions.append(_do)
 
     _run_batch(actions, 'Move history files for', args.execute)
@@ -812,6 +877,12 @@ def cmd_retire_case(args, paths):
       - After all per-case plans are printed, a single batch yes/no
         confirmation covers all selected cases (explicit names or --prefix)
         before any action is taken — the package-standard double gate.
+      - RUNNING/RESUBMITTED cases (CaseStatus + SLURM probe) are hard-blocked:
+        retiring would delete the run out from under an active job.
+      - Preserve targets that already exist in long-term hard-block the case:
+        a prior (possibly interrupted) retire left content behind, and moving
+        onto it would silently overwrite a file or nest a directory. Inspect
+        and remove the stale long-term copies, then re-run.
 
     Examples:
       retire mycase --execute
@@ -849,6 +920,8 @@ def cmd_retire_case(args, paths):
     if args.purge and has_keep:
         sys.exit("ERROR: --purge is mutually exclusive with --keep-config, "
                  "--keep-years, and --keep-restarts.")
+    if args.keep_years is not None and args.keep_years < 0:
+        sys.exit("ERROR: --keep-years must be >= 0.")
 
     registry_path = getattr(args, 'registry', None) or DEFAULT_RETIRE_REGISTRY
 
@@ -867,6 +940,13 @@ def cmd_retire_case(args, paths):
         print(f"\n{'='*60}")
         print(f"  CASE: {case}")
         print(f"{'='*60}")
+
+        # Hard block active jobs — same gate as the runmgr run-control verbs.
+        status = _probe_case_status(case, paths)
+        if status in ACTIVE_STATUSES:
+            print(f"  [{status}] — BLOCKED: a job is active for this case; "
+                  f"retiring would delete the run out from under it.")
+            continue
 
         casedir_path = os.path.join(caseroot, case) if caseroot else ''
         rundir_path  = os.path.join(rundir,   case) if rundir   else ''
@@ -936,6 +1016,23 @@ def cmd_retire_case(args, paths):
                         os.path.join(hist_dir, f),
                         os.path.join(lt_case_dir, model, 'hist', f),
                     ))
+
+        # Preserve targets must not already exist in long-term: shutil.move
+        # onto an existing file silently overwrites it, and onto an existing
+        # directory nests the source inside it (rest/<date>/<date>). A
+        # collision means a previous (possibly interrupted) retire left
+        # content behind — hard-block the case so nothing is touched.
+        move_dsts = ([d for _, d in preserve_hist]
+                     + [d for _, d in preserve_restart]
+                     + [d for _, d in preserve_avg])
+        collisions = [d for d in move_dsts if os.path.exists(d)]
+        if collisions:
+            print(f"  BLOCKED: {len(collisions)} preserve target(s) already "
+                  f"exist in long-term:")
+            for d in collisions:
+                print(f"    exists: {d}")
+            print(f"  Inspect/remove the stale long-term copies, then re-run retire.")
+            continue
 
         # --- print plan ---
         yaml_source_label = {
@@ -1025,6 +1122,19 @@ def cmd_retire_case(args, paths):
         preserve_restart = p['preserve_restart']
         preserve_avg   = p['preserve_avg']
 
+        # Re-check preserve-target collisions right before acting: the plan
+        # was built during the preview pass, and long-term may have changed.
+        move_dsts = ([d for _, d in preserve_hist]
+                     + [d for _, d in preserve_restart]
+                     + [d for _, d in preserve_avg])
+        stale = [d for d in move_dsts if os.path.exists(d)]
+        if stale:
+            print(f"\n  {case}: BLOCKED — {len(stale)} preserve target(s) "
+                  f"appeared in long-term since the preview; skipping.")
+            for d in stale:
+                print(f"    exists: {d}")
+            continue
+
         print(f"\n  Retiring: {case}")
 
         # Write case.yaml (skipped for --purge)
@@ -1100,7 +1210,10 @@ def cmd_avg_hist(args, paths):
       --last N           Average the N most recent model years using ncra.
                          Avg files (filenames containing "avg") are excluded
                          from inputs. Output is written into the same hist/
-                         directory as the inputs.
+                         directory as the inputs. An existing avg output file
+                         is OVERWRITTEN (ncra -O) — the preview flags this.
+                         Under --execute a single batch [yes/no] covers all
+                         selected cases before any ncra runs.
 
     Output filename format:
       <case>.<model_stem>.h0.avg_last{N}yr.nc
@@ -1116,33 +1229,15 @@ def cmd_avg_hist(args, paths):
 
     has_info = getattr(args, 'info', False)
     last_n   = getattr(args, 'last', None)
-    prefix_filter = getattr(args, 'prefix', None)
 
     if has_info and last_n is not None:
         sys.exit("ERROR: --info and --last are mutually exclusive.")
     if not has_info and last_n is None:
         sys.exit("ERROR: avg-hist requires --info or --last N.")
 
-    if args.cases and prefix_filter:
-        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
-    if not args.cases and not prefix_filter:
-        sys.exit("ERROR: avg-hist requires explicit case name(s) or --prefix.")
-
-    all_on_disk = discover_cases(paths)
-
-    if prefix_filter:
-        cases = [c for c in all_on_disk if c.lower().startswith(prefix_filter.lower())]
-        if not cases:
-            print(f"No cases matching prefix '{prefix_filter}'.")
-            return
-    else:
-        missing = [c for c in args.cases if c not in all_on_disk]
-        if missing:
-            print(f"WARNING: case(s) not found on disk: {', '.join(missing)}", file=sys.stderr)
-        cases = [c for c in args.cases if c in all_on_disk]
-        if not cases:
-            print("No cases found on disk.")
-            return
+    cases = _require_cases(discover_cases(paths), args)
+    if not cases:
+        return
 
     models = _resolve_models(args, AVG_HIST_DEFAULT_MODELS)
 
@@ -1174,6 +1269,7 @@ def cmd_avg_hist(args, paths):
         return
 
     # --- --last N mode ---
+    actions = []
     for case in cases:
         archive_path = os.path.join(archive, case)
         print(f"\n{case}")
@@ -1189,6 +1285,7 @@ def cmd_avg_hist(args, paths):
             print(f"  WARNING: only {all_years_count} year(s) available, "
                   f"averaging all {all_years_count} (requested --last {last_n})")
 
+        case_cmds = []  # (model, cmd, outpath, n_inputs)
         for model in models:
             if model not in per_model:
                 print(f"  {model}/hist: no files found, skipping")
@@ -1205,25 +1302,35 @@ def cmd_avg_hist(args, paths):
             outfile = f"{case}.{stem}.h0.avg_last{last_n}yr.nc"
             outpath = os.path.join(hist_dir, outfile)
             input_paths = [os.path.join(hist_dir, f) for f in inputs]
-            cmd = ['ncra'] + input_paths + [outpath]
+            # -O: overwrite an existing output without ncra's interactive
+            # prompt — the overwrite is disclosed in the preview instead.
+            cmd = ['ncra', '-O'] + input_paths + [outpath]
 
-            print(f"  {model}/hist: {len(inputs)} input file(s) -> {outfile}")
+            overwrite = '  (OVERWRITES existing avg file)' if os.path.exists(outpath) else ''
+            print(f"  {model}/hist: {len(inputs)} input file(s) -> {outfile}{overwrite}")
             if not args.execute:
                 print(f"  [preview] would run: {' '.join(cmd)}")
-                continue
+            case_cmds.append((model, cmd, outpath, len(inputs)))
 
-            print(f"  Running ncra ({len(inputs)} file(s))...")
-            try:
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            except FileNotFoundError:
-                sys.exit("ERROR: ncra not found in PATH. Install NCO tools.")
-            if result.returncode != 0:
-                print(result.stderr, file=sys.stderr)
-                sys.exit(f"ERROR: ncra exited with code {result.returncode}")
-            print(f"  Written: {outpath}")
+        if case_cmds:
+            def _do(case=case, case_cmds=case_cmds):
+                for model, cmd, outpath, n in case_cmds:
+                    print(f"  {case}/{model}: running ncra ({n} file(s))...")
+                    try:
+                        result = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                                stderr=subprocess.PIPE,
+                                                universal_newlines=True)
+                    except FileNotFoundError:
+                        sys.exit("ERROR: ncra not found in PATH. Install NCO tools.")
+                    if result.returncode != 0:
+                        print(result.stderr, file=sys.stderr)
+                        print(f"  {case}/{model}: ERROR: ncra exited with code "
+                              f"{result.returncode}")
+                        continue
+                    print(f"  Written: {outpath}")
+            actions.append(_do)
 
-    if last_n is not None:
-        preview_hint(args.execute)
+    _run_batch(actions, 'Compute time-averaged history for', args.execute)
 
 
 # ---------------------------------------------------------------------------
