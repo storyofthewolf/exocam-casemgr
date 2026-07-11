@@ -248,6 +248,8 @@ The two ozone keys are defaulted **as a unit**: a matrix naming either one owns 
 
 Detection keys on the **absence of the `zeroVMR` substring**, never on the stock ozone filename — that tag drifts between input datasets; the zeroVMR convention is stable.
 
+**Clone specs are exempt from the silent-matrix reasoning.** A clone matrix silent on ozone inherits it from the clone source — unknown at verify time, not zeroVMR — so `_effective_ozone_file` returns `None` there and both checks skip. They still run when a clone matrix explicitly names `prescribed_ozone_file`.
+
 ---
 
 ## Pressure and N2 handling
@@ -257,7 +259,7 @@ Detection keys on the **absence of the `zeroVMR` substring**, never on the stock
 - **Newcase (`is_clone=False`) — clean slate.** Every radiatively-active gas in `GAS_BAR_PARAMS` (CO2, CH4, C2H6, NH3, CO, H2, O2) that is *not* named in the matrix is forced to `0.0` — the template's modern-Earth defaults (e.g. `exo_o2bar = 0.2095`) must not leak in. N2 is **always** emitted as an explicit numeric fill: `exo_n2bar_explicit` if set, otherwise `compute_pstd_from_spec(spec) − sum(specified gases)`. The Fortran `1 - sum(others)` expression line is never relied upon for newcase.
 - **Clone (`is_clone=True`) — preserve composition.** Only the gas params named in the matrix are substituted; all unspecified gases and N2 keep whatever the clone-source `exoplanet_mod.F90` has. `exo_n2bar` is patched only when `exo_n2bar_explicit` is set (high-pressure case); otherwise the source's expression line is left intact.
 
-`_fortran_value` formats gas bar values at 12 significant figures (`%.12g`) so the full input precision of the N2 fill survives without float noise.
+`_fortran_value` formats gas bar values at 12 significant figures (`%.12g`) so the full input precision of the N2 fill survives without float noise. Params tagged `int` in `PARAM_TYPES` (currently `exo_rad_step`) render as **bare integers** — never a decimal or `_r8` suffix, which would contradict the declared Fortran type — regardless of whether the value arrived as a YAML int or a `patch --set` string.
 
 Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas bar values: `exo_n2bar_explicit + sum(others)` when explicit N2 is set, else `sum(others)` (defaulting to 1.0 for ≤1 bar). Pressure strings (e.g. `"1bar"`, `"0.1bar"`) are IC file table keys and must exactly match substrings in IC filenames.
 

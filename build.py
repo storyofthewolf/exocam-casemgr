@@ -199,14 +199,25 @@ NCFILE_FIELDS = [
 
 
 def _effective_ozone_file(spec):
-    """The prescribed_ozone_file a newcase build will actually end up with.
+    """The prescribed_ozone_file a build will actually end up with, or None.
 
-    The matrix value if it sets one, else the zeroVMR no-ozone default that
-    generate_shell_script injects. Lets the consistency checks reason about a
-    silent matrix instead of skipping it.
+    Newcase: the matrix value if it sets one, else the zeroVMR no-ozone
+    default that generate_shell_script injects — silence is checkable, not
+    unknown, and the consistency checks can reason about it.
+
+    Clone: the matrix value if set, else None. generate_clone_script applies
+    no ozone default (a clone inherits its source's composition), so a clone
+    matrix silent on ozone is genuinely unknown here — the consistency checks
+    must skip it rather than assume the zeroVMR default and raise false
+    warnings.
     """
     nl_cam = spec.get('nl_cam_params') or {}
-    return nl_cam.get('prescribed_ozone_file') or ZERO_OZONE_FILE
+    explicit = nl_cam.get('prescribed_ozone_file')
+    if explicit:
+        return explicit
+    if spec.get('clone'):
+        return None
+    return ZERO_OZONE_FILE
 
 
 def _verify_o2_ozone(spec):
@@ -225,11 +236,12 @@ def _verify_o2_ozone(spec):
     This is a WARNING, not a failure: it flags a combination the user should
     justify, and --verify does not presume to know the science.
 
-    A matrix silent on prescribed_ozone_file gets no ozone, since newcase
-    injects the zeroVMR default (_zero_ozone_defaults). Silence is therefore
-    checkable, not unknown, and a silent matrix with O2 present still warns.
-    Only a matrix silent on exo_o2bar is skipped -- there the gas is zeroed and
-    ozone is off, which is coherent.
+    A newcase matrix silent on prescribed_ozone_file gets no ozone, since
+    newcase injects the zeroVMR default (_zero_ozone_defaults). Silence is
+    therefore checkable, not unknown, and a silent matrix with O2 present
+    still warns. Skipped: a matrix silent on exo_o2bar (the gas is zeroed and
+    ozone is off — coherent), and a CLONE matrix silent on ozone (the clone
+    inherits ozone from its source, so silence is unknown, not zeroVMR).
     """
     if 'exo_o2bar' not in spec:
         return []
@@ -240,6 +252,8 @@ def _verify_o2_ozone(spec):
         return []  # a bad type is already reported by the type check
 
     ozone_file = _effective_ozone_file(spec)
+    if ozone_file is None:
+        return []  # clone silent on ozone — inherited from source, unknown here
     is_zero_vmr = 'zeroVMR' in str(ozone_file)
 
     if o2 == 0.0 and not is_zero_vmr:
@@ -263,12 +277,17 @@ def _verify_ozone_convect_plim(spec):
     stability hazard. 4.e3 Pa is the established approximate floor. Values at or
     above it are fine (convection is merely clamped lower).
 
-    A matrix silent on prescribed_ozone_file gets the zeroVMR default, i.e. no
-    ozone, so exo_convect_plim is then freely tunable and nothing is warned.
+    A newcase matrix silent on prescribed_ozone_file gets the zeroVMR default,
+    i.e. no ozone, so exo_convect_plim is then freely tunable and nothing is
+    warned. A clone matrix silent on ozone inherits it from the source —
+    unknown here, so the check is skipped rather than assumed.
     """
     if 'exo_convect_plim' not in spec:
         return []
-    if 'zeroVMR' in str(_effective_ozone_file(spec)):
+    ozone_file = _effective_ozone_file(spec)
+    if ozone_file is None:
+        return []  # clone silent on ozone — inherited from source, unknown here
+    if 'zeroVMR' in str(ozone_file):
         return []  # no ozone -> exo_convect_plim is free to be tuned
 
     try:
@@ -449,13 +468,14 @@ def validate_case(spec, registry):
         for field in REQUIRED_FIELDS_CLONE:
             if field not in spec:
                 errors.append(f"missing required field: {field}")
-        # IC file lookup still runs if enough info is present (nlev + config_type inherited)
-        # but is optional for clone mode — skip if config_type or nlev are absent
-        if spec.get('config_type') and spec.get('nlev'):
-            try:
-                find_ic_file(spec, registry)
-            except ValueError as e:
-                errors.append(str(e))
+        # No IC table lookup for clones. The build script only touches ncdata
+        # when the matrix sets it explicitly (find_ic_file then returns the
+        # value verbatim, which cannot fail), and a table lookup keyed on
+        # matrix-only gases is wrong by construction: the clone inherits its
+        # unspecified gases from the source case, so the pressure computed
+        # here (and hence the ic_files key) does not reflect the real
+        # atmosphere. It used to hard-fail coherent clone gas sweeps whose
+        # partial sum had no table entry.
     else:
         for field in REQUIRED_FIELDS:
             if field not in spec:
@@ -515,8 +535,12 @@ def _fortran_value(name, value):
     if isinstance(value, bool) or str(value).lower() in ('true', 'false'):
         v = str(value).lower()
         return f'.{v}.'
-    if isinstance(value, int) and name == 'exo_rad_step':
-        return str(value)
+    if PARAM_TYPES.get(name) == 'int':
+        # Integer parameters render as bare integers — a decimal or _r8
+        # suffix contradicts the declared Fortran type. Keyed on PARAM_TYPES
+        # rather than the value's Python type so string values arriving from
+        # `patch --set exo_rad_step=4` take this branch too.
+        return str(int(float(value)))
     try:
         f = float(value)
         # use scientific notation for very small/large values
@@ -696,6 +720,17 @@ def rebuild_case(case_dir, case_name):
     return True, 'built'
 
 
+def _sed_escape_replacement(s):
+    """Escape a value for use in a sed s|pat|repl| replacement string.
+
+    Backslash first, then '&' (re-inserts the match) and the '|' delimiter.
+    Theoretical hardening — real namelist/path values contain none of these —
+    but corruption here would be silent, so every interpolated replacement
+    goes through this.
+    """
+    return s.replace('\\', r'\\').replace('&', r'\&').replace('|', r'\|')
+
+
 def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     """
     Return shell lines that upsert key = value entries into a namelist file
@@ -714,7 +749,7 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     lines = []
     for key, val in param_dict.items():
         nl_val = _format_nl_value(val)
-        escaped_val = nl_val.replace('|', r'\|')
+        escaped_val = _sed_escape_replacement(nl_val)
         # Match the key at start-of-line, allowing leading whitespace and any
         # whitespace around '=', and rewrite the whole line. Anchoring on the
         # key (^[[:space:]]*KEY[[:space:]]*=) avoids matching a different key
@@ -834,7 +869,7 @@ def _build_clm_update_block(spec, paths):
                 lines.append("")
                 lines.append("# Update CLM initial and surface data file paths in user_nl_clm")
             lines.append(
-                f'sed -i \'s|{key} = ".*"|{key} = "{path_val}"|\' user_nl_clm'
+                f'sed -i \'s|{key} = ".*"|{key} = "{_sed_escape_replacement(path_val)}"|\' user_nl_clm'
             )
     return lines
 
@@ -1103,13 +1138,13 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
         "",
         "# Update ncdata path in user_nl_cam",
-        f"sed -i \"s|ncdata = '.*'|ncdata = '{ic_path}'|\" user_nl_cam",
+        f"sed -i \"s|ncdata = '.*'|ncdata = '{_sed_escape_replacement(ic_path)}'|\" user_nl_cam",
         *_build_nl_upsert_block(spec),
         *_build_clm_update_block(spec, paths),
         *_build_docn_update_block(spec),
         "",
         "# Update solar file path in exoplanet_mod.F90",
-        f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{solar_file}'|\" "
+        f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{_sed_escape_replacement(solar_file)}'|\" "
         "SourceMods/src.share/exoplanet_mod.F90",
         "",
         "# -----------------------------------------------------------",
@@ -1231,7 +1266,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         lines += [
             "",
             "# Update ncdata path in user_nl_cam",
-            f"sed -i \"s|ncdata = '.*'|ncdata = '{ic_path}'|\" user_nl_cam",
+            f"sed -i \"s|ncdata = '.*'|ncdata = '{_sed_escape_replacement(ic_path)}'|\" user_nl_cam",
         ]
 
     lines += [
@@ -1244,7 +1279,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         lines += [
             "",
             "# Update solar file path in exoplanet_mod.F90",
-            f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{solar_file}'|\" "
+            f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{_sed_escape_replacement(solar_file)}'|\" "
             "SourceMods/src.share/exoplanet_mod.F90",
         ]
 
