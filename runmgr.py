@@ -63,6 +63,7 @@ from manage_utils import (
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, restart_sets, submit_case,
+    _require_cases, batch_confirm, preview_hint,
 )
 
 # ---------------------------------------------------------------------------
@@ -91,26 +92,16 @@ def _read_xml_var(xml_path, var_name):
 def _resolve_cases(args, paths, verb):
     """Resolve the case list from explicit names or --prefix.
 
-    Shared by every run-control subcommand. Enforces the project invariant that
-    cases must be named explicitly or matched by --prefix (no --all flag), and
-    that the two cannot be combined. Exits with an error message on misuse or no
-    match.
+    Thin wrapper over manage_utils._require_cases — the same selection helper
+    every datamgr.py destructive verb uses (explicit-names-or---prefix, mutual
+    exclusion, no --all flag, explicit names validated against disk) — plus a
+    hard exit when nothing matches, since every run-control verb needs at
+    least one case to act on.
     """
-    prefix_filter  = getattr(args, 'prefix', None)
-    explicit_cases = args.cases or []
-
-    if explicit_cases and prefix_filter:
-        sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
-
-    if prefix_filter:
-        all_cases = discover_cases(paths)
-        cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
-        if not cases:
-            sys.exit(f"ERROR: no cases found matching prefix '{prefix_filter}'.")
-        return cases
-    if explicit_cases:
-        return explicit_cases
-    sys.exit(f"ERROR: {verb} requires explicit case names or --prefix. No --all flag.")
+    cases = _require_cases(discover_cases(paths), args)
+    if not cases:
+        sys.exit(f"ERROR: no cases to act on for {verb}.")
+    return cases
 
 
 def _parse_set_pairs(items, flag='--set'):
@@ -173,22 +164,6 @@ def _probe_status(case_dir, case):
             run_out_path = os.path.join(case_dir, 'run.out')
             status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
     return status_label
-
-
-def _batch_confirm(action, n):
-    """Single batch [yes/no] gate for the run-control verbs.
-
-    Mirrors build.py make's one-prompt-before-the-batch ergonomics (and the
-    --execute-then-confirm double gate used across the package): the caller
-    prints a per-case preview first, then calls this once before acting on the
-    whole set. Returns True to proceed. EOF/interrupt is treated as 'no'.
-    """
-    try:
-        answer = input(f"\n{action} {n} case(s)? [yes/no]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
-    return answer in ('yes', 'y')
 
 
 def cmd_xml(args, paths):
@@ -256,14 +231,14 @@ def cmd_xml(args, paths):
     if not change_vars:
         return
     if not args.execute:
-        print("\n(preview only — rerun with --execute to apply changes)")
+        preview_hint(args.execute)
         return
     if not actionable:
         print("\nNo cases to change.")
         return
 
     # Phase 2 — single batch gate, then apply.
-    if not _batch_confirm("Apply XML changes to", len(actionable)):
+    if not batch_confirm("Apply XML changes to", len(actionable)):
         print("Aborted.")
         return
 
@@ -328,14 +303,14 @@ def cmd_continue(args, paths):
         actionable.append((case, case_dir))
 
     if not args.execute:
-        print("\n(preview only — rerun with --execute to submit)")
+        preview_hint(args.execute)
         return
     if not actionable:
         print("\nNo cases to submit.")
         return
 
     # Phase 2 — single batch gate, then apply xmlchange + sbatch.
-    if not _batch_confirm("Continue (CONTINUE_RUN=TRUE) and submit", len(actionable)):
+    if not batch_confirm("Continue (CONTINUE_RUN=TRUE) and submit", len(actionable)):
         print("Aborted.")
         return
 
@@ -416,14 +391,14 @@ def cmd_restart(args, paths):
         actionable.append((case, case_dir))
 
     if not args.execute:
-        print("\n(preview only — rerun with --execute to submit)")
+        preview_hint(args.execute)
         return
     if not actionable:
         print("\nNo cases to submit.")
         return
 
     # Phase 2 — single batch gate, then apply xmlchange + sbatch.
-    if not _batch_confirm("Restart (CONTINUE_RUN=FALSE) and submit", len(actionable)):
+    if not batch_confirm("Restart (CONTINUE_RUN=FALSE) and submit", len(actionable)):
         print("Aborted.")
         return
 
@@ -499,14 +474,14 @@ def cmd_submit(args, paths):
         actionable.append((case, case_dir))
 
     if not args.execute:
-        print("\n(preview only — rerun with --execute to submit)")
+        preview_hint(args.execute)
         return
     if not actionable:
         print("\nNo cases to submit.")
         return
 
     # Phase 2 — single batch gate, then sbatch.
-    if not _batch_confirm("Submit", len(actionable)):
+    if not batch_confirm("Submit", len(actionable)):
         print("Aborted.")
         return
 

@@ -207,15 +207,6 @@ def restart_sets(case, paths):
 # Confirmation helper
 # ---------------------------------------------------------------------------
 
-def confirm(prompt, execute):
-    """Return True if the action should proceed."""
-    if not execute:
-        print(f"  [preview] would: {prompt}")
-        return False
-    answer = input(f"  Confirm: {prompt} [yes/no]: ").strip().lower()
-    return answer == 'yes'
-
-
 def preview_hint(execute):
     """Print a single --execute reminder at the end of a preview run.
 

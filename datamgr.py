@@ -205,6 +205,7 @@ def cmd_purge_bld(args, paths):
     if not cases:
         return
 
+    label = 'purge' if args.execute else 'preview'
     actions = []
     for case in cases:
         bld = os.path.join(rundir, case, 'bld')
@@ -219,7 +220,7 @@ def cmd_purge_bld(args, paths):
                     if f.endswith(('.o', '.mod')):
                         obj_files.append(os.path.join(dirpath, f))
             obj_size = sum(os.path.getsize(f) for f in obj_files)
-            print(f"  [preview] would: delete {len(obj_files)} object files "
+            print(f"  [{label}] delete {len(obj_files)} object files "
                   f"({fmt_size(obj_size)}) from {bld}")
 
             def _do(case=case, obj_files=obj_files, obj_size=obj_size):
@@ -227,7 +228,7 @@ def cmd_purge_bld(args, paths):
                     os.remove(f)
                 print(f"  {case}: removed {len(obj_files)} object files ({fmt_size(obj_size)} freed)")
         else:
-            print(f"  [preview] would: delete entire bld/ directory "
+            print(f"  [{label}] delete entire bld/ directory "
                   f"({fmt_size(size)}) for {case}")
 
             def _do(case=case, bld=bld, size=size):
@@ -525,6 +526,8 @@ def cmd_report(args, paths):
         sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
     if cached and requested:
         sys.exit("ERROR: --cached cannot be combined with explicit case names.")
+    if cached and prefix_filter:
+        sys.exit("ERROR: --cached cannot be combined with --prefix.")
 
     if cached:
         doc = load_usage_yaml(usage_path)
@@ -806,9 +809,9 @@ def cmd_retire_case(args, paths):
     SAFEGUARDS:
       - --execute required; default is preview only.
       - Explicit case names required; no --all flag.
-      - Each case requires individual yes/no confirmation before execution.
-      - When --prefix is used, a single batch yes/no confirmation is shown
-        for all matched cases before any action is taken.
+      - After all per-case plans are printed, a single batch yes/no
+        confirmation covers all selected cases (explicit names or --prefix)
+        before any action is taken — the package-standard double gate.
 
     Examples:
       retire mycase --execute
@@ -826,7 +829,7 @@ def cmd_retire_case(args, paths):
 
       retire --prefix hazyCHAMPS_case23 --purge --execute
           Retire all cases whose name starts with hazyCHAMPS_case23.
-          Single yes/no confirmation shown for the full matched batch.
+          One yes/no confirmation covers the full matched batch.
 
     WARNING: deletions are permanent.
     """
@@ -847,19 +850,16 @@ def cmd_retire_case(args, paths):
         sys.exit("ERROR: --purge is mutually exclusive with --keep-config, "
                  "--keep-years, and --keep-restarts.")
 
-    prefix_filter = getattr(args, 'prefix', None)
-
     registry_path = getattr(args, 'registry', None) or DEFAULT_RETIRE_REGISTRY
 
-    # _require_cases enforces prefix/names mutual exclusion and the no-selection
-    # error; prefix_filter is retained below as the batch-vs-per-case mode flag.
     cases = _require_cases(discover_cases(paths), args)
     if not cases:
         return
 
-    # In prefix mode, build all plans first, print them all, then confirm once.
-    # In non-prefix mode, confirm per-case after printing each plan.
-    # plans[case] caches the built plan so the execute pass doesn't rebuild.
+    # Build and print all plans first, then one batch confirm covering the
+    # whole set — the same two-pass double gate as the clean verbs and the
+    # runmgr run-control verbs. plans[case] caches the built plan so the
+    # execute pass doesn't rebuild.
     plans = {}
 
     # Pass 1: build and print all plans.
@@ -977,7 +977,6 @@ def cmd_retire_case(args, paths):
                 print(f"    {p}  (not found on disk)")
 
         if not args.execute:
-            print(f"\n  [preview] add --execute to perform these actions")
             continue
 
         plans[case] = dict(
@@ -994,21 +993,24 @@ def cmd_retire_case(args, paths):
         )
 
     if not args.execute:
+        preview_hint(args.execute)
+        return
+    if not plans:
         return
 
-    # In prefix mode, show batch summary and confirm once for all cases.
-    if prefix_filter:
-        combined_bytes = sum(p['total_on_disk'] for p in plans.values())
-        print(f"\n{'='*60}")
-        print(f"  BATCH: {len(plans)} case(s) matched prefix '{prefix_filter}'")
-        print(f"  Combined footprint: {fmt_size(combined_bytes)}")
-        if args.purge:
-            print(f"\n  *** WARNING: --purge — COMPLETE ERASURE ***")
-            print(f"  *** Nothing will be written to long-term. This is irreversible.")
-        answer = input(f"\n  Confirm retire-case for ALL {len(plans)} matched case(s)? [yes/no]: ").strip().lower()
-        if answer != 'yes':
-            print("  Aborted.")
-            return
+    # Single batch gate covering all selected cases (explicit names or
+    # --prefix). batch_confirm accepts yes/y and treats EOF/interrupt as no.
+    combined_bytes = sum(p['total_on_disk'] for p in plans.values())
+    print(f"\n{'='*60}")
+    print(f"  BATCH: {len(plans)} case(s) selected")
+    print(f"  Combined footprint: {fmt_size(combined_bytes)}")
+    if args.purge:
+        print(f"\n  *** WARNING: --purge — COMPLETE ERASURE ***")
+        print(f"  *** Nothing will be written to long-term. This is irreversible.")
+    action = 'PURGE — complete erasure of' if args.purge else 'Retire'
+    if not batch_confirm(action, len(plans)):
+        print("  Aborted.")
+        return
 
     # Pass 2: execute using cached plans.
     for case in list(plans.keys()):
@@ -1023,14 +1025,7 @@ def cmd_retire_case(args, paths):
         preserve_restart = p['preserve_restart']
         preserve_avg   = p['preserve_avg']
 
-        if not prefix_filter:
-            if args.purge:
-                print(f"\n  *** WARNING: --purge — COMPLETE ERASURE ***")
-                print(f"  *** Nothing will be written to long-term. This is irreversible.")
-            answer = input(f"\n  Confirm retire-case for '{case}'? [yes/no]: ").strip().lower()
-            if answer != 'yes':
-                print(f"  Skipped.")
-                continue
+        print(f"\n  Retiring: {case}")
 
         # Write case.yaml (skipped for --purge)
         if not args.purge:
@@ -1227,8 +1222,8 @@ def cmd_avg_hist(args, paths):
                 sys.exit(f"ERROR: ncra exited with code {result.returncode}")
             print(f"  Written: {outpath}")
 
-    if not args.execute and last_n is not None:
-        print("\n[preview] add --execute to perform these actions")
+    if last_n is not None:
+        preview_hint(args.execute)
 
 
 # ---------------------------------------------------------------------------

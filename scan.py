@@ -420,7 +420,9 @@ def main():
     parser.add_argument('--registry', default=None,
                         help='Output YAML path (default: active.yaml, or retired.yaml with --retired)')
     parser.add_argument('--update', action='store_true',
-                        help='Write results to the registry file (merging with any existing content); '
+                        help='Write results to the registry file. CLOBBERS existing content: '
+                             'the registry becomes exactly the cases scanned in this run '
+                             '(no merge — scanning a subset drops all other entries); '
                              'without --update, results are printed only')
     parser.add_argument('--retired', action='store_true', dest='retired',
                         help='Load pre-captured case.yaml entries from long_term/ '
