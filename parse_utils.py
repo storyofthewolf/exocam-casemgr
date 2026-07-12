@@ -289,6 +289,30 @@ def _find_cam_config_opts(xmlpath):
     return None
 
 
+def parse_atm_grid(xmlpath):
+    """Return the ATM_GRID (preferred) or GRID value from a CESM env_*.xml
+    file, or None if the file is missing/unparseable or has neither entry.
+
+    Used to discriminate spectral-element from finite-volume cases: the
+    SourceMods tree is identical for aqua SE and aqua FV configs, but the
+    grid string differs (e.g. 'ne16np4_ne16np4' vs '4x5').
+    """
+    if not os.path.exists(xmlpath):
+        return None
+    vals = {}
+    try:
+        tree = ET.parse(xmlpath)
+        for entry in tree.iter('entry'):
+            eid = entry.get('id')
+            if eid in ('ATM_GRID', 'GRID'):
+                val = entry.get('value') or entry.findtext('value') or ''
+                if val:
+                    vals[eid] = val
+    except ET.ParseError:
+        return None
+    return vals.get('ATM_GRID') or vals.get('GRID')
+
+
 def parse_run_type_fields(xmlpath):
     """
     Parse env_run.xml for RUN_TYPE, RUN_REFCASE, RUN_REFDATE, BRNCH_RETAIN_CASENAME,

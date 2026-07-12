@@ -24,7 +24,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import (
     parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_user_nl_cice,
-    parse_docn_som, parse_cam_config_opts, parse_run_type_fields,
+    parse_docn_som, parse_cam_config_opts, parse_run_type_fields, parse_atm_grid,
     compute_pstd_bar, pressure_str_to_bar, read_solar_nw
 )
 
@@ -71,11 +71,13 @@ _REGISTRY_GROUPS = [
     ('geophysical', [
         'exo_ndays', 'exo_porb', 'exo_sday', 'exo_sday_expr',
         'exo_surface_gravity', 'exo_planet_radius', 'exo_eccen', 'exo_obliq',
+        'exo_mvelp', 'exo_ve', 'exo_albdif', 'exo_albdir',
     ]),
     ('model_options', [
         'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
         'do_exo_gw', 'do_exo_simplevolc', 'exo_convect_plim',
         'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
+        'do_carma_exort', 'Tmax', 'swFluxLimit', 'lwFluxLimit',
     ]),
     ('special', [
         'carma_params', 'volc_params', 'cice_params',
@@ -123,9 +125,11 @@ def inspect_case(casedir):
                 'exo_scon', 'exo_solar_file',
                 'exo_ndays', 'exo_porb', 'exo_surface_gravity',
                 'exo_planet_radius', 'exo_eccen', 'exo_obliq',
+                'exo_mvelp', 'exo_ve', 'exo_albdif', 'exo_albdir',
                 'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
                 'do_exo_gw', 'do_exo_simplevolc', 'exo_convect_plim',
-                'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma']:
+                'exo_rad_step', 'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
+                'do_carma_exort', 'Tmax', 'swFluxLimit', 'lwFluxLimit']:
         row[key] = exo.get(key)
 
     row['exo_n2bar_expr'] = exo.get('exo_n2bar_expr')
@@ -166,14 +170,16 @@ def inspect_case(casedir):
 
     # user_nl_cice broadband albedos (configs with a cice model: aqua and mixed)
     row['cice_params'] = None
-    if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se', 'cam_mixed_fv'):
+    if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se_ne5',
+                              'cam_aqua_se_ne16', 'cam_mixed_fv'):
         cice_path = os.path.join(casedir, 'user_nl_cice')
         if os.path.exists(cice_path):
             row['cice_params'] = parse_user_nl_cice(cice_path).get('cice_params')
 
     # user_docn.streams.txt.som (aqua and mixed configs only)
     row['som_pop_frc_file'] = None
-    if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se', 'cam_mixed_fv'):
+    if row['config_type'] in ('cam_aqua_fv', 'cam_aqua_se_ne5',
+                              'cam_aqua_se_ne16', 'cam_mixed_fv'):
         docn_path = os.path.join(casedir, 'user_docn.streams.txt.som')
         if os.path.exists(docn_path):
             row['som_pop_frc_file'] = parse_docn_som(docn_path).get('som_pop_frc_file')
@@ -219,6 +225,18 @@ def _infer_config_type(casedir):
     if has_cice and has_clm:
         return 'cam_mixed_fv'
     if has_cice and not has_clm:
+        # Aqua SE configs carry the same SourceMods tree as aqua FV (src.cice
+        # only) — the grid is the only discriminator. Read ATM_GRID/GRID from
+        # the env xml files: SE grids contain 'ne5np4'/'ne16np4', FV grids
+        # look like '4x5'. Missing/unreadable grid falls back to FV.
+        for xml_name in ('env_case.xml', 'env_build.xml', 'env_run.xml'):
+            grid = parse_atm_grid(os.path.join(casedir, xml_name))
+            if grid:
+                if 'ne5np4' in grid:
+                    return 'cam_aqua_se_ne5'
+                if 'ne16np4' in grid:
+                    return 'cam_aqua_se_ne16'
+                break  # grid found and it is not SE
         return 'cam_aqua_fv'
     if has_clm and not has_cice:
         return 'cam_land_fv'

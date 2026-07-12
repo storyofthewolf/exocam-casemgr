@@ -209,7 +209,7 @@ Config-conditional logic (present in both `build.py` and `scan.py`):
 
 `_infer_config_type()` in `scan.py` decides config_type from SourceMods subdirectory presence:
 - `src.cice` + `src.clm` → `cam_mixed_fv`
-- `src.cice` only → `cam_aqua_fv`
+- `src.cice` only → aqua; the grid discriminates SE from FV (identical SourceMods trees): ATM_GRID/GRID read from `env_case.xml`/`env_build.xml`/`env_run.xml` via `parse_atm_grid` — `ne5np4` → `cam_aqua_se_ne5`, `ne16np4` → `cam_aqua_se_ne16`, anything else (or no grid found) → `cam_aqua_fv`
 - `src.clm` only → `cam_land_fv`
 - neither → `unknown`
 

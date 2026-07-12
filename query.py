@@ -176,12 +176,14 @@ _BASE_FIELD_ORDER = [
     # geophysical
     'exo_surface_gravity', 'exo_planet_radius',
     'exo_ndays', 'exo_porb', 'exo_sday',
-    'exo_eccen', 'exo_obliq',
+    'exo_eccen', 'exo_obliq', 'exo_mvelp', 'exo_ve',
+    'exo_albdif', 'exo_albdir',
     # model options
     'do_exo_atmconst', 'do_exo_rt', 'do_exo_synchronous',
     'do_exo_gw', 'do_exo_simplevolc',
     'exo_convect_plim', 'exo_rad_step',
     'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
+    'do_carma_exort', 'Tmax', 'swFluxLimit', 'lwFluxLimit',
     # land/ocean files
     'finidat', 'fsurdat', 'som_pop_frc_file',
     # special
