@@ -75,6 +75,7 @@ cases/ + rundir/ + archive/ on HPC
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics (grep/sed/echo) rather than plain append, to avoid duplicate keys.
 - `exort_pkg` ending in `*` signals custom RT copied into SourceMods. In newcase mode this is a validation error; in clone mode it is allowed and triggers `_build_usr_src_fix_block` to rewrite the inherited `-usr_src` path.
 - `runmgr.py check` defaults to **all discoverable cases** when given no names — unlike every destructive subcommand, which requires explicit names.
+- `user_nl_cam` scanning is a **curated whitelist by design** (owner decision, 2026-07-12). `nl_cam_params` is open-ended on the build side — any CAM namelist key upserts into `user_nl_cam` — but `parse_user_nl_cam` extracts only named keys (`ncdata`, `bnd_topo`, `gw_drag_file`, `prescribed_ozone_file`/`_datapath`) plus the `carma_*`/`volc_*` prefix groups. The scanned namelist mixes shipped-template defaults with matrix-set keys, so scanning everything would drag boilerplate into the registry and pin it in exported matrices. Keys are added **à la carte** when they become scientifically worth round-tripping — see "Adding a scanned user_nl_cam key" below. On export the scanned keys are re-nested under `nl_cam_params` (`_NL_CAM_SCANNED_KEYS` in query.py); clone exports drop them (composition is inherited from the clone source).
 
 ---
 
@@ -285,6 +286,12 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 3. If it should be scanned into the registry, add it to `inspect_case()` in `scan.py` and to `_REGISTRY_GROUPS`.
 4. For `generate --verify` type checking, add it to `PARAM_TYPES` in `build.py` with its `bool`/`int`/`real`/`str` tag (params absent from `PARAM_TYPES` are not type-checked).
 5. If it is a radiatively-active gas partial pressure, add it to `GAS_BAR_PARAMS` — otherwise newcase will not zero it (breaking "matrix is sole arbiter") and it will not be subtracted from the N2 fill (silently shifting total surface pressure). Adding to `GAS_BAR_PARAMS` also makes `build.py patch` warn when it is patched in place.
+
+### Adding a scanned user_nl_cam key (curated whitelist)
+1. Add the key to the `keys` whitelist in `parse_user_nl_cam` (parse_utils.py). Quoted string values are caught as-is; a bare numeric/logical key would need the `_RE_NL_VAL` path (currently only the `carma_*`/`volc_*` prefixes use it).
+2. Add it to the appropriate group in `scan._REGISTRY_GROUPS` and collect it in `inspect_case()` (`row[key] = nl.get(key)`).
+3. Add it to `_NL_CAM_SCANNED_KEYS` in query.py — `_row_to_base` then nests it under `nl_cam_params` in exported matrices automatically (`nl_cam_params` is already in `_BASE_FIELD_ORDER`).
+4. Re-scan on the HPC (`scan.py --update`) to populate the new field.
 
 ### Adding a new netCDF file field to `--verify`
 1. Add `(field, resolver, restrict_config_types)` to `NCFILE_FIELDS` in `build.py`.

@@ -67,6 +67,7 @@ _REGISTRY_GROUPS = [
         'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar', 'exo_n2bar',
         'exo_n2bar_expr', 'exo_pstd_computed_bar',
         'exo_scon', 'exo_solar_file',
+        'prescribed_ozone_file', 'prescribed_ozone_datapath',
     ]),
     ('geophysical', [
         'exo_ndays', 'exo_porb', 'exo_sday', 'exo_sday_expr',
@@ -153,6 +154,8 @@ def inspect_case(casedir):
     row['ncdata'] = nl.get('ncdata')
     row['ncdata_pressure_str'] = nl.get('ncdata_pressure_str')
     row['ncdata_levels'] = nl.get('ncdata_levels')
+    row['prescribed_ozone_file'] = nl.get('prescribed_ozone_file')
+    row['prescribed_ozone_datapath'] = nl.get('prescribed_ozone_datapath')
     row['carma_params'] = nl.get('carma_params') or None
     row['volc_params'] = nl.get('volc_params') or None
 

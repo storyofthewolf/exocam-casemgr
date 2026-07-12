@@ -126,11 +126,19 @@ def parse_exoplanet_mod(path):
 def parse_user_nl_cam(path):
     """
     Parse user_nl_cam, return dict with ncdata, bnd_topo, gw_drag_file,
+    prescribed_ozone_file, prescribed_ozone_datapath,
     ncdata_pressure_str / ncdata_levels extracted from IC filename, and
     carma_params / volc_params dicts for any carma_* / volc_* keys found.
+
+    Extraction is a curated whitelist by design (plus the carma_*/volc_*
+    prefix groups): user_nl_cam mixes shipped-template defaults with
+    matrix-set keys, so scanning everything would drag boilerplate into the
+    registry. Scientifically meaningful keys are added here a la carte as
+    they become worth round-tripping.
     """
     result = {}
-    keys = {'ncdata', 'bnd_topo', 'gw_drag_file'}
+    keys = {'ncdata', 'bnd_topo', 'gw_drag_file',
+            'prescribed_ozone_file', 'prescribed_ozone_datapath'}
     carma = {}
     volc = {}
     with open(path) as f:

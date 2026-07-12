@@ -190,8 +190,13 @@ _BASE_FIELD_ORDER = [
     # land/ocean files
     'finidat', 'fsurdat', 'som_pop_frc_file',
     # special
-    'carma_params', 'volc_params', 'cice_params',
+    'nl_cam_params', 'carma_params', 'volc_params', 'cice_params',
 ]
+
+# Flat registry keys (scanned from user_nl_cam) that the matrix nests under
+# nl_cam_params. Scanning is a curated whitelist by design — extend this
+# tuple (and parse_user_nl_cam / scan._REGISTRY_GROUPS) a la carte.
+_NL_CAM_SCANNED_KEYS = ('prescribed_ozone_file', 'prescribed_ozone_datapath')
 
 # Fields included in a clone export base (explicit allowlist — all others omitted)
 _CLONE_BASE_FIELDS = {
@@ -223,9 +228,17 @@ _KEY_RENAMES_REV = {v: k for k, v in _KEY_RENAMES.items()}
 def _row_to_base(row):
     """Convert a flat registry row to a matrix base dict."""
     base = {}
+    # Reassemble the nl_cam_params group from the flat scanned keys; mark
+    # them seen so the trailing append loop doesn't re-emit them flat.
+    nl_cam = {k: row[k] for k in _NL_CAM_SCANNED_KEYS
+              if row.get(k) is not None}
     # Build in _BASE_FIELD_ORDER first (controls key order in output)
-    seen = set()
+    seen = set(_NL_CAM_SCANNED_KEYS)
     for field in _BASE_FIELD_ORDER:
+        if field == 'nl_cam_params':
+            if nl_cam:
+                base['nl_cam_params'] = nl_cam
+            continue
         reg_key = _KEY_RENAMES_REV.get(field, field)
         if reg_key in row and row[reg_key] is not None and reg_key not in _SKIP_KEYS:
             base[field] = row[reg_key]
