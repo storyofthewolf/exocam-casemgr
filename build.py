@@ -1,9 +1,31 @@
 #!/usr/bin/env python3
 """
-ExoCAM build script generator. Reads an experiment matrix YAML and a config
-registry YAML, validates each case, and writes one self-contained shell script
-per case. Each script embeds the rendered exoplanet_mod.F90 as an inline
-heredoc so no external staging directory is required.
+ExoCAM case build tool. Three subcommands:
+
+  generate  Read an experiment matrix YAML + config registry YAML, validate
+            each case (types, required fields, IC lookup), and write one
+            self-contained shell build script per case (create_newcase or, in
+            clone mode, create_clone + build). The rendered exoplanet_mod.F90
+            is embedded as an inline heredoc — no staging directory. Scripts
+            are only written, never executed. --verify checks matrix coherency
+            (types, netCDF file existence, scientific-consistency warnings)
+            and generates nothing.
+
+  make      Run generated *_build.sh scripts from scripts-dir: explicit NAME
+            args, --prefix, or --all (a bare `make` just lists the scripts).
+            Builds but does not submit; --send-it also sbatches each case
+            (submission otherwise belongs to runmgr.py submit).
+
+  patch     Edit exoplanet_mod.F90 parameters in place in existing cases and
+            rerun <case>.build — the only way to change a compiled-in Fortran
+            parameter without recreating the case (generate would destroy the
+            run via create_newcase/create_clone). Preview by default;
+            --execute gates a single batch [yes/no].
+
+For a newcase the experiment matrix is the sole arbiter of atmospheric
+composition: unspecified gases render as 0.0 and silence on ozone injects the
+zeroVMR default. Clones preserve their source case's composition. See
+CLAUDE.md for the full rules.
 """
 
 import argparse
