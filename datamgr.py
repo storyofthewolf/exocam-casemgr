@@ -1248,17 +1248,27 @@ def cmd_avg_hist(args, paths):
             for model in models:
                 hist_dir = os.path.join(archive, case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
-                non_avg = [f for f in files if 'avg' not in f]
-                if not non_avg:
+                if not files:
                     print(f"  {model}/hist:    0 files")
                     continue
-                years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
-                if years:
-                    span = f"years {years[0]}–{years[-1]}"
+                # avg and non-avg bytes reported separately: the file count
+                # excludes avg files, so the size next to it must too.
+                avg_files = [f for f in files if 'avg' in f]
+                non_avg   = [f for f in files if 'avg' not in f]
+                avg_bytes = 0
+                for f in avg_files:
+                    try:
+                        avg_bytes += os.path.getsize(os.path.join(hist_dir, f))
+                    except OSError:
+                        pass
+                avg_note = f", avg present ({fmt_size(avg_bytes)})" if avg_files else ""
+                if non_avg:
+                    years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
+                    span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
+                    print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  "
+                          f"({fmt_size(total - avg_bytes)}){avg_note}")
                 else:
-                    span = "years unknown"
-                avg_note = ", avg file present" if any('avg' in f for f in files) else ""
-                print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
+                    print(f"  {model}/hist:     0 files{avg_note}")
             sets = restart_sets(case, paths)
             rest_count = len(sets)
             if rest_count:

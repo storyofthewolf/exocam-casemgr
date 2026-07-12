@@ -37,7 +37,10 @@ _REGISTRY_GROUPS = [
     'meta', 'atmosphere', 'geophysical', 'model_options', 'special', 'diagnostics',
 ]
 
-DEFAULT_REGISTRY = 'active.yaml'
+# Script-dir-absolute, matching RETIRED_REGISTRY: scan.py writes active.yaml
+# next to itself, so a CWD-relative default only resolved when query.py was
+# run from the repo directory.
+DEFAULT_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'active.yaml')
 RETIRED_REGISTRY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'retired.yaml')
 DEFAULT_EXP_MATRIX_DIR = 'exp_matrices'
 DEFAULT_CONFIG   = os.path.join(os.path.dirname(os.path.abspath(__file__)),

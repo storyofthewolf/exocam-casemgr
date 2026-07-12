@@ -89,6 +89,26 @@ def _read_xml_var(xml_path, var_name):
     return None
 
 
+# env files searched by _read_case_xml_var. env_run.xml first: it holds the
+# run-control vars (CONTINUE_RUN, STOP_N, RESUBMIT, ...) these verbs
+# overwhelmingly read.
+_ENV_XML_FILES = ('env_run.xml', 'env_build.xml', 'env_case.xml', 'env_mach_pes.xml')
+
+
+def _read_case_xml_var(case_dir, var_name):
+    """Return VAR's value from whichever env_*.xml in case_dir defines it.
+
+    ./xmlchange finds a variable in any env file, so the previews must look
+    in the same places — otherwise a build-time var (e.g. CAM_CONFIG_OPTS)
+    previews as '?' even though the change would apply.
+    """
+    for name in _ENV_XML_FILES:
+        val = _read_xml_var(os.path.join(case_dir, name), var_name)
+        if val is not None:
+            return val
+    return None
+
+
 def _resolve_cases(args, paths, verb):
     """Resolve the case list from explicit names or --prefix.
 
@@ -206,11 +226,9 @@ def cmd_xml(args, paths):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             continue
 
-        env_run = os.path.join(case_dir, 'env_run.xml')
-
         # Read current values for everything we're about to show or change.
-        cur_q = {var: (_read_xml_var(env_run, var) or '?') for var in query_vars}
-        cur_c = {var: (_read_xml_var(env_run, var) or '?') for var, _ in change_vars}
+        cur_q = {var: (_read_case_xml_var(case_dir, var) or '?') for var in query_vars}
+        cur_c = {var: (_read_case_xml_var(case_dir, var) or '?') for var, _ in change_vars}
 
         # Flag active jobs in the preview — edits only apply on the next segment.
         status_note = ''
@@ -264,6 +282,9 @@ def cmd_continue(args, paths):
       COMPLETE               — the normal case
       anything else          — flagged in the preview (not blocked)
 
+    Cases with no <case>.run are skipped before any xmlchange is applied —
+    a case sbatch cannot launch is never modified.
+
     The per-case preview is followed by a single batch [yes/no] before any job
     is submitted (the same double-gate as build.py make). Without --execute,
     prints the preview and exits. Requires explicit case names or --prefix —
@@ -284,16 +305,23 @@ def cmd_continue(args, paths):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             continue
 
-        env_run = os.path.join(case_dir, 'env_run.xml')
-        cur_continue = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
-        cur_vals = {var: (_read_xml_var(env_run, var) or '?') for var, _ in set_vars}
+        # Pre-check the run script before anything else: submit checks it,
+        # and continuing without it would apply the xmlchange calls only to
+        # have sbatch fail afterwards, leaving CONTINUE_RUN already flipped.
+        run_script = os.path.join(case_dir, f'{case}.run')
+        if not os.path.isfile(run_script):
+            print(f"  {case}: SKIP — not built ({case}.run not found). "
+                  f"Run build.py make first.")
+            continue
+
+        cur_continue = _read_case_xml_var(case_dir, 'CONTINUE_RUN') or '?'
+        cur_vals = {var: (_read_case_xml_var(case_dir, var) or '?') for var, _ in set_vars}
 
         status_label = _probe_status(case_dir, case)
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        run_script = os.path.join(case_dir, f'{case}.run')
         flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
         print(f"  {case}  [{status_label}]{flag}")
         print(f"    CONTINUE_RUN: {cur_continue} -> TRUE")
@@ -349,6 +377,9 @@ def cmd_restart(args, paths):
       COMPLETE               — the normal case
       anything else          — flagged in the preview (not blocked)
 
+    Cases with no <case>.run are skipped before any xmlchange is applied —
+    a case sbatch cannot launch is never modified.
+
     The per-case preview is followed by a single batch [yes/no] before any job
     is submitted (the same double-gate as build.py make). Without --execute,
     prints the preview and exits. Requires explicit case names or --prefix —
@@ -369,18 +400,23 @@ def cmd_restart(args, paths):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             continue
 
-        env_run = os.path.join(case_dir, 'env_run.xml')
+        # Pre-check the run script before anything else (same rationale as
+        # continue: never apply xmlchange to a case sbatch cannot launch).
+        run_script = os.path.join(case_dir, f'{case}.run')
+        if not os.path.isfile(run_script):
+            print(f"  {case}: SKIP — not built ({case}.run not found). "
+                  f"Run build.py make first.")
+            continue
 
         # Read current values for CONTINUE_RUN and each var being changed
-        cur_continue = _read_xml_var(env_run, 'CONTINUE_RUN') or '?'
-        cur_vals = {var: (_read_xml_var(env_run, var) or '?') for var, _ in set_vars}
+        cur_continue = _read_case_xml_var(case_dir, 'CONTINUE_RUN') or '?'
+        cur_vals = {var: (_read_case_xml_var(case_dir, var) or '?') for var, _ in set_vars}
 
         status_label = _probe_status(case_dir, case)
         if status_label in ('RUNNING', 'RESUBMITTED'):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        run_script = os.path.join(case_dir, f'{case}.run')
         flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
         print(f"  {case}  [{status_label}]{flag}")
         print(f"    CONTINUE_RUN: {cur_continue} -> FALSE")
@@ -658,12 +694,17 @@ def _energy_balance(case, archive, n_months=12):
     date_last = _hist_date(selected[-1])
 
     input_paths = [os.path.join(hist_dir, f) for f in selected]
-    tmp_path = os.path.join(tempfile.gettempdir(), f'runmgr_energy_{case}.nc')
+    # Unique per-invocation temp name: a fixed name in shared /tmp collides
+    # with other users' leftovers (ncra then fails on a file it cannot
+    # overwrite). mkstemp pre-creates the file, so ncra needs -O to write
+    # into it without its interactive overwrite prompt.
+    fd, tmp_path = tempfile.mkstemp(prefix=f'runmgr_energy_{case}_', suffix='.nc')
+    os.close(fd)
 
     try:
         try:
             result = subprocess.run(
-                ['ncra'] + input_paths + [tmp_path],
+                ['ncra', '-O'] + input_paths + [tmp_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
@@ -925,16 +966,30 @@ def cmd_check(args, paths):
             for model in AVG_HIST_DEFAULT_MODELS:
                 hist_dir = os.path.join(archive, case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
-                non_avg = [f for f in files if 'avg' not in f]
-                if not non_avg:
+                if not files:
                     info_lines.append(f"  {model}/hist:    0 files")
                     continue
+                # Count avg and non-avg bytes separately: the file count
+                # excludes avg files, so the size next to it must too, and
+                # a dir holding only avg files still contributes to TOTAL.
                 grand_total += total
-                years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
-                span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
-                avg_note = ", avg present" if any('avg' in f for f in files) else ""
-                info_lines.append(
-                    f"  {model}/hist:  {len(non_avg):>4} files,  {span}  ({fmt_size(total)}){avg_note}")
+                avg_files = [f for f in files if 'avg' in f]
+                non_avg   = [f for f in files if 'avg' not in f]
+                avg_bytes = 0
+                for f in avg_files:
+                    try:
+                        avg_bytes += os.path.getsize(os.path.join(hist_dir, f))
+                    except OSError:
+                        pass
+                avg_note = f", avg present ({fmt_size(avg_bytes)})" if avg_files else ""
+                if non_avg:
+                    years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
+                    span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
+                    info_lines.append(
+                        f"  {model}/hist:  {len(non_avg):>4} files,  {span}  "
+                        f"({fmt_size(total - avg_bytes)}){avg_note}")
+                else:
+                    info_lines.append(f"  {model}/hist:     0 files{avg_note}")
             sets = restart_sets(case, paths)
             rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
             grand_total += rest_total
