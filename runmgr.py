@@ -59,10 +59,10 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manage_utils import (
-    ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS,
+    ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
-    _hist_year, restart_sets, submit_case,
+    _hist_year, hist_info_line, restart_sets, submit_case,
     _require_cases, batch_confirm, preview_hint,
 )
 
@@ -234,7 +234,7 @@ def cmd_xml(args, paths):
         status_note = ''
         if change_vars:
             status_label = _probe_status(case_dir, case)
-            if status_label in ('RUNNING', 'RESUBMITTED'):
+            if status_label in ACTIVE_STATUSES:
                 status_note = f"  [{status_label} — edits apply next segment]"
 
         print(f"  {case}{status_note}")
@@ -318,7 +318,7 @@ def cmd_continue(args, paths):
         cur_vals = {var: (_read_case_xml_var(case_dir, var) or '?') for var, _ in set_vars}
 
         status_label = _probe_status(case_dir, case)
-        if status_label in ('RUNNING', 'RESUBMITTED'):
+        if status_label in ACTIVE_STATUSES:
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
@@ -413,7 +413,7 @@ def cmd_restart(args, paths):
         cur_vals = {var: (_read_case_xml_var(case_dir, var) or '?') for var, _ in set_vars}
 
         status_label = _probe_status(case_dir, case)
-        if status_label in ('RUNNING', 'RESUBMITTED'):
+        if status_label in ACTIVE_STATUSES:
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
@@ -500,7 +500,7 @@ def cmd_submit(args, paths):
             continue
 
         status_label = _probe_status(case_dir, case)
-        if status_label in ('RUNNING', 'RESUBMITTED'):
+        if status_label in ACTIVE_STATUSES:
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
@@ -584,24 +584,54 @@ def _parse_casestatus(casestatus_path):
     return {'status': status, 'last_event': event, 'last_ts': ts}
 
 
+# Per-process squeue snapshot. Sentinel = not yet probed; None = squeue
+# unavailable; otherwise a frozenset of the user's active job names.
+_ACTIVE_JOBS_UNPROBED = object()
+_active_jobs_cache = _ACTIVE_JOBS_UNPROBED
+
+
+def _active_jobs():
+    """Return the set of the invoking user's queued/running SLURM job names,
+    or None if squeue is unavailable (missing binary or non-zero exit —
+    graceful degradation).
+
+    One `squeue --me` snapshot per process, memoized: these tools are one
+    command per process, and the previous per-case `squeue --name <case>`
+    probe cost one controller round-trip per case in every bulk preview.
+    Job names equal case names (build.py defaults #SBATCH -J to the full
+    case name), and they are the user's own jobs, so --me scoping is exact.
+    """
+    global _active_jobs_cache
+    if _active_jobs_cache is _ACTIVE_JOBS_UNPROBED:
+        try:
+            result = subprocess.run(
+                ['squeue', '--me', '-h', '-o', '%j'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
+        except FileNotFoundError:
+            _active_jobs_cache = None
+        else:
+            if result.returncode != 0:
+                _active_jobs_cache = None
+            else:
+                _active_jobs_cache = frozenset(
+                    line.strip() for line in result.stdout.splitlines()
+                    if line.strip())
+    return _active_jobs_cache
+
+
 def _squeue_probe(case):
     """Return True if a SLURM job named *case* is currently queued/running.
 
-    Returns None if squeue is unavailable or returns a non-zero exit code for
-    a reason other than the job not existing (graceful degradation).
+    Returns None if squeue is unavailable (see _active_jobs). Backed by the
+    per-process snapshot rather than a per-case squeue spawn.
     """
-    try:
-        result = subprocess.run(
-            ['squeue', '--name', case, '-h'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-        )
-    except FileNotFoundError:
+    active = _active_jobs()
+    if active is None:
         return None
-    if result.returncode != 0:
-        return None
-    return bool(result.stdout.strip())
+    return case in active
 
 
 # Markers in cases/<case>/run.out. The file is appended to on every run attempt,
@@ -966,30 +996,9 @@ def cmd_check(args, paths):
             for model in AVG_HIST_DEFAULT_MODELS:
                 hist_dir = os.path.join(archive, case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
-                if not files:
-                    info_lines.append(f"  {model}/hist:    0 files")
-                    continue
-                # Count avg and non-avg bytes separately: the file count
-                # excludes avg files, so the size next to it must too, and
-                # a dir holding only avg files still contributes to TOTAL.
+                # A dir holding only avg files still contributes to TOTAL.
                 grand_total += total
-                avg_files = [f for f in files if 'avg' in f]
-                non_avg   = [f for f in files if 'avg' not in f]
-                avg_bytes = 0
-                for f in avg_files:
-                    try:
-                        avg_bytes += os.path.getsize(os.path.join(hist_dir, f))
-                    except OSError:
-                        pass
-                avg_note = f", avg present ({fmt_size(avg_bytes)})" if avg_files else ""
-                if non_avg:
-                    years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
-                    span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
-                    info_lines.append(
-                        f"  {model}/hist:  {len(non_avg):>4} files,  {span}  "
-                        f"({fmt_size(total - avg_bytes)}){avg_note}")
-                else:
-                    info_lines.append(f"  {model}/hist:     0 files{avg_note}")
+                info_lines.append(hist_info_line(model, hist_dir, files, total))
             sets = restart_sets(case, paths)
             rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
             grand_total += rest_total

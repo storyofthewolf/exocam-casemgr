@@ -64,9 +64,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scan import inspect_case, _rows_to_ordered, find_case_dirs
 from manage_utils import (
     ARCHIVE_MODELS, HIST_MODELS, MODEL_STEM, AVG_HIST_DEFAULT_MODELS,
+    ACTIVE_STATUSES,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
-    _hist_year, _hist_keep_years_filter, restart_sets,
+    _hist_year, _hist_keep_years_filter, hist_info_line, restart_sets,
     preview_hint, batch_confirm, _require_cases,
 )
 
@@ -180,10 +181,6 @@ def _run_batch(actions, confirm_phrase, execute):
         return
     for do in actions:
         do()
-
-
-# Status labels that mean a job is active for the case right now.
-ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED')
 
 
 def _probe_case_status(case, paths):
@@ -836,6 +833,19 @@ def _execute_copy_case_config(actions):
             shutil.copy2(src, dst)
 
 
+def _preserve_collisions(preserve_hist, preserve_restart, preserve_avg):
+    """Return preserve-move destinations that already exist in long-term.
+
+    The one collision test behind both retire passes — the preview hard block
+    and the deliberate pre-execute re-check — so a future preserve category
+    cannot be guarded in one pass and missed in the other.
+    """
+    move_dsts = ([d for _, d in preserve_hist]
+                 + [d for _, d in preserve_restart]
+                 + [d for _, d in preserve_avg])
+    return [d for d in move_dsts if os.path.exists(d)]
+
+
 def cmd_retire_case(args, paths):
     """
     Retire one or more cases from cesm_scratch. Three retirement tiers:
@@ -946,6 +956,17 @@ def cmd_retire_case(args, paths):
         if status in ACTIVE_STATUSES:
             print(f"  [{status}] — BLOCKED: a job is active for this case; "
                   f"retiring would delete the run out from under it.")
+            # A raw RUNNING label with no squeue available means the last
+            # CaseStatus event is 'run started' but the job could not be
+            # verified (a crashed case would normally refine to RUNNING? /
+            # WALLCLOCK). Still blocked — fail safe — but say why, so a
+            # stale label doesn't read as a live run.
+            from runmgr import _active_jobs
+            if status == 'RUNNING' and _active_jobs() is None:
+                print(f"  NOTE: squeue is unavailable, so this status is the raw "
+                      f"CaseStatus label and may be stale (a crashed run also "
+                      f"reads 'run started'). Re-run where squeue works to "
+                      f"verify and retire.")
             continue
 
         casedir_path = os.path.join(caseroot, case) if caseroot else ''
@@ -1022,10 +1043,8 @@ def cmd_retire_case(args, paths):
         # directory nests the source inside it (rest/<date>/<date>). A
         # collision means a previous (possibly interrupted) retire left
         # content behind — hard-block the case so nothing is touched.
-        move_dsts = ([d for _, d in preserve_hist]
-                     + [d for _, d in preserve_restart]
-                     + [d for _, d in preserve_avg])
-        collisions = [d for d in move_dsts if os.path.exists(d)]
+        collisions = _preserve_collisions(
+            preserve_hist, preserve_restart, preserve_avg)
         if collisions:
             print(f"  BLOCKED: {len(collisions)} preserve target(s) already "
                   f"exist in long-term:")
@@ -1096,7 +1115,8 @@ def cmd_retire_case(args, paths):
         return
 
     # Single batch gate covering all selected cases (explicit names or
-    # --prefix). batch_confirm accepts yes/y and treats EOF/interrupt as no.
+    # --prefix). batch_confirm requires the literal 'yes' and treats
+    # EOF/interrupt as no.
     combined_bytes = sum(p['total_on_disk'] for p in plans.values())
     print(f"\n{'='*60}")
     print(f"  BATCH: {len(plans)} case(s) selected")
@@ -1124,10 +1144,8 @@ def cmd_retire_case(args, paths):
 
         # Re-check preserve-target collisions right before acting: the plan
         # was built during the preview pass, and long-term may have changed.
-        move_dsts = ([d for _, d in preserve_hist]
-                     + [d for _, d in preserve_restart]
-                     + [d for _, d in preserve_avg])
-        stale = [d for d in move_dsts if os.path.exists(d)]
+        stale = _preserve_collisions(
+            preserve_hist, preserve_restart, preserve_avg)
         if stale:
             print(f"\n  {case}: BLOCKED — {len(stale)} preserve target(s) "
                   f"appeared in long-term since the preview; skipping.")
@@ -1248,27 +1266,7 @@ def cmd_avg_hist(args, paths):
             for model in models:
                 hist_dir = os.path.join(archive, case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
-                if not files:
-                    print(f"  {model}/hist:    0 files")
-                    continue
-                # avg and non-avg bytes reported separately: the file count
-                # excludes avg files, so the size next to it must too.
-                avg_files = [f for f in files if 'avg' in f]
-                non_avg   = [f for f in files if 'avg' not in f]
-                avg_bytes = 0
-                for f in avg_files:
-                    try:
-                        avg_bytes += os.path.getsize(os.path.join(hist_dir, f))
-                    except OSError:
-                        pass
-                avg_note = f", avg present ({fmt_size(avg_bytes)})" if avg_files else ""
-                if non_avg:
-                    years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
-                    span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
-                    print(f"  {model}/hist:  {len(non_avg):>4} files,  {span}  "
-                          f"({fmt_size(total - avg_bytes)}){avg_note}")
-                else:
-                    print(f"  {model}/hist:     0 files{avg_note}")
+                print(hist_info_line(model, hist_dir, files, total))
             sets = restart_sets(case, paths)
             rest_count = len(sets)
             if rest_count:

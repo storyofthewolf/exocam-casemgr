@@ -25,6 +25,12 @@ MODEL_STEM = {
 }
 AVG_HIST_DEFAULT_MODELS = ['atm', 'lnd', 'ice']
 
+# Probe-derived status labels that mean a SLURM job is active for the case
+# right now. Produced by runmgr._probe_status; consumed by the run-control
+# verbs (hard block) and the datamgr destructive verbs (block or flag). One
+# definition so a future label (e.g. PENDING) cannot drift between the tools.
+ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED')
+
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
 
@@ -145,6 +151,34 @@ def _hist_year(filename):
     return m.group(1) if m else None
 
 
+def hist_info_line(model, hist_dir, files, total):
+    """Format the --info summary line for one <model>/hist directory.
+
+    The single formatter behind `datamgr.py avg --info` and `runmgr.py check
+    --info`, so the two reports cannot drift. Avg and non-avg bytes are
+    reported separately: the file count excludes avg files, so the size next
+    to it must too. `files`/`total` are the caller's list_files_with_size()
+    result for hist_dir (not re-listed here).
+    """
+    if not files:
+        return f"  {model}/hist:    0 files"
+    avg_files = [f for f in files if 'avg' in f]
+    non_avg   = [f for f in files if 'avg' not in f]
+    avg_bytes = 0
+    for f in avg_files:
+        try:
+            avg_bytes += os.path.getsize(os.path.join(hist_dir, f))
+        except OSError:
+            pass
+    avg_note = f", avg present ({fmt_size(avg_bytes)})" if avg_files else ""
+    if not non_avg:
+        return f"  {model}/hist:     0 files{avg_note}"
+    years = sorted(y for y in (_hist_year(f) for f in non_avg) if y)
+    span = f"years {years[0]}–{years[-1]}" if years else "years unknown"
+    return (f"  {model}/hist:  {len(non_avg):>4} files,  {span}  "
+            f"({fmt_size(total - avg_bytes)}){avg_note}")
+
+
 def _hist_keep_years_filter(archive_path, models, keep_n):
     """
     Partition hist files across *models* under archive_path into keep/delete
@@ -225,13 +259,18 @@ def batch_confirm(action, n):
     acting on the entire batch — one confirmation instead of one per case.
     `action` is a verb phrase; rendered as "<action> N case(s)? [yes/no]:".
     Returns True to proceed. EOF/interrupt is treated as 'no'.
+
+    Only the literal word 'yes' proceeds — a bare 'y' does not. This gate
+    fronts irreversible operations (retire --purge erases cases outright), and
+    the prompt advertises [yes/no]; requiring the full word keeps a reflexive
+    single keystroke from arming it.
     """
     try:
         answer = input(f"\n  {action} {n} case(s)? [yes/no]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         return False
-    return answer in ('yes', 'y')
+    return answer == 'yes'
 
 
 # ---------------------------------------------------------------------------
