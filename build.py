@@ -379,9 +379,36 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
+# Namelist param-group dicts stored under a single matrix key. These merge
+# one level deep in resolve_case rather than replacing wholesale.
+NL_GROUP_KEYS = ('carma_params', 'volc_params', 'nl_cam_params', 'cice_params')
+
+
 def resolve_case(base, overrides):
+    """Merge a per-case matrix entry over the base block.
+
+    Scalar keys: the per-case value replaces the base value.
+
+    Namelist param-group dicts (NL_GROUP_KEYS): merge one level deep — a
+    per-case block overrides only the inner keys it names and inherits the
+    rest of the base block. Base-specified keys are never silently dropped
+    (a case naming just `nhtfrq` must not shed the base's ozone keys and
+    silently flip to the zero-ozone newcase default). To remove an inherited
+    inner key for one case, set it to an explicit `null` in the per-case
+    block — null-valued inner keys are deleted after the merge.
+    """
     spec = dict(base)
     spec.update(overrides)
+    for group in NL_GROUP_KEYS:
+        base_grp = base.get(group)
+        over_grp = overrides.get(group)
+        if isinstance(base_grp, dict) and isinstance(over_grp, dict):
+            spec[group] = {**base_grp, **over_grp}
+        if isinstance(spec.get(group), dict):
+            # Drop explicit nulls (the deletion marker) so they neither
+            # reach the namelist upsert nor linger in the resolved spec.
+            spec[group] = {k: v for k, v in spec[group].items()
+                           if v is not None}
     return spec
 
 
