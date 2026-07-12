@@ -160,6 +160,25 @@ def _check_type(value, type_tag):
     return None
 
 
+def _type_errors(spec):
+    """Type-check every spec value with a PARAM_TYPES entry.
+
+    Returns a list of error strings. Shared by verify_case and validate_case
+    so plain `generate` is exactly as strict as `--verify` and `patch --set`:
+    an unvalidated value must never reach _fortran_value, whose int branch
+    would silently truncate a non-integral (26.5 -> 26) or crash on a
+    non-numeric.
+    """
+    errors = []
+    for key, type_tag in PARAM_TYPES.items():
+        if key not in spec:
+            continue
+        reason = _check_type(spec[key], type_tag)
+        if reason:
+            errors.append(f"type: {key}: {reason}")
+    return errors
+
+
 def _expand_local_path(path):
     """Expand $VARS and ~ in a path. Return (expanded, resolvable) where
     resolvable is False if the result still contains an unexpanded shell var
@@ -325,12 +344,7 @@ def verify_case(spec, registry, paths):
     notes = []
 
     # 1. Type checks
-    for key, type_tag in PARAM_TYPES.items():
-        if key not in spec:
-            continue
-        reason = _check_type(spec[key], type_tag)
-        if reason:
-            errors.append(f"type: {key}: {reason}")
+    errors.extend(_type_errors(spec))
 
     # 2. NetCDF file existence
     config_type = spec.get('config_type', '')
@@ -361,6 +375,14 @@ def verify_case(spec, registry, paths):
                 errors.append(f"nc: {field}: file not found: {local}")
 
     # 3. Scientific consistency warnings (never fail the case)
+    nl_cam = spec.get('nl_cam_params') or {}
+    if (not spec.get('clone')
+            and 'prescribed_ozone_datapath' in nl_cam
+            and 'prescribed_ozone_file' not in nl_cam):
+        warnings.append(
+            "ozone: prescribed_ozone_datapath set without "
+            "prescribed_ozone_file — the pair is owned as a unit; generate "
+            "will force the zeroVMR no-ozone default for both")
     warnings.extend(_verify_o2_ozone(spec))
     warnings.extend(_verify_ozone_convect_plim(spec))
 
@@ -395,7 +417,10 @@ def resolve_case(base, overrides):
     (a case naming just `nhtfrq` must not shed the base's ozone keys and
     silently flip to the zero-ozone newcase default). To remove an inherited
     inner key for one case, set it to an explicit `null` in the per-case
-    block — null-valued inner keys are deleted after the merge.
+    block — null-valued inner keys are deleted after the merge. A bare
+    `nl_cam_params:` stub (the whole group null, e.g. every inner key
+    commented out) inherits the base group unchanged — deletion is per
+    inner key only, never wholesale.
     """
     spec = dict(base)
     spec.update(overrides)
@@ -404,6 +429,17 @@ def resolve_case(base, overrides):
         over_grp = overrides.get(group)
         if isinstance(base_grp, dict) and isinstance(over_grp, dict):
             spec[group] = {**base_grp, **over_grp}
+        elif isinstance(base_grp, dict) and over_grp is None:
+            # Group absent from the per-case block, or present as a bare
+            # null stub: inherit the base group. Without this, the stub's
+            # None (stamped by spec.update above) would silently shed the
+            # base keys — the exact zero-ozone flip the merge prevents.
+            spec[group] = dict(base_grp)
+        if spec.get(group) is None and group in spec:
+            # Bare null stub with no base group: drop the key entirely so
+            # None never reaches the namelist rendering or the registry.
+            del spec[group]
+            continue
         if isinstance(spec.get(group), dict):
             # Drop explicit nulls (the deletion marker) so they neither
             # reach the namelist upsert nor linger in the resolved spec.
@@ -489,7 +525,15 @@ def find_ic_file(spec, registry):
 
 def validate_case(spec, registry):
     """Return list of error strings. Empty list = valid."""
-    errors = []
+    # Type tags first, and alone: the checks below (and rendering after them)
+    # coerce values to float, so a mistyped param must fail here with a clean
+    # message rather than crash the coercion or silently truncate in
+    # _fortran_value's int branch. Under --verify this never fires —
+    # verify_case runs the same check and only calls validate_case when it
+    # passes.
+    errors = _type_errors(spec)
+    if errors:
+        return errors
 
     if spec.get('clone'):
         for field in REQUIRED_FIELDS_CLONE:
@@ -1082,15 +1126,22 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     cfg = registry.get('cesm_config', {}).get(config_type, {})
 
     # Force ozone off unless the matrix asks for it, so a newcase inherits no
-    # composition from the shipped namelist. The two keys are defaulted as a
-    # unit: a matrix that names prescribed_ozone_file owns the whole ozone
-    # setting, and must supply its own datapath rather than silently keeping the
-    # zeroVMR directory. Copied, not mutated in place -- spec is the caller's
-    # and is read again for verification and reporting.
+    # composition from the shipped namelist. prescribed_ozone_file is the
+    # owner key, and the pair is set as a unit: a matrix that names the file
+    # owns the whole ozone setting and must supply its own datapath rather
+    # than silently keeping the zeroVMR directory; a datapath alone cannot
+    # hold ozone on (a stray datapath — e.g. the file deleted per-case via
+    # `prescribed_ozone_file: null` — would otherwise suppress the zeroVMR
+    # default and silently resurrect the shipped template's ozone). Copied,
+    # not mutated in place -- spec is the caller's and is read again for
+    # verification and reporting.
     spec = dict(spec)
     nl_cam = dict(spec.get('nl_cam_params') or {})
-    if not any(k in nl_cam for k in ('prescribed_ozone_file',
-                                     'prescribed_ozone_datapath')):
+    if 'prescribed_ozone_file' not in nl_cam:
+        if 'prescribed_ozone_datapath' in nl_cam:
+            print(f"  WARNING: {case_name}: prescribed_ozone_datapath set "
+                  f"without prescribed_ozone_file — the pair is owned as a "
+                  f"unit; forcing the zeroVMR no-ozone default for both.")
         nl_cam.update(_zero_ozone_defaults(paths))
     spec['nl_cam_params'] = nl_cam
 
