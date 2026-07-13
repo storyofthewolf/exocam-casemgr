@@ -135,16 +135,23 @@ def parse_user_nl_cam(path):
     matrix-set keys, so scanning everything would drag boilerplate into the
     registry. Scientifically meaningful keys are added here a la carte as
     they become worth round-tripping.
+
+    Duplicate keys follow CESM's namelist policy: the LAST assignment wins
+    (that is the value that reaches the built namelist). Duplicates exist in
+    cases built by pre-2026-06 scripts whose upsert appended instead of
+    replacing. Keys captured more than once are reported in 'nl_duplicates'.
     """
     result = {}
     keys = {'ncdata', 'bnd_topo', 'gw_drag_file',
             'prescribed_ozone_file', 'prescribed_ozone_datapath'}
     carma = {}
     volc = {}
+    counts = {}
     with open(path) as f:
         for line in f:
             if line.lstrip().startswith('!'):
                 continue
+            line_str_keys = set()
             for m in _RE_NL_STR.finditer(line):
                 k, v = m.group(1), m.group(2)
                 if k in keys:
@@ -153,17 +160,31 @@ def parse_user_nl_cam(path):
                     carma[k] = _coerce_nl_value(v)
                 elif k.startswith('volc_'):
                     volc[k] = _coerce_nl_value(v)
-            # bare (non-string) values for carma_*/volc_* keys
+                else:
+                    continue
+                line_str_keys.add(k)
+                counts[k] = counts.get(k, 0) + 1
+            # bare (non-string) values for carma_*/volc_* keys; the quoted
+            # match wins on the same line, but across lines the last
+            # assignment wins (CESM duplicate policy).
             for m in _RE_NL_VAL.finditer(line):
                 k, v = m.group(1), m.group(2).strip().rstrip(',')
-                if k.startswith('carma_') and k not in carma:
+                if k in line_str_keys:
+                    continue
+                if k.startswith('carma_'):
                     carma[k] = _coerce_nl_value(v)
-                elif k.startswith('volc_') and k not in volc:
+                elif k.startswith('volc_'):
                     volc[k] = _coerce_nl_value(v)
+                else:
+                    continue
+                counts[k] = counts.get(k, 0) + 1
     if carma:
         result['carma_params'] = carma
     if volc:
         result['volc_params'] = volc
+    dups = sorted(k for k, c in counts.items() if c > 1)
+    if dups:
+        result['nl_duplicates'] = dups
 
     ncdata = result.get('ncdata', '')
     basename = os.path.basename(ncdata)
@@ -232,19 +253,30 @@ def parse_user_nl_cice(path):
     of the broadband albedo keys (albicei/albicev/albsnowi/albsnowv) found.
     Values are bare floats; coerced via _coerce_nl_value. Returns {} (no
     cice_params) if none are set, mirroring carma_params/volc_params.
+
+    Duplicate keys follow CESM's namelist policy: the LAST assignment wins —
+    that is the value that reaches ice_in. (The old first-wins behavior made
+    the registry report values a run never used, for cases built by
+    pre-2026-06 scripts whose upsert appended duplicates.) Keys captured more
+    than once are reported in 'nl_duplicates'.
     """
     result = {}
     cice = {}
+    counts = {}
     with open(path) as f:
         for line in f:
             if line.lstrip().startswith('!'):
                 continue
             for m in _RE_NL_VAL.finditer(line):
                 k, v = m.group(1), m.group(2).strip().rstrip(',')
-                if k in CICE_ALBEDO_KEYS and k not in cice:
+                if k in CICE_ALBEDO_KEYS:
                     cice[k] = _coerce_nl_value(v)
+                    counts[k] = counts.get(k, 0) + 1
     if cice:
         result['cice_params'] = cice
+    dups = sorted(k for k, c in counts.items() if c > 1)
+    if dups:
+        result['nl_duplicates'] = dups
     return result
 
 

@@ -828,8 +828,10 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     """
     Return shell lines that upsert key = value entries into a namelist file
     (default user_nl_cam; pass target='user_nl_cice' etc. for others).
-    For each key: replace the existing line if present, otherwise append.
-    Guarantees exactly one line per key -- never a duplicate.
+    For each key: delete every existing line for it, then append exactly one.
+    Guarantees exactly one line per key -- never a duplicate -- including
+    collapsing duplicates inherited from a clone source built by pre-2026-06
+    scripts.
 
     Type dispatch via _format_nl_value:
     - bool        -> .true. / .false.  (unquoted Fortran logical)
@@ -842,17 +844,21 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     lines = []
     for key, val in param_dict.items():
         nl_val = _format_nl_value(val)
-        escaped_val = _sed_escape_replacement(nl_val)
-        # Match the key at start-of-line, allowing leading whitespace and any
-        # whitespace around '=', and rewrite the whole line. Anchoring on the
-        # key (^[[:space:]]*KEY[[:space:]]*=) avoids matching a different key
-        # that merely contains this one as a substring, and tolerates source
-        # formatting (extra spaces/tabs, trailing inline comments).
+        # Delete every existing line for the key, then append exactly one.
+        # Anchoring on the key (^[[:space:]]*KEY[[:space:]]*=) avoids
+        # matching a different key that merely contains this one as a
+        # substring, and tolerates source formatting (extra spaces/tabs,
+        # trailing inline comments). Delete-then-append (rather than
+        # replace-in-place) also collapses pre-existing duplicates — clones
+        # inherit their source namelist verbatim, and cases built by
+        # pre-2026-06 scripts carry appended duplicates (CESM reads the last
+        # value, but one line per key is the contract here). The [ -f ]
+        # guard keeps sed from failing under set -e when the namelist
+        # doesn't exist yet.
         pat = f'^[[:space:]]*{key}[[:space:]]*='
         lines.append(
-            f'if grep -qE "{pat}" {target}; then '
-            f'sed -i -E "s|{pat}.*|{key} = {escaped_val}|" {target}; '
-            f'else echo "{key} = {nl_val}" >> {target}; fi'
+            f'if [ -f {target} ]; then sed -i -E "/{pat}/d" {target}; fi; '
+            f'echo "{key} = {nl_val}" >> {target}'
         )
     return lines
 
@@ -860,8 +866,8 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
 def _build_nl_upsert_block(spec):
     """
     Return shell lines to upsert carma_params, volc_params, and/or nl_cam_params
-    into user_nl_cam (and cice_params into user_nl_cice) using replace-or-append
-    semantics.
+    into user_nl_cam (and cice_params into user_nl_cice) using
+    delete-then-append semantics (one line per key, duplicates collapsed).
 
     Used by BOTH build paths. Clone needs it because create_clone copies the
     namelist verbatim from the source case. Newcase needs it too: the namelist

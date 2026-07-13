@@ -146,11 +146,22 @@ def inspect_case(casedir):
     pstd, _ = compute_pstd_bar(exo)
     row['exo_pstd_computed_bar'] = round(pstd, 6) if pstd is not None else None
 
+    # Namelist duplicate-key reports (legacy pre-2026-06 upsert appended
+    # instead of replacing). The parsers apply CESM's last-wins policy, so
+    # the registry values are what the run actually used; these warnings
+    # flag the files worth cleaning.
+    dup_warnings = []
+
     # user_nl_cam
     nl_path = os.path.join(casedir, 'user_nl_cam')
     nl = {}
     if os.path.exists(nl_path):
         nl = parse_user_nl_cam(nl_path)
+        if nl.get('nl_duplicates'):
+            dup_warnings.append(
+                f"user_nl_cam: duplicate key(s) {', '.join(nl['nl_duplicates'])} "
+                f"— last value wins (CESM policy); registry reports the "
+                f"effective value")
     row['ncdata'] = nl.get('ncdata')
     row['ncdata_pressure_str'] = nl.get('ncdata_pressure_str')
     row['ncdata_levels'] = nl.get('ncdata_levels')
@@ -177,7 +188,13 @@ def inspect_case(casedir):
                               'cam_aqua_se_ne16', 'cam_mixed_fv'):
         cice_path = os.path.join(casedir, 'user_nl_cice')
         if os.path.exists(cice_path):
-            row['cice_params'] = parse_user_nl_cice(cice_path).get('cice_params')
+            cice_nl = parse_user_nl_cice(cice_path)
+            row['cice_params'] = cice_nl.get('cice_params')
+            if cice_nl.get('nl_duplicates'):
+                dup_warnings.append(
+                    f"user_nl_cice: duplicate key(s) "
+                    f"{', '.join(cice_nl['nl_duplicates'])} — last value wins "
+                    f"(CESM policy); registry reports the effective value")
 
     # user_docn.streams.txt.som (aqua and mixed configs only)
     row['som_pop_frc_file'] = None
@@ -214,7 +231,7 @@ def inspect_case(casedir):
     run_fields = parse_run_type_fields(env_run_path)
     row.update(run_fields)
 
-    warnings = check_consistency(row)
+    warnings = dup_warnings + check_consistency(row)
     row['warnings'] = warnings or None
 
     return row
