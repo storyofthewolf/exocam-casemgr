@@ -833,19 +833,6 @@ def _execute_copy_case_config(actions):
             shutil.copy2(src, dst)
 
 
-def _preserve_collisions(preserve_hist, preserve_restart, preserve_avg):
-    """Return preserve-move destinations that already exist in long-term.
-
-    The one collision test behind both retire passes — the preview hard block
-    and the deliberate pre-execute re-check — so a future preserve category
-    cannot be guarded in one pass and missed in the other.
-    """
-    move_dsts = ([d for _, d in preserve_hist]
-                 + [d for _, d in preserve_restart]
-                 + [d for _, d in preserve_avg])
-    return [d for d in move_dsts if os.path.exists(d)]
-
-
 def cmd_retire_case(args, paths):
     """
     Retire one or more cases from cesm_scratch. Three retirement tiers:
@@ -889,10 +876,14 @@ def cmd_retire_case(args, paths):
         before any action is taken — the package-standard double gate.
       - RUNNING/RESUBMITTED cases (CaseStatus + SLURM probe) are hard-blocked:
         retiring would delete the run out from under an active job.
-      - Preserve targets that already exist in long-term hard-block the case:
-        a prior (possibly interrupted) retire left content behind, and moving
-        onto it would silently overwrite a file or nest a directory. Inspect
-        and remove the stale long-term copies, then re-run.
+      - Duplicate guard: if long_term/<case> already exists (a prior
+        retirement record — normally the product of a workflow mis-step,
+        since a case should never live in both active and retired space),
+        each duplicated case gets its own [yes/no] prompt under --execute.
+        yes = the ENTIRE existing record (case.yaml, config, preserved data)
+        is deleted first, so this retire fully replaces it — no old/new
+        mixing, no shutil.move nesting. no = the case is skipped so the
+        duplication can be resolved outside exocam-casemgr.
 
     Examples:
       retire mycase --execute
@@ -974,6 +965,39 @@ def cmd_retire_case(args, paths):
         archive_path = os.path.join(archive,  case) if archive  else ''
         lt_case_dir  = os.path.join(long_term, case)
 
+        # Duplicate guard: long_term/<case> already exists — a prior
+        # retirement record. In normal operation a case never lives in both
+        # active and retired space, so a duplicate is the product of a
+        # workflow mis-step, and the subsequent retire is usually the
+        # deliberate one. Ask per case rather than hard-blocking: yes deletes
+        # the ENTIRE existing record (case.yaml, config, preserved data —
+        # everything) before this retire acts, so old and new content never
+        # mix (shutil.move onto existing paths would silently overwrite
+        # files or nest directories); no skips the case so the duplication
+        # can be resolved outside exocam-casemgr.
+        overwrite_lt = False
+        if os.path.isdir(lt_case_dir):
+            print(f"  DUPLICATE: a long-term record already exists: {lt_case_dir}")
+            if not args.execute:
+                print(f"  Under --execute you will be asked whether to REPLACE it "
+                      f"(yes deletes the entire existing record first).")
+            else:
+                try:
+                    answer = input(
+                        f"  Replace ENTIRE existing long-term record for {case} "
+                        f"(case.yaml, config, data — everything)? [yes/no]: "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    answer = 'no'
+                if answer == 'yes':
+                    overwrite_lt = True
+                    print(f"  {lt_case_dir} will be deleted before retiring.")
+                else:
+                    print(f"  {case}: skipped — resolve the existing long-term "
+                          f"record by hand, then re-run retire.")
+                    continue
+
         sz = case_sizes(case, paths)
         total_on_disk = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
 
@@ -1038,21 +1062,6 @@ def cmd_retire_case(args, paths):
                         os.path.join(lt_case_dir, model, 'hist', f),
                     ))
 
-        # Preserve targets must not already exist in long-term: shutil.move
-        # onto an existing file silently overwrites it, and onto an existing
-        # directory nests the source inside it (rest/<date>/<date>). A
-        # collision means a previous (possibly interrupted) retire left
-        # content behind — hard-block the case so nothing is touched.
-        collisions = _preserve_collisions(
-            preserve_hist, preserve_restart, preserve_avg)
-        if collisions:
-            print(f"  BLOCKED: {len(collisions)} preserve target(s) already "
-                  f"exist in long-term:")
-            for d in collisions:
-                print(f"    exists: {d}")
-            print(f"  Inspect/remove the stale long-term copies, then re-run retire.")
-            continue
-
         # --- print plan ---
         yaml_source_label = {
             'live':     'live scan',
@@ -1106,6 +1115,7 @@ def cmd_retire_case(args, paths):
             preserve_hist=preserve_hist,
             preserve_restart=preserve_restart,
             preserve_avg=preserve_avg,
+            overwrite_lt=overwrite_lt,
         )
 
     if not args.execute:
@@ -1142,18 +1152,22 @@ def cmd_retire_case(args, paths):
         preserve_restart = p['preserve_restart']
         preserve_avg   = p['preserve_avg']
 
-        # Re-check preserve-target collisions right before acting: the plan
-        # was built during the preview pass, and long-term may have changed.
-        stale = _preserve_collisions(
-            preserve_hist, preserve_restart, preserve_avg)
-        if stale:
-            print(f"\n  {case}: BLOCKED — {len(stale)} preserve target(s) "
-                  f"appeared in long-term since the preview; skipping.")
-            for d in stale:
-                print(f"    exists: {d}")
+        # Without replace consent, a long-term record that appeared since the
+        # preview blocks the case — the same TOCTOU protection the old
+        # per-target re-check gave (long-term may have changed while the
+        # batch confirm sat at the prompt).
+        if not p['overwrite_lt'] and os.path.exists(lt_case_dir):
+            print(f"\n  {case}: BLOCKED — a long-term record appeared at "
+                  f"{lt_case_dir} since the preview; skipping.")
             continue
 
         print(f"\n  Retiring: {case}")
+
+        # Consented duplicate: delete the entire pre-existing record so this
+        # retirement fully replaces it — old and new content never mix.
+        if p['overwrite_lt'] and os.path.isdir(lt_case_dir):
+            shutil.rmtree(lt_case_dir)
+            print(f"  Deleted existing long-term record: {lt_case_dir}")
 
         # Write case.yaml (skipped for --purge)
         if not args.purge:
