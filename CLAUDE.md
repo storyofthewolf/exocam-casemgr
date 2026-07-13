@@ -145,7 +145,7 @@ Status handling within the preview:
 ### --energy computation
 
 1. List `*.cam.h0.*.nc` files in `$archive/<case>/atm/hist/` excluding filenames containing `"avg"`. Sort lexicographically (= chronological for CESM date strings).
-2. Take the last 12 (or fewer, with a warning printed).
+2. Take the last 12, or with `-n`/`--energy-years N` the last `12*N` (or fewer, with a warning printed). `-n` requires `--energy` and must be ≥ 1; the report line states the month count actually used (`Last 120mo: …`).
 3. Run `ncra <file1> ... <fileN> /tmp/runmgr_energy_<case>.nc`. If `ncra` is not found, print a warning and skip.
 4. Open the temp file with `netCDF4`. Extract `TS`, `FSNT`, `FLNT`. If any variable is missing, print a warning and skip.
 5. Compute area weights: `w = cos(lat * π/180)`, broadcast across the lon dimension, normalize to sum to 1.

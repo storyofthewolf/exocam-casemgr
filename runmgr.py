@@ -913,6 +913,12 @@ def cmd_check(args, paths):
               model-date span (YYYY-MM) of the averaged files. Requires ncra in
               PATH and netCDF4 + numpy Python packages.
 
+    -n / --energy-years N: with --energy, average the last N model years
+              (12*N monthly h0 files) instead of the default last 12 months —
+              e.g. `check <case> --energy -n 10` averages the last 120 months.
+              The report line states the month count actually used (fewer
+              files than requested prints a warning, same as the default).
+
     --dir DIR: drill down into a specific storage area for exactly one case.
                Lists individual files with sizes (sorted by name) and a total.
                For 'rest', lists top-level subdirectory entries (restart sets).
@@ -957,6 +963,14 @@ def cmd_check(args, paths):
 
     do_info   = getattr(args, 'info',   False)
     do_energy = getattr(args, 'energy', False)
+
+    energy_years = getattr(args, 'energy_years', None)
+    if energy_years is not None:
+        if not do_energy:
+            sys.exit("ERROR: -n/--energy-years requires --energy.")
+        if energy_years < 1:
+            sys.exit("ERROR: -n/--energy-years must be >= 1.")
+    energy_months = 12 * energy_years if energy_years is not None else 12
 
     # Collect all results before printing so max_name_len is known for alignment.
     # Each entry: (case, status_label, status_ts, info_lines, energy_line)
@@ -1012,7 +1026,7 @@ def cmd_check(args, paths):
 
         energy_line = None
         if do_energy and archive:
-            result = _energy_balance(case, archive)
+            result = _energy_balance(case, archive, n_months=energy_months)
             if result is not None:
                 ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last = result
                 etop = fsnt_mean - flnt_mean
@@ -1139,6 +1153,11 @@ def build_parser():
     p_check.add_argument('--energy', action='store_true',
                          help='Compute global-mean energy balance (TS, Etop=FSNT-FLNT) '
                               'from last 12 atm h0 files via ncra; requires ncra + netCDF4')
+    p_check.add_argument('-n', '--energy-years', dest='energy_years',
+                         type=int, default=None, metavar='N',
+                         help='With --energy: average the last N model years '
+                              '(12*N monthly h0 files) instead of the default '
+                              'last 12 months')
     p_check.add_argument('--dir', metavar='DIR', default=None,
                          choices=list(_DIR_RESOLVERS),
                          help=('Drill down into a specific storage area for a single case: '
