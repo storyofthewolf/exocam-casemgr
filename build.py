@@ -2,14 +2,16 @@
 """
 ExoCAM case build tool. Three subcommands:
 
-  generate  Read an experiment matrix YAML + config registry YAML, validate
-            each case (types, required fields, IC lookup), and write one
-            self-contained shell build script per case (create_newcase or, in
-            clone mode, create_clone + build). The rendered exoplanet_mod.F90
-            is embedded as an inline heredoc — no staging directory. Scripts
-            are only written, never executed. --verify checks matrix coherency
-            (types, netCDF file existence, scientific-consistency warnings)
-            and generates nothing.
+  generate  Read one or more experiment matrix YAMLs (+ each matrix's config
+            registry YAML), validate each case (types, required fields, IC
+            lookup), and write one self-contained shell build script per case
+            (create_newcase or, in clone mode, create_clone + build). The
+            rendered exoplanet_mod.F90 is embedded as an inline heredoc — no
+            staging directory. Scripts are only written, never executed. When
+            several matrices are passed, each is processed in turn under its own
+            header and a combined total is reported. --verify checks matrix
+            coherency (types, netCDF file existence, scientific-consistency
+            warnings) and generates nothing.
 
   make      Run generated *_build.sh scripts from scripts-dir: explicit NAME
             args, --prefix, or --all (a bare `make` just lists the scripts).
@@ -1454,15 +1456,59 @@ def cmd_generate(args):
     if not args.matrix:
         sys.exit("error: the following arguments are required: matrix")
 
-    if not os.path.exists(args.matrix):
-        candidate = os.path.join(exp_matrices_dir, args.matrix)
+    # Resolve every matrix path up front so a typo aborts before any work.
+    matrix_paths = []
+    for m in args.matrix:
+        if os.path.exists(m):
+            matrix_paths.append(m)
+            continue
+        candidate = os.path.join(exp_matrices_dir, m)
         if os.path.exists(candidate):
-            args.matrix = candidate
+            matrix_paths.append(candidate)
         else:
-            sys.exit(f"matrix file not found: {args.matrix}\n"
+            sys.exit(f"matrix file not found: {m}\n"
                      f"  also checked: {candidate}")
 
-    matrix = load_yaml(args.matrix)
+    verify_only = getattr(args, 'verify', False)
+
+    # Package-wide tallies across all matrices for the final summary/exit code.
+    grand_generated = 0
+    grand_errors = 0
+    grand_named = 0
+    grand_verify_failed = 0
+    grand_verify_warned = 0
+
+    multi = len(matrix_paths) > 1
+    for matrix_path in matrix_paths:
+        if multi:
+            print(f"\n=== {matrix_path} ===")
+        g, e, n, vf, vw = _generate_one_matrix(
+            matrix_path, args, exp_matrices_dir, verify_only)
+        grand_generated += g
+        grand_errors += e
+        grand_named += n
+        grand_verify_failed += vf
+        grand_verify_warned += vw
+
+    if verify_only:
+        summary = (f"\nVerify total: {grand_named - grand_verify_failed} OK, "
+                   f"{grand_verify_failed} failed of {grand_named} case(s) "
+                   f"across {len(matrix_paths)} matrix file(s).")
+        if grand_verify_warned:
+            summary += f" {grand_verify_warned} case(s) raised warnings."
+        print(summary + " No scripts generated.")
+        if grand_verify_failed:
+            sys.exit(1)
+        return
+
+    print(f"\nTotal: {grand_generated} script(s) generated, {grand_errors} "
+          f"case(s) skipped due to errors across {len(matrix_paths)} matrix file(s).")
+
+
+def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
+    """Process a single experiment matrix. Returns
+    (generated, errors_total, named, verify_failed, verify_warned)."""
+    matrix = load_yaml(matrix_file)
 
     registry_path = matrix.get('config_registry')
     if not registry_path:
@@ -1490,8 +1536,6 @@ def cmd_generate(args):
     exocam_root = paths_override.get('exocam_root') or registry.get('paths', {}).get('exocam_root', '')
     template_base = (f"{exocam_root}/cesm1.2.1/configs"
                      if exocam_root else None)
-
-    verify_only = getattr(args, 'verify', False)
 
     generated = []
     errors_total = 0
@@ -1596,8 +1640,8 @@ def cmd_generate(args):
         generated.append((case_name, script_path))
         print(f"Generated: {script_path}")
 
+    named = sum(1 for c in cases if c.get('name'))
     if verify_only:
-        named = sum(1 for c in cases if c.get('name'))
         summary = (f"\nVerify: {named - verify_failed} OK, {verify_failed} failed "
                    f"of {named} case(s).")
         if verify_warned:
@@ -1605,11 +1649,11 @@ def cmd_generate(args):
             # affect the exit code.
             summary += f" {verify_warned} case(s) raised warnings."
         print(summary + " No scripts generated.")
-        if verify_failed:
-            sys.exit(1)
-        return
+    else:
+        print(f"\n{len(generated)} script(s) generated, {errors_total} "
+              f"case(s) skipped due to errors.")
 
-    print(f"\n{len(generated)} script(s) generated, {errors_total} case(s) skipped due to errors.")
+    return len(generated), errors_total, named, verify_failed, verify_warned
 
 
 def cmd_make(args):
@@ -1894,8 +1938,9 @@ def main():
     sub = parser.add_subparsers(dest='command', metavar='COMMAND')
     sub.required = True
 
-    p_gen = sub.add_parser('generate', help='Generate build scripts from an experiment matrix')
-    p_gen.add_argument('matrix', nargs='?', help='experiment_matrix.yaml')
+    p_gen = sub.add_parser('generate', help='Generate build scripts from one or more experiment matrices')
+    p_gen.add_argument('matrix', nargs='*', metavar='MATRIX',
+                       help='one or more experiment_matrix.yaml files')
     p_gen.add_argument('--list', action='store_true',
                        help='List available experiment matrices and exit')
     p_gen.add_argument('--verify', action='store_true',
