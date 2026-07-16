@@ -59,7 +59,7 @@ cases/ + rundir/ + archive/ on HPC
 - **`query.py`** — searches registry, exports experiment matrices
 - **`datamgr.py`** — case data management: `report` (disk survey), `clean` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
 - **`manage_utils.py`** — shared utility layer imported by `datamgr.py`, `runmgr.py`, and `build.py`: constants (`ARCHIVE_MODELS`, `HIST_MODELS`, `MODEL_STEM`, `AVG_HIST_DEFAULT_MODELS`), `load_paths()`, disk helpers (`dir_size_bytes`, `fmt_size`, `list_files_with_size`), `discover_cases()`, hist-year filtering, `restart_sets()`, `confirm()`, `batch_confirm()` (the single `[yes/no]` gate over a whole case set, shared by datamgr's clean/retire verbs and runmgr's run-control verbs; **only the literal `yes` proceeds** — a bare `y` does not, since this gate fronts irreversible operations like `retire --purge`), `ACTIVE_STATUSES` (the one definition of "a job is active" — `RUNNING`/`RESUBMITTED` — consumed by runmgr's hard blocks and datamgr's block/flag sites), `hist_info_line()` (the single `--info` hist-dir formatter behind `datamgr.py avg --info` and `runmgr.py check --info`), `preview_hint()` (one trailing `--execute` reminder), `_require_cases()` (explicit-names-or-`--prefix` selection with mutual-exclusion + no-`--all` guard, shared by every `datamgr.py` destructive verb), `submit_case()` (the single `sbatch` code path, shared by `runmgr.py submit` and `build.py make --send-it`)
-- **`runmgr.py`** — run control tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info); `xml` subcommand (ad-hoc `--query VAR` / `--change VAR=VALUE` over a case set — no CONTINUE_RUN forcing, no sbatch; the only way to inspect/edit XML without launching a run); `submit` subcommand (sbatch a built case as-is, no xmlchange — the launch step after `build.py make`; requires `<case>.run`); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch). Shared helpers `_resolve_cases()` (explicit-names-or-`--prefix`, no `--all`), `_parse_set_pairs()`, `_apply_xmlchange()` (the single `./xmlchange` code path), and `_probe_status()` (CaseStatus + SLURM probe) back all the run-control subcommands.
+- **`runmgr.py`** — run control tool; `check` subcommand (CaseStatus parsing, SLURM probe, optional hist/energy info; `--energy --keep` retains the atm average as the run-time counterpart to `datamgr avg`); `xml` subcommand (ad-hoc `--query VAR` / `--change VAR=VALUE` over a case set — no CONTINUE_RUN forcing, no sbatch; the only way to inspect/edit XML without launching a run); `submit` subcommand (sbatch a built case as-is, no xmlchange — the launch step after `build.py make`; requires `<case>.run`); `continue` subcommand (set CONTINUE_RUN=TRUE, update STOP_N/RESUBMIT, sbatch); `restart` subcommand (set CONTINUE_RUN=FALSE, apply arbitrary `--set VAR=VALUE` xmlchange calls, sbatch). Shared helpers `_resolve_cases()` (explicit-names-or-`--prefix`, no `--all`), `_parse_set_pairs()`, `_apply_xmlchange()` (the single `./xmlchange` code path), and `_probe_status()` (CaseStatus + SLURM probe) back all the run-control subcommands.
 - **`diff.py`** — SourceMods diff tool; used before retiring to check for custom Fortran worth preserving
 - **`config_registry.yaml`** — machine-specific paths, CESM config per config_type, IC file table; must be edited per user/machine
 
@@ -146,12 +146,20 @@ Status handling within the preview:
 
 1. List `*.cam.h0.*.nc` files in `$archive/<case>/atm/hist/` excluding filenames containing `"avg"`. Sort lexicographically (= chronological for CESM date strings).
 2. Take the last 12, or with `-n`/`--energy-years N` the last `12*N` (or fewer, with a warning printed). `-n` requires `--energy` and must be ≥ 1; the report line states the month count actually used (`Last 120mo: …`).
-3. Run `ncra <file1> ... <fileN> /tmp/runmgr_energy_<case>.nc`. If `ncra` is not found, print a warning and skip.
-4. Open the temp file with `netCDF4`. Extract `TS`, `FSNT`, `FLNT`. If any variable is missing, print a warning and skip.
+3. Run `ncra -O <file1> ... <fileN> <out>`. Without `--keep`, `<out>` is a per-invocation `mkstemp` temp file (`runmgr_energy_<case>_*.nc`). If `ncra` is not found, print a warning and skip.
+4. Open the output with `netCDF4`. Extract `TS`, `FSNT`, `FLNT`. If any variable is missing, print a warning and skip.
 5. Compute area weights: `w = cos(lat * π/180)`, broadcast across the lon dimension, normalize to sum to 1.
 6. Compute global means via `sum(data * w2d)`.
 7. Print `Last Nmo:  TS = 287.3 K    Etop = +0.8 W/m²` (Etop = FSNT_mean − FLNT_mean, signed, 1 decimal).
-8. The temp file is always deleted in a `finally` block, even on error.
+8. The temp file is deleted in a `finally` block, even on error — **unless `--keep` was given** (see below), in which case the average is the deliverable and is left in place.
+
+### --keep — retain the atm average
+
+`check <case> --energy --keep` stops discarding the averaged file `--energy` already produces and writes it into `$archive/<case>/atm/hist/` instead of a temp file. It is the **run-time counterpart to `datamgr avg`**: same atm output, same naming, produced during routine energy monitoring rather than at retirement. The two are *not* redundant — `datamgr avg` is a retirement/archival pass that averages **all** components (atm/lnd/ice) as part of end-of-life prep; `check --energy --keep` averages **atm only** (the component whose h0 carries TS/FSNT/FLNT) as a byproduct of the monitoring you already run, and that atm avg is the scientifically important artifact. Neither is deprecated.
+
+- Requires `--energy` (`--keep` alone → `ERROR: --keep requires --energy.`, exit 1).
+- Filename mirrors `datamgr avg`'s convention: with `-n N` → `<case>.cam.h0.avg_last{N}yr.nc`; bare 12-month (`--keep` without `-n`) → `<case>.cam.h0.avg_last12mo.nc`. With `-n N` the inputs (last `12*N` months, avg files excluded) are identical to `datamgr avg --last N --models atm`, so the kept file is interchangeable with that product.
+- `ncra -O` overwrites an existing avg file at the target; the kept path is printed on a `Saved avg:` line under the energy report. `_energy_balance(keep_path=…)` is the single code path — `keep_path=None` restores the temp-and-delete behavior.
 
 ---
 

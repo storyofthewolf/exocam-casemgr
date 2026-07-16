@@ -59,7 +59,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manage_utils import (
-    ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES,
+    ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES, MODEL_STEM,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
@@ -677,13 +677,22 @@ def _hist_date(filename):
     return m.group(1) if m else None
 
 
-def _energy_balance(case, archive, n_months=12):
+def _energy_balance(case, archive, n_months=12, keep_path=None):
     """Compute global-mean energy balance from the last N atm h0 files.
 
-    Returns (ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last)
-    or None on any failure. date_first/date_last are the model-date stems
-    (YYYY-MM) of the first and last selected files (None if unparseable).
-    Prints a warning and returns None if ncra or netCDF4 is unavailable.
+    Returns (ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last,
+    saved_path) or None on any failure. date_first/date_last are the
+    model-date stems (YYYY-MM) of the first and last selected files (None if
+    unparseable). Prints a warning and returns None if ncra or netCDF4 is
+    unavailable.
+
+    The averaged file is a byproduct of the energy computation. By default it
+    is written to a unique temp file and deleted in the finally block. When
+    keep_path is given, ncra writes the average there instead and the file is
+    left in place; saved_path in the return is the retained path (else None).
+    With keep_path pointing at archive/<case>/atm/hist/, the kept file uses
+    datamgr avg's naming convention and is interchangeable with what
+    `datamgr avg --last N --models atm` produces from the same inputs.
     """
     try:
         import numpy as np
@@ -724,12 +733,20 @@ def _energy_balance(case, archive, n_months=12):
     date_last = _hist_date(selected[-1])
 
     input_paths = [os.path.join(hist_dir, f) for f in selected]
-    # Unique per-invocation temp name: a fixed name in shared /tmp collides
-    # with other users' leftovers (ncra then fails on a file it cannot
-    # overwrite). mkstemp pre-creates the file, so ncra needs -O to write
-    # into it without its interactive overwrite prompt.
-    fd, tmp_path = tempfile.mkstemp(prefix=f'runmgr_energy_{case}_', suffix='.nc')
-    os.close(fd)
+    if keep_path is not None:
+        # Keep mode: ncra writes the average directly to keep_path (in the
+        # hist dir) and it is not deleted afterward. -O overwrites an existing
+        # avg file without ncra's interactive prompt (same as datamgr avg).
+        tmp_path = keep_path
+        remove_after = False
+    else:
+        # Unique per-invocation temp name: a fixed name in shared /tmp collides
+        # with other users' leftovers (ncra then fails on a file it cannot
+        # overwrite). mkstemp pre-creates the file, so ncra needs -O to write
+        # into it without its interactive overwrite prompt.
+        fd, tmp_path = tempfile.mkstemp(prefix=f'runmgr_energy_{case}_', suffix='.nc')
+        os.close(fd)
+        remove_after = True
 
     try:
         try:
@@ -789,7 +806,9 @@ def _energy_balance(case, archive, n_months=12):
             fsnt_mean = _gmean('FSNT')
             flnt_mean = _gmean('FLNT')
             ds.close()
-            return ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last
+            saved_path = keep_path if not remove_after else None
+            return (ts_mean, fsnt_mean, flnt_mean, n_used,
+                    date_first, date_last, saved_path)
 
         except Exception as e:
             print(f"  {case}: WARNING: error reading variables ({e}) — skipping --energy")
@@ -800,10 +819,11 @@ def _energy_balance(case, archive, n_months=12):
             return None
 
     finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        if remove_after:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def _rundir_info(case, rundir):
@@ -919,6 +939,14 @@ def cmd_check(args, paths):
               The report line states the month count actually used (fewer
               files than requested prints a warning, same as the default).
 
+    --keep: with --energy, retain the atm average (normally a discarded
+              byproduct) in archive/<case>/atm/hist/ as
+              <case>.cam.h0.avg_last{N}yr.nc (with -n N) or ...avg_last12mo.nc
+              (bare 12-month). This is the run-time counterpart to
+              `datamgr avg`: same atm output and naming, produced during
+              routine energy monitoring rather than at retirement. An existing
+              avg file at the target is overwritten (ncra -O). Requires --energy.
+
     --dir DIR: drill down into a specific storage area for exactly one case.
                Lists individual files with sizes (sorted by name) and a total.
                For 'rest', lists top-level subdirectory entries (restart sets).
@@ -971,6 +999,13 @@ def cmd_check(args, paths):
         if energy_years < 1:
             sys.exit("ERROR: -n/--energy-years must be >= 1.")
     energy_months = 12 * energy_years if energy_years is not None else 12
+
+    keep_avg = getattr(args, 'keep', False)
+    if keep_avg and not do_energy:
+        sys.exit("ERROR: --keep requires --energy.")
+    # Kept-file naming mirrors datamgr avg: avg_last{N}yr with -n N, else the
+    # bare 12-month avg_last12mo. atm is the only component --energy averages.
+    keep_suffix = f"avg_last{energy_years}yr" if energy_years is not None else "avg_last12mo"
 
     # Collect all results before printing so max_name_len is known for alignment.
     # Each entry: (case, status_label, status_ts, info_lines, energy_line)
@@ -1026,9 +1061,16 @@ def cmd_check(args, paths):
 
         energy_line = None
         if do_energy and archive:
-            result = _energy_balance(case, archive, n_months=energy_months)
+            keep_path = None
+            if keep_avg:
+                stem = MODEL_STEM['atm']
+                keep_name = f"{case}.{stem}.h0.{keep_suffix}.nc"
+                keep_path = os.path.join(archive, case, 'atm', 'hist', keep_name)
+            result = _energy_balance(case, archive, n_months=energy_months,
+                                     keep_path=keep_path)
             if result is not None:
-                ts_mean, fsnt_mean, flnt_mean, n_used, date_first, date_last = result
+                (ts_mean, fsnt_mean, flnt_mean, n_used,
+                 date_first, date_last, saved_path) = result
                 etop = fsnt_mean - flnt_mean
                 sign = '+' if etop >= 0 else ''
                 if date_first and date_last:
@@ -1038,6 +1080,8 @@ def cmd_check(args, paths):
                     range_str = ""
                 energy_line = (f"  Last {n_used}mo:  TS = {ts_mean:.1f} K    "
                                f"Etop = {sign}{etop:.1f} W/m²{range_str}")
+                if saved_path:
+                    energy_line += f"\n  Saved avg: {saved_path}"
 
         results.append((case, status_label, status_ts, info_lines, energy_line))
 
@@ -1158,6 +1202,11 @@ def build_parser():
                          help='With --energy: average the last N model years '
                               '(12*N monthly h0 files) instead of the default '
                               'last 12 months')
+    p_check.add_argument('--keep', action='store_true',
+                         help='With --energy: keep the atm average instead of '
+                              'discarding it. Written to archive/<case>/atm/hist/ '
+                              'as <case>.cam.h0.avg_last{N}yr.nc (or avg_last12mo.nc '
+                              'without -n), matching datamgr avg naming')
     p_check.add_argument('--dir', metavar='DIR', default=None,
                          choices=list(_DIR_RESOLVERS),
                          help=('Drill down into a specific storage area for a single case: '
