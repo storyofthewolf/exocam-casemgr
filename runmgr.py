@@ -41,6 +41,13 @@ SAFETY
   are flagged in the preview but not separately prompted — the single batch
   confirm covers them.
 
+  REST_N/STOP_N: continue/restart --set and xml --change print a WARNING (not
+  a block) when the pending edit would leave the restart interval longer than
+  the run — the segment then ends before a restart is written, leaving an
+  incomplete fileset that crashes the next CONTINUE_RUN=TRUE. build.py enforces
+  this as a hard error at generate time; here it is advisory, and the single
+  batch [yes/no] decides.
+
 Run any subcommand with --help for full options, e.g.:
   python runmgr.py check --help
   python runmgr.py xml --help
@@ -161,6 +168,73 @@ def _apply_xmlchange(case_dir, var, val):
             f"xmlchange {var}={val} failed: {result.stderr.strip()}")
 
 
+_REST_STOP_VARS = ('REST_N', 'STOP_N', 'REST_OPTION', 'STOP_OPTION')
+
+
+def _rest_stop_warning(case_dir, pending):
+    """Warn when pending XML edits would leave REST_N outrunning STOP_N.
+
+    The run-time counterpart to build.py's _verify_rest_stop guard, but a
+    WARNING rather than a hard block: at this point the case already exists and
+    the user may be deliberately staging an odd pair, so this reports and lets
+    the single batch [yes/no] decide.
+
+    Unlike the build-time check, the four values are per-case live XML state
+    rather than a matrix, so a --set touching only REST_N must be judged against
+    the case's existing STOP_N. `pending` (an ordered list of (VAR, VALUE) about
+    to be applied) is merged over what the env xmls currently hold; last write
+    wins, matching the order _apply_xmlchange runs them in.
+
+    Returns a warning string, or None when the pair is fine or unjudgeable.
+    Silent unless a REST/STOP var is actually being changed — this must never
+    editorialize about pre-existing state the user isn't touching.
+    """
+    if not any(var.upper() in _REST_STOP_VARS for var, _ in pending):
+        return None
+
+    # Lazy import (the datamgr -> runmgr._probe_status pattern): the unit table
+    # is shared with build.py's _verify_rest_stop so the build-time and run-time
+    # guards can never disagree about what a REST/STOP pair means.
+    from build import _OPTION_DAYS
+
+    eff = {}
+    for var in _REST_STOP_VARS:
+        cur = _read_case_xml_var(case_dir, var)
+        if cur is not None:
+            eff[var] = cur
+    for var, val in pending:                      # pending overrides current,
+        if var.upper() in _REST_STOP_VARS:        # later --set wins over earlier
+            eff[var.upper()] = val
+
+    if not all(var in eff for var in _REST_STOP_VARS):
+        return None  # can't read one side (unbuilt/odd case dir) — say nothing
+
+    stop_unit = str(eff['STOP_OPTION']).strip().lower()
+    rest_unit = str(eff['REST_OPTION']).strip().lower()
+    if stop_unit not in _OPTION_DAYS or rest_unit not in _OPTION_DAYS:
+        return None  # nsteps/date/ifdays0 — not a fixed interval
+
+    try:
+        stop_n = int(str(eff['STOP_N']).strip())
+        rest_n = int(str(eff['REST_N']).strip())
+    except (TypeError, ValueError):
+        return None
+
+    stop_days = stop_n * _OPTION_DAYS[stop_unit]
+    rest_days = rest_n * _OPTION_DAYS[rest_unit]
+    if rest_days <= stop_days:
+        return None
+
+    if stop_unit == rest_unit:
+        detail = f"REST_N={rest_n} > STOP_N={stop_n} (both {stop_unit})"
+    else:
+        detail = (f"REST_N={rest_n} {rest_unit} (~{rest_days:g}d) > "
+                  f"STOP_N={stop_n} {stop_unit} (~{stop_days:g}d)")
+    return (f"WARNING: {detail} — the segment ends before a restart is "
+            f"written, so the restart fileset will be incomplete and the next "
+            f"CONTINUE_RUN=TRUE will crash.")
+
+
 def _probe_status(case_dir, case):
     """Return the CaseStatus + SLURM-probe-derived status label for a case.
 
@@ -205,6 +279,10 @@ def cmd_xml(args, paths):
     followed by a single batch [yes/no] before any change is applied — the same
     double-gate ergonomics as the other run-control verbs. Query mode never gates.
 
+    Changing REST_N/STOP_N (or their _OPTION units) into a pair where the
+    restart interval outruns the run prints a WARNING in the preview — not a
+    block. The resulting restart fileset would be incomplete.
+
     Requires explicit case names or --prefix — no --all flag.
     """
     caseroot = paths.get('caseroot', '')
@@ -242,6 +320,9 @@ def cmd_xml(args, paths):
             print(f"    {var} = {cur_q[var]}")
         for var, new_val in change_vars:
             print(f"    {var}: {cur_c[var]} -> {new_val}")
+        rs_warn = _rest_stop_warning(case_dir, change_vars)
+        if rs_warn:
+            print(f"    ! {rs_warn}")
 
         if change_vars:
             actionable.append((case, case_dir))
@@ -276,6 +357,10 @@ def cmd_continue(args, paths):
 
     Use --set VAR=VALUE (repeatable) to apply any xmlchange calls before
     submitting — e.g. --set STOP_N=10 --set RESUBMIT=9.
+
+    A --set that leaves REST_N outrunning STOP_N (judged against the case's
+    live XML, so --set STOP_N alone can trigger it) prints a WARNING in the
+    preview — not a block. The restart fileset would be incomplete.
 
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped, never submitted
@@ -327,6 +412,9 @@ def cmd_continue(args, paths):
         print(f"    CONTINUE_RUN: {cur_continue} -> TRUE")
         for var, new_val in set_vars:
             print(f"    {var}: {cur_vals[var]} -> {new_val}")
+        rs_warn = _rest_stop_warning(case_dir, set_vars)
+        if rs_warn:
+            print(f"    ! {rs_warn}")
         print(f"    sbatch: {run_script}")
         actionable.append((case, case_dir))
 
@@ -371,6 +459,10 @@ def cmd_restart(args, paths):
 
     XML variable changes are specified with --set VAR=VALUE (repeatable).
     CONTINUE_RUN=FALSE is always applied first; --set changes follow in order.
+
+    A --set that leaves REST_N outrunning STOP_N (judged against the case's
+    live XML, so --set STOP_N alone can trigger it) prints a WARNING in the
+    preview — not a block. The restart fileset would be incomplete.
 
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped, never submitted
@@ -423,6 +515,9 @@ def cmd_restart(args, paths):
         for var, new_val in set_vars:
             cur = cur_vals.get(var, '?')
             print(f"    {var}: {cur} -> {new_val}")
+        rs_warn = _rest_stop_warning(case_dir, set_vars)
+        if rs_warn:
+            print(f"    ! {rs_warn}")
         print(f"    sbatch: {run_script}")
         actionable.append((case, case_dir))
 
