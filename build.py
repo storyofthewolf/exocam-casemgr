@@ -108,6 +108,77 @@ PARAM_TYPES = {
 }
 
 
+# --- REST_N <= STOP_N guard -------------------------------------------------
+# Approximate length in days of each CESM *_OPTION unit, used only to compare
+# a restart interval against a run length. The values need not be exact -- they
+# only have to order correctly across units (an nmonth is longer than an nday,
+# shorter than an nyear), and every real matrix uses matching units anyway,
+# where the comparison is exact regardless.
+#
+# 'nsteps'/'nstep' are deliberately absent: a step is the model timestep, which
+# depends on the resolution and is not knowable from the matrix. 'date'/'ifdays0'
+# are absent because they are absolute markers, not intervals. A case using any
+# of these is skipped by _verify_rest_stop rather than guessed at.
+_OPTION_DAYS = {
+    'nsecond': 1.0 / 86400.0, 'nseconds': 1.0 / 86400.0,
+    'nminute': 1.0 / 1440.0,  'nminutes': 1.0 / 1440.0,
+    'nhour':   1.0 / 24.0,    'nhours':   1.0 / 24.0,
+    'nday':    1.0,           'ndays':    1.0,
+    'nmonth':  30.4375,       'nmonths':  30.4375,
+    'nyear':   365.0,         'nyears':   365.0,
+}
+
+
+def _verify_rest_stop(spec):
+    """Error when the restart interval exceeds the run length (REST_N > STOP_N).
+
+    A run whose restart interval is longer than the run itself never reaches a
+    restart write during the segment. CESM still emits an end-of-run restart,
+    but the fileset it leaves behind is incomplete, and a subsequent
+    CONTINUE_RUN=TRUE crashes because the model cannot find the full set it
+    needs to resume. The failure surfaces only on the *next* submission, long
+    after the build, so it is caught here at generate time.
+
+    Units are normalized through _OPTION_DAYS before comparing, so a legitimate
+    cross-unit pairing (stop_option=nyears/stop_n=5 with rest_option=nmonths/
+    rest_n=12) is not false-failed. When either option is a unit that cannot be
+    expressed in days (nsteps -- timestep-dependent; date/ifdays0 -- absolute
+    markers), the check is skipped rather than guessed at.
+
+    Returns a list of error strings. Assumes types already passed _type_errors,
+    which validate_case runs (and returns early on) before calling this.
+    """
+    for field in ('stop_option', 'stop_n', 'rest_option', 'rest_n'):
+        if spec.get(field) is None:
+            return []  # a missing field is already reported as such
+
+    stop_unit = str(spec['stop_option']).strip().lower()
+    rest_unit = str(spec['rest_option']).strip().lower()
+    if stop_unit not in _OPTION_DAYS or rest_unit not in _OPTION_DAYS:
+        return []  # nsteps/date/ifdays0 -- not expressible as a fixed interval
+
+    try:
+        stop_n = int(spec['stop_n'])
+        rest_n = int(spec['rest_n'])
+    except (TypeError, ValueError):
+        return []  # a bad type is already reported by the type check
+
+    stop_days = stop_n * _OPTION_DAYS[stop_unit]
+    rest_days = rest_n * _OPTION_DAYS[rest_unit]
+    if rest_days <= stop_days:
+        return []
+
+    if stop_unit == rest_unit:
+        detail = (f"rest_n={rest_n} exceeds stop_n={stop_n} "
+                  f"(both {stop_unit})")
+    else:
+        detail = (f"rest_n={rest_n} {rest_unit} (~{rest_days:g} days) exceeds "
+                  f"stop_n={stop_n} {stop_unit} (~{stop_days:g} days)")
+    return [f"rest/stop: {detail}. The run ends before a restart interval is "
+            f"reached, so the restart fileset written is incomplete and a "
+            f"later CONTINUE_RUN=TRUE will crash. Set rest_n <= stop_n."]
+
+
 # No-ozone default for newcase builds. exocam-casemgr takes the experiment
 # matrix as the sole arbiter of atmospheric composition, so a newcase inherits
 # nothing: unspecified gases are forced to 0.0 (see render_exoplanet_mod), and
@@ -581,6 +652,10 @@ def validate_case(spec, registry):
             find_ic_file(spec, registry)
         except ValueError as e:
             errors.append(str(e))
+
+    # restart interval must not outrun the segment length (applies to both
+    # newcase and clone — the xmlchange block below is identical for each)
+    errors.extend(_verify_rest_stop(spec))
 
     # solar file / exort package consistency
     solar = spec.get('exo_solar_file', '')

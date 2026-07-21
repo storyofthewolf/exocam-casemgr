@@ -198,7 +198,25 @@ Existence checking assumes `--verify` runs on the HPC, where every input file sh
 
 3. **Scientific consistency** (`_verify_o2_ozone`, `_verify_ozone_convect_plim`) — O2 vs ozone, and ozone vs `exo_convect_plim`. **Warnings only.** See "Composition inheritance → `--verify` consistency warnings" above for the rules.
 
+Beyond these three, `validate_case` itself (so **both** plain `generate` and `--verify`) hard-fails a case where the restart interval outruns the segment length — see "REST_N ≤ STOP_N guard" below.
+
 Verify mode runs the type/nc checks **before** `validate_case`, because `validate_case` coerces values to float (via `compute_pstd_from_spec`) and would raise on a mistyped numeric; `--verify` reports a clean `type:` message instead. `validate_case` only runs if types pass. `validate_case` itself also runs the same type checks first (shared `_type_errors()`) and returns early on failure, so **plain `generate` is exactly as strict as `--verify` and `patch --set`** — a mistyped `PARAM_TYPES` value fails the case with a clean `type:` error instead of reaching `_fortran_value`, whose int branch would silently truncate a non-integral (`26.5` → `26`) or crash on a non-numeric. Output: `OK:` / `FAIL:` per case, `-` lines for errors, `!` lines for warnings, `·` lines for skip notes, then a summary count. A case with warnings but no errors still reports `OK` and exits 0.
+
+---
+
+## REST_N ≤ STOP_N guard
+
+`_verify_rest_stop` (build.py) is a **hard error** in `validate_case`, so it blocks both plain `generate` and `--verify`, for newcase and clone alike (the `xmlchange` block that writes these is identical for both).
+
+**The failure it prevents** (observed in real operation, 2026-07-21): when the restart interval is longer than the run, the segment ends before a restart write is ever reached. CESM still emits an end-of-run restart, but the fileset is **incomplete**, and the crash does not appear until the *next* submission — a `CONTINUE_RUN=TRUE` that cannot find the full set it needs to resume. Catching it at generate time is the only place the user sees it before burning the allocation twice.
+
+- Units are normalized to days through `_OPTION_DAYS` before comparing, so a legitimate cross-unit pairing (`stop_option: nyears/stop_n: 5` with `rest_option: nmonths/rest_n: 12`) is **not** false-failed. The originally reported trigger (`REST_OPTION == STOP_OPTION and REST_N > STOP_N`) is the same-unit special case, where the comparison is exact.
+- `rest_n == stop_n` is **allowed** — one restart lands exactly at the end of the segment.
+- `nsteps`/`nstep` (timestep-dependent, unknowable from the matrix) and `date`/`ifdays0` (absolute markers, not intervals) are **skipped**, not guessed at.
+- Runs after `_type_errors` has passed (`validate_case` returns early on type failure), so a mistyped `rest_n` reports as a clean `type:` error rather than reaching the comparison.
+- The `_OPTION_DAYS` values are approximate (`nmonth` = 30.4375 days) and only need to order correctly across units; every real matrix uses matching units, where precision is irrelevant.
+
+**Not enforced at run time.** `runmgr.py continue --set REST_N=...` / `xml --change` can still set an inconsistent pair on a live case — the guard is build-time only.
 
 ---
 
@@ -320,6 +338,7 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 - `build.py generate` generates scripts but never executes them. `build.py make` runs them (with confirmation prompt).
 - `build.py patch` is the **only** way to change an `exoplanet_mod.F90` parameter in an already-built case. `generate` cannot: it renders the F90 into a fresh build script whose first act is `create_newcase`/`create_clone`, which would recreate the case and destroy the run. These are Fortran `parameter` constants compiled into the binary — no `xmlchange` or `user_nl` path can reach them.
 - For a newcase, the experiment matrix is the sole arbiter of atmospheric composition. Nothing is inherited from the config templates. See "Composition inheritance" above.
+- `rest_n` must never exceed `stop_n` (unit-normalized). Enforced as a hard error in `validate_case`, so no generated build script can write a REST/STOP pair that produces an incomplete restart fileset. See "REST_N ≤ STOP_N guard" above.
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
 
