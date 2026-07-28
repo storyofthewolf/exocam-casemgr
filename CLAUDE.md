@@ -142,6 +142,17 @@ Status handling within the preview:
 
 `xml --query` (no `--change`) is read-only and never gates. `batch_confirm(action, n)` in `manage_utils.py` is the shared gate helper (runmgr's former private `_batch_confirm` copy was removed); `submit_case()` (in `manage_utils.py`) is the single `sbatch` path used by all three submitting verbs — `continue`/`restart` no longer carry their own inline `subprocess.run(['sbatch', …])` block. `_apply_xmlchange` raises `RuntimeError` (caught per-case) when `./xmlchange` is missing, so a bad case dir reports an error instead of crashing the batch.
 
+### restart — rpointer.* reset for branch/hybrid cases
+
+`restart` sets `CONTINUE_RUN=FALSE` to relaunch from `RUN_REFCASE`/`RUN_REFDATE`, but CESM's component models read `run/rpointer.*` for the actual restart filenames — independent of those XML vars. A prior run segment (e.g. `continue`) advances `rpointer.*` past the reference point; the reference `.r.`/`.i.` files are still sitting untouched in `run/`, but the pointer no longer names them, and the restart fails at startup. This surfaced in real operation (2026-07-27).
+
+For every case where live XML reads `RUN_TYPE=branch` or `hybrid`, `restart` locates `archive/<RUN_REFCASE>/rest/<RUN_REFDATE>-00000/` (falling back to `long_term/` if the reference case has since been retired — the same two locations `build.py`'s generated `RUN_REFDIR` comment documents), and copies every `rpointer.*` file there into `<case>/run/`, overwriting whatever is present. This is disclosed in the preview (`rpointer.*: reset from <refdir>/`) and happens for the whole batch, gated by the same single `[yes/no]` as the rest of `restart` — no separate flag or confirm.
+
+- All five `rpointer.{atm,drv,ice,lnd,ocn}` files are reset together, never just `rpointer.atm` — the driver and every component read their own pointer at startup, so resetting a subset would leave the fileset internally inconsistent.
+- `startup`-type cases never carry `RUN_REFCASE`/`RUN_REFDATE` and are unaffected — no rpointer line appears in their preview.
+- If the reference `rest/` set can't be found (missing `RUN_REFCASE`/`RUN_REFDATE`, or no matching directory in either `archive` or `long_term`), the preview prints a `WARNING` and `rpointer.*` is left untouched — the restart will likely still fail at startup, but `restart` does not guess.
+- `_rpointer_reset_plan()` / `_reset_rpointers()` / `_find_refdir()` (runmgr.py) are the implementation; verified against real `hybrid`/`branch` cases on Discover (preview-only dry run) before landing.
+
 ### --energy computation
 
 1. List `*.cam.h0.*.nc` files in `$archive/<case>/atm/hist/` excluding filenames containing `"avg"`. Sort lexicographically (= chronological for CESM date strings).

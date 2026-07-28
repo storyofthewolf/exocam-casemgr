@@ -57,9 +57,11 @@ Run any subcommand with --help for full options, e.g.:
 """
 
 import argparse
+import glob
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -166,6 +168,68 @@ def _apply_xmlchange(case_dir, var, val):
     if result.returncode != 0:
         raise RuntimeError(
             f"xmlchange {var}={val} failed: {result.stderr.strip()}")
+
+
+def _find_refdir(run_refcase, run_refdate, paths):
+    """Locate the rest/<RUN_REFDATE>-00000/ set for RUN_REFCASE.
+
+    Checks archive/ first, then long_term/ (a reference case may since have
+    been retired) — the same two locations build.py's generated RUN_REFDIR
+    comment documents. Returns the directory path, or None if neither has it.
+    """
+    refdate_dir = f'{run_refdate}-00000'
+    for base_key in ('archive', 'long_term'):
+        base = paths.get(base_key, '')
+        if not base:
+            continue
+        candidate = os.path.join(base, run_refcase, 'rest', refdate_dir)
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def _rpointer_reset_plan(case_dir, case, paths):
+    """For a branch/hybrid case, plan resetting run/rpointer.* from its reference set.
+
+    Restarting a branch/hybrid case (CONTINUE_RUN=FALSE) reruns from
+    RUN_REFCASE/RUN_REFDATE, but a prior run segment can have advanced the
+    rpointer.* files in <case>/run past that reference point — CESM reads
+    rpointer.* for the actual restart filenames, independent of RUN_REFCASE/
+    RUN_REFDATE, so a stale pointer set makes the restart fail. The reference
+    restart .nc files normally persist in <case>/run untouched; only the
+    rpointer.* files drift.
+
+    Returns (run_type, refdir, rptr_files, warning) — any of refdir/rptr_files
+    may be falsy/empty if run_type isn't branch/hybrid or the reference set
+    can't be found; warning is a human-readable reason in that case.
+    """
+    run_type = _read_case_xml_var(case_dir, 'RUN_TYPE')
+    if run_type not in ('branch', 'hybrid'):
+        return run_type, None, [], None
+
+    run_refcase = _read_case_xml_var(case_dir, 'RUN_REFCASE')
+    run_refdate = _read_case_xml_var(case_dir, 'RUN_REFDATE')
+    if not run_refcase or not run_refdate:
+        return run_type, None, [], "RUN_REFCASE/RUN_REFDATE not set — cannot locate reference rpointers"
+
+    refdir = _find_refdir(run_refcase, run_refdate, paths)
+    if not refdir:
+        return run_type, None, [], (
+            f"reference restart set not found for {run_refcase}/rest/{run_refdate}-00000 "
+            f"(checked archive and long_term)")
+
+    rptr_files = sorted(glob.glob(os.path.join(refdir, 'rpointer.*')))
+    if not rptr_files:
+        return run_type, refdir, [], f"no rpointer.* files found in {refdir}"
+
+    return run_type, refdir, rptr_files, None
+
+
+def _reset_rpointers(case_dir, rptr_files):
+    """Copy each reference rpointer.* file into <case_dir>/run/, overwriting."""
+    run_dir = os.path.join(case_dir, 'run')
+    for src in rptr_files:
+        shutil.copy(src, os.path.join(run_dir, os.path.basename(src)))
 
 
 _REST_STOP_VARS = ('REST_N', 'STOP_N', 'REST_OPTION', 'STOP_OPTION')
@@ -464,6 +528,16 @@ def cmd_restart(args, paths):
     live XML, so --set STOP_N alone can trigger it) prints a WARNING in the
     preview — not a block. The restart fileset would be incomplete.
 
+    For RUN_TYPE=branch/hybrid cases, a prior run segment can leave
+    run/rpointer.* pointing past RUN_REFCASE/RUN_REFDATE — CESM reads
+    rpointer.* for the actual restart filenames independent of those vars, so
+    a stale pointer set makes the restart fail even though the reference
+    restart files are still sitting in run/ untouched. restart resets
+    run/rpointer.* from archive (or long_term, if since retired)
+    <RUN_REFCASE>/rest/<RUN_REFDATE>-00000/ before submitting. If that
+    reference set can't be found, a WARNING is printed and rpointer.* is left
+    untouched (the case likely fails at startup).
+
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped, never submitted
       COMPLETE               — the normal case
@@ -485,7 +559,7 @@ def cmd_restart(args, paths):
     set_vars = _parse_set_pairs(args.set)
 
     # Phase 1 — preview; hard-block active jobs; collect actionable cases.
-    actionable = []  # (case, case_dir)
+    actionable = []  # (case, case_dir, rptr_files)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
@@ -518,8 +592,17 @@ def cmd_restart(args, paths):
         rs_warn = _rest_stop_warning(case_dir, set_vars)
         if rs_warn:
             print(f"    ! {rs_warn}")
+
+        run_type, refdir, rptr_files, rptr_warn = _rpointer_reset_plan(case_dir, case, paths)
+        if run_type in ('branch', 'hybrid'):
+            if rptr_files:
+                print(f"    rpointer.*: reset from {refdir}/")
+            else:
+                print(f"    ! WARNING: RUN_TYPE={run_type} but {rptr_warn} — "
+                      f"rpointer.* left as-is, restart may fail")
+
         print(f"    sbatch: {run_script}")
-        actionable.append((case, case_dir))
+        actionable.append((case, case_dir, rptr_files))
 
     if not args.execute:
         preview_hint(args.execute)
@@ -533,7 +616,7 @@ def cmd_restart(args, paths):
         print("Aborted.")
         return
 
-    for case, case_dir in actionable:
+    for case, case_dir, rptr_files in actionable:
         try:
             _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'FALSE')
             for var, val in set_vars:
@@ -541,6 +624,13 @@ def cmd_restart(args, paths):
         except RuntimeError as e:
             print(f"  {case}: ERROR: {e}")
             continue
+
+        if rptr_files:
+            try:
+                _reset_rpointers(case_dir, rptr_files)
+            except OSError as e:
+                print(f"  {case}: ERROR: failed to reset rpointer.*: {e}")
+                continue
 
         ok, detail = submit_case(case_dir, case)
         if ok:
