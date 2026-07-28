@@ -14,23 +14,6 @@ paths.archive, paths.long_term). Override any path with --caseroot,
 Cases are discovered by scanning those directories on disk — no separate
 registry file is required.
 
-SUBCOMMANDS
------------
-  check                 Show run status for cases (CaseStatus + SLURM probe);
-                        defaults to all discoverable cases when given no names.
-                        --dir lists individual files in a storage area for one case.
-  xml                   Query/change CESM XML variables ad hoc (no CONTINUE_RUN,
-                        no sbatch); --query VAR to inspect, --change VAR=VALUE to set
-  continue              Set CONTINUE_RUN=TRUE and sbatch the run script;
-                        optionally apply --set VAR=VALUE xmlchange calls first
-  restart               Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch;
-                        use to fix and rerun from scratch after a completed or failed run
-  rebuild                Recompile ./<case>.build as-is, then CONTINUE_RUN=FALSE +
-                        rpointer reset (branch/hybrid) + sbatch; no source or XML
-                        edits. Use after an across-the-ensemble source fix.
-  submit                sbatch a built case as-is (no xmlchange); the launch step
-                        after `build.py make`. Skips cases with no <case>.run.
-
 SAFETY
 ------
   xml, continue, restart, rebuild, and submit require explicit case names or
@@ -51,13 +34,8 @@ SAFETY
   this as a hard error at generate time; here it is advisory, and the single
   batch [yes/no] decides.
 
-Run any subcommand with --help for full options, e.g.:
-  python runmgr.py check --help
-  python runmgr.py xml --help
-  python runmgr.py continue --help
-  python runmgr.py restart --help
-  python runmgr.py rebuild --help
-  python runmgr.py submit --help
+Run any subcommand with --help for its full description and options
+(e.g. `python runmgr.py rebuild --help`).
 """
 
 import argparse
@@ -649,20 +627,28 @@ def cmd_restart(args, paths):
 
 def cmd_rebuild(args, paths):
     """
-    Recompile ./<case>.build as-is, then CONTINUE_RUN=FALSE + rpointer reset + sbatch.
+    Recompile ./<case>.build, then CONTINUE_RUN=FALSE + rpointer reset + sbatch.
 
-    Use this after an across-the-ensemble source fix that touches shared
-    Fortran (e.g. exoplanet_mod.F90 edited by hand, or another file under
-    SourceMods) where every case needs the same rebuild and no per-case
-    parameter or XML value is changing. It is the run-control counterpart to
-    `build.py patch` — patch edits exoplanet_mod.F90 per case via --set and
-    also rebuilds; rebuild never touches source and is for "recompile what's
-    already there, then relaunch from the reference point" across a set of
-    cases in one pass. If a parameter also needs changing, run `build.py
-    patch` first (it already rebuilds), then `rebuild` purely for the
-    restart step would recompile a second time — prefer `runmgr.py restart`
-    after patch instead for a startup-type ensemble, or accept the double
-    compile for a branch/hybrid one that needs rebuild's rpointer reset too.
+    Use this after you have hand-edited source under SourceMods across an
+    ensemble — any file, anywhere in the tree — and every case needs the same
+    recompile-and-relaunch with no per-case parameter or XML value changing.
+    rebuild never edits source itself: you make the edits, it recompiles what
+    is already there and relaunches from the reference point, across a set of
+    cases in one pass.
+
+    Choosing between this and `build.py patch`:
+
+      changing exoplanet_mod.F90 parameters   -> build.py patch --set ...
+          patch automates the edit for that one file (the parameters that
+          change often) and rebuilds, but never submits.
+      any other SourceMods edit               -> edit by hand, then rebuild
+          patch is deliberately limited to exoplanet_mod.F90; extending it to
+          arbitrary source edits would be far more trouble than editing the
+          file directly. rebuild covers that case.
+      already ran patch, now need to relaunch -> runmgr.py restart
+          patch has already recompiled; restart submits without a second
+          compile. Use rebuild instead only if the case is branch/hybrid and
+          needs the rpointer reset — that costs one redundant recompile.
 
     No --set: this verb makes no XML edits beyond CONTINUE_RUN=FALSE. For
     XML changes use restart or xml --change.
@@ -1498,13 +1484,14 @@ def build_parser():
     parser.add_argument('--long-term', dest='long_term',
                         help='Override paths.long_term from config_registry')
 
-    top_sub = parser.add_subparsers(dest='group', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
+    top_sub = parser.add_subparsers(dest='group', metavar='SUBCOMMAND')
     top_sub.required = True
 
     # ---- check ----
     p_check = top_sub.add_parser(
         'check',
-        help=argparse.SUPPRESS,
+        help='Show run status for cases (CaseStatus + SLURM probe); defaults '
+             'to all discoverable cases. --dir lists files in one storage area',
         description=cmd_check.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1538,7 +1525,8 @@ def build_parser():
     # ---- xml ----
     p_xml = top_sub.add_parser(
         'xml',
-        help=argparse.SUPPRESS,
+        help='Query/change CESM XML variables ad hoc (no CONTINUE_RUN, no '
+             'sbatch); --query VAR to inspect, --change VAR=VALUE to set',
         description=cmd_xml.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1559,7 +1547,8 @@ def build_parser():
     # ---- continue ----
     p_cont = top_sub.add_parser(
         'continue',
-        help=argparse.SUPPRESS,
+        help='Set CONTINUE_RUN=TRUE and sbatch the run script; optionally '
+             'apply --set VAR=VALUE xmlchange calls first',
         description=cmd_continue.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1576,7 +1565,8 @@ def build_parser():
     # ---- restart ----
     p_restart = top_sub.add_parser(
         'restart',
-        help=argparse.SUPPRESS,
+        help='Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch; fix '
+             'and rerun from scratch after a completed or failed run',
         description=cmd_restart.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1594,7 +1584,8 @@ def build_parser():
     # ---- rebuild ----
     p_rebuild = top_sub.add_parser(
         'rebuild',
-        help=argparse.SUPPRESS,
+        help='Recompile ./<case>.build as-is after a hand-edit anywhere under '
+             'SourceMods, then CONTINUE_RUN=FALSE + rpointer reset + sbatch',
         description=cmd_rebuild.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1609,7 +1600,8 @@ def build_parser():
     # ---- submit ----
     p_submit = top_sub.add_parser(
         'submit',
-        help=argparse.SUPPRESS,
+        help='sbatch a built case as-is (no xmlchange); the launch step after '
+             '`build.py make`. Skips cases with no <case>.run',
         description=cmd_submit.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
