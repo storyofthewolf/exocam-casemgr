@@ -180,11 +180,14 @@ def _rpointer_reset_plan(case_dir, case, paths):
 
     Restarting a branch/hybrid case (CONTINUE_RUN=FALSE) reruns from
     RUN_REFCASE/RUN_REFDATE, but a prior run segment can have advanced the
-    rpointer.* files in <case>/run past that reference point — CESM reads
-    rpointer.* for the actual restart filenames, independent of RUN_REFCASE/
-    RUN_REFDATE, so a stale pointer set makes the restart fail. The reference
-    restart .nc files normally persist in <case>/run untouched; only the
-    rpointer.* files drift.
+    rpointer.* files in the case's run dir past that reference point — CESM
+    reads rpointer.* for the actual restart filenames, independent of
+    RUN_REFCASE/RUN_REFDATE, so a stale pointer set makes the restart fail.
+    The reference restart .nc files normally persist there untouched; only
+    the rpointer.* files drift.
+
+    The run dir is <paths.rundir>/<case>/run (see _run_dir) — its own
+    filesystem root, not <caseroot>/<case>/run.
 
     Returns (run_type, refdir, rptr_files, warning) — any of refdir/rptr_files
     may be falsy/empty if run_type isn't branch/hybrid or the reference set
@@ -209,12 +212,35 @@ def _rpointer_reset_plan(case_dir, case, paths):
     if not rptr_files:
         return run_type, refdir, [], f"no rpointer.* files found in {refdir}"
 
+    # Check the destination too, not just the source: the preview must not
+    # promise a reset that the execute pass cannot perform.
+    run_dir = _run_dir(case, paths)
+    if not os.path.isdir(run_dir):
+        return run_type, refdir, [], f"run directory not found: {run_dir}"
+
     return run_type, refdir, rptr_files, None
 
 
-def _reset_rpointers(case_dir, rptr_files):
-    """Copy each reference rpointer.* file into <case_dir>/run/, overwriting."""
-    run_dir = os.path.join(case_dir, 'run')
+def _run_dir(case, paths):
+    """Return the case's live run directory: <paths.rundir>/<case>/run.
+
+    RUNDIR is its own filesystem root on Discover (env_run.xml resolves it to
+    $CESMSCRATCHROOT/rundir/$CASE/run), not a subdirectory of the case dir --
+    <caseroot>/<case>/run does not exist. Every rundir consumer here goes
+    through this, matching _rundir_info and the --dir 'run' resolver.
+    """
+    return os.path.join(paths.get('rundir', ''), case, 'run')
+
+
+def _reset_rpointers(case, paths, rptr_files):
+    """Copy each reference rpointer.* file into the case's run dir, overwriting.
+
+    Raises RuntimeError if the run dir is missing, rather than letting
+    shutil.copy report a bare per-file ENOENT that reads as a missing source.
+    """
+    run_dir = _run_dir(case, paths)
+    if not os.path.isdir(run_dir):
+        raise RuntimeError(f"run directory not found: {run_dir}")
     for src in rptr_files:
         shutil.copy(src, os.path.join(run_dir, os.path.basename(src)))
 
@@ -621,8 +647,8 @@ def cmd_restart(args, paths):
 
         if rptr_files:
             try:
-                _reset_rpointers(case_dir, rptr_files)
-            except OSError as e:
+                _reset_rpointers(case, paths, rptr_files)
+            except (OSError, RuntimeError) as e:
                 print(f"  {case}: ERROR: failed to reset rpointer.*: {e}")
                 continue
 
