@@ -1999,7 +1999,7 @@ def cmd_patch(args):
 
 def cmd_rebuild(args):
     """
-    Recompile ./<case>.build across a set of cases; --send-it also relaunches.
+    Recompile ./<case>.build across a set of existing cases. Nothing else.
 
     Use this after you have hand-edited source under SourceMods across an
     ensemble — any file, anywhere in the tree — and every case needs the same
@@ -2016,34 +2016,21 @@ def cmd_rebuild(args):
           arbitrary source edits would be far more trouble than editing the
           file directly. rebuild covers that case.
 
-    --send-it: after a successful recompile, relaunch the case from its
-    reference point — CONTINUE_RUN=FALSE, a branch/hybrid rpointer.* reset,
-    then sbatch. Without it rebuild only recompiles, the same way `make`
-    builds without submitting unless asked. The three relaunch steps are one
-    unit: CONTINUE_RUN and rpointer.* are only touched when a job is actually
-    being submitted, so a recompile-only run never leaves a case pointing at
-    a restart it will not run.
+    This verb compiles and stops. It never submits, never runs xmlchange, and
+    never touches run/rpointer.*, because how a rebuilt case should resume is
+    a separate decision it cannot make for you: continuing an in-progress run
+    from where it left off (runmgr.py continue, CONTINUE_RUN=TRUE) is just as
+    common as relaunching from the reference point (runmgr.py restart,
+    CONTINUE_RUN=FALSE + rpointer reset), and forcing either one here would
+    be wrong half the time. Launch a freshly built case with runmgr.py
+    submit. `make --send-it` folds building and submitting together because a
+    brand-new case has no run state to preserve; a rebuilt one does.
 
-    For RUN_TYPE=branch/hybrid cases under --send-it, run/rpointer.* is reset
-    from archive (or long_term, if since retired)
-    <RUN_REFCASE>/rest/<RUN_REFDATE>-00000/ before submitting — a prior run
-    segment can leave rpointer.* pointing past the reference point, which
-    CESM reads independent of RUN_REFCASE/RUN_REFDATE, so a stale pointer set
-    fails at startup even though the reference restart files are still
-    sitting in run/ untouched. If the reference set can't be found, a WARNING
-    is printed and rpointer.* is left untouched.
-
-    Status gating (checked via CaseStatus + SLURM probe), --send-it only:
-      RUNNING / RESUBMITTED  — hard block: skipped, never rebuilt or submitted
-                                (unlike patch, which allows recompiling a live
-                                binary — with --send-it rebuild also resubmits,
-                                so an active case is never touched)
-      COMPLETE                — the normal case
-      anything else           — flagged in the preview (not blocked)
-
-    Without --send-it nothing is submitted, so an active job is flagged the
-    way patch flags it — recompiling a queued case so its next segment picks
-    up the new binary is a supported use.
+    Status gating (checked via CaseStatus + SLURM probe): RUNNING and
+    RESUBMITTED are flagged in the preview, not blocked — the same policy as
+    patch. Recompiling a queued case so its next segment picks up the new
+    binary is a supported use, and safe here precisely because rebuild does
+    not resubmit.
 
     Cases with no <case>.build are skipped before anything is touched.
 
@@ -2052,8 +2039,7 @@ def cmd_rebuild(args):
     prints the preview and exits. Requires explicit case names or --prefix —
     no --all flag.
 
-    A failed compile is reported per-case and that case is not submitted;
-    the rest of the batch continues.
+    A failed compile is reported per-case; the rest of the batch continues.
     """
     paths = load_paths(args)
     caseroot = paths.get('caseroot', '')
@@ -2064,18 +2050,10 @@ def cmd_rebuild(args):
     if not cases:
         return
 
-    send_it = getattr(args, 'send_it', False)
-
-    # The relaunch half needs runmgr's run-control helpers. Lazy import, the
-    # same direction patch already uses for _probe_status -- keeping restart's
-    # rpointer logic in one place rather than forking a copy here.
     from runmgr import _probe_status
-    if send_it:
-        from runmgr import (_rpointer_reset_plan, _reset_rpointers,
-                            _apply_xmlchange, _read_case_xml_var)
 
     # Phase 1 -- preview; collect actionable cases.
-    actionable = []  # (case, case_dir, rptr_files)
+    actionable = []  # (case, case_dir)
     flagged = []
     for case in cases:
         case_dir = os.path.join(caseroot, case)
@@ -2088,41 +2066,17 @@ def cmd_rebuild(args):
             print(f"  {case}: SKIP — not built ({case}.build not found).")
             continue
 
+        # Active jobs are flagged, not blocked: rebuild does not resubmit, so
+        # recompiling a queued case for its next segment is safe (patch policy).
         status_label = _probe_status(case_dir, case)
-
-        # Active jobs are only a hard block when we would resubmit. A bare
-        # recompile is patch-shaped: flag it, let the batch confirm decide.
-        if send_it and status_label in ACTIVE_STATUSES:
-            print(f"  {case}: [{status_label}] — skipping (job already active)")
-            continue
-
         note = ''
-        if not send_it and status_label in ACTIVE_STATUSES:
+        if status_label in ACTIVE_STATUSES:
             note = f'  <- {status_label}: job is live, recompiling swaps the binary'
             flagged.append(case)
-        elif status_label != 'COMPLETE':
-            note = '  <- not COMPLETE'
 
         print(f"  {case}  [{status_label}]{note}")
         print(f"    rebuild: {build_script}")
-
-        rptr_files = []
-        if send_it:
-            cur_continue = _read_case_xml_var(case_dir, 'CONTINUE_RUN') or '?'
-            print(f"    CONTINUE_RUN: {cur_continue} -> FALSE")
-
-            run_type, refdir, rptr_files, rptr_warn = _rpointer_reset_plan(
-                case_dir, case, paths)
-            if run_type in ('branch', 'hybrid'):
-                if rptr_files:
-                    print(f"    rpointer.*: reset from {refdir}/")
-                else:
-                    print(f"    ! WARNING: RUN_TYPE={run_type} but {rptr_warn} — "
-                          f"rpointer.* left as-is, restart may fail")
-
-            print(f"    sbatch: {case}.run")
-
-        actionable.append((case, case_dir, rptr_files))
+        actionable.append((case, case_dir))
 
     if not args.execute:
         preview_hint(args.execute)
@@ -2131,55 +2085,30 @@ def cmd_rebuild(args):
         print("\nNo cases to rebuild.")
         return
 
-    # Phase 2 -- single batch gate, then compile (+ relaunch under --send-it).
+    # Phase 2 -- single batch gate, then compile.
     if flagged:
         print(f"\n  {len(flagged)} case(s) have an active or queued job "
               f"(see flags above).")
-    action = ("Rebuild and restart (CONTINUE_RUN=FALSE)" if send_it
-              else "Rebuild")
-    if not batch_confirm(action, len(actionable)):
+    if not batch_confirm("Rebuild", len(actionable)):
         print("Aborted.")
         return
 
     built = 0
     failed = []
-    for case, case_dir, rptr_files in actionable:
+    for case, case_dir in actionable:
         ok, detail = rebuild_case(case_dir, case)
-        if not ok:
-            print(f"  {case}: ERROR: {detail}")
-            failed.append(case)
-            continue
-        built += 1
-
-        if not send_it:
-            print(f"  {case}: OK: {detail}")
-            continue
-
-        try:
-            _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'FALSE')
-        except RuntimeError as e:
-            print(f"  {case}: ERROR: {e}")
-            continue
-
-        if rptr_files:
-            try:
-                _reset_rpointers(case_dir, rptr_files)
-            except OSError as e:
-                print(f"  {case}: ERROR: failed to reset rpointer.*: {e}")
-                continue
-
-        ok, detail = submit_case(case_dir, case)
+        print(f"  {case}: {'OK' if ok else 'ERROR'}: {detail}")
         if ok:
-            print(f"  {case}: rebuilt, submitted job {detail}")
+            built += 1
         else:
-            print(f"  {case}: rebuilt, ERROR: {detail}")
+            failed.append(case)
 
     print(f"\n  {built} of {len(actionable)} case(s) rebuilt.")
     if failed:
         print(f"  {len(failed)} build(s) FAILED: {', '.join(failed)}")
-    if not send_it and built:
-        print("  NOTE: nothing was submitted. Relaunch with `runmgr.py "
-              "continue/restart`, or rerun with --send-it.")
+    if built:
+        print("  NOTE: nothing was submitted. Launch with `runmgr.py submit`, "
+              "or resume with `runmgr.py continue` / `restart`.")
 
 
 def main():
@@ -2242,9 +2171,6 @@ def main():
     p_rebuild.add_argument('--prefix', metavar='PREFIX',
                            help='Rebuild all cases whose name starts with PREFIX '
                                 '(case-insensitive); cannot be combined with CASE names')
-    p_rebuild.add_argument('--send-it', dest='send_it', action='store_true',
-                           help='After a successful recompile, relaunch: CONTINUE_RUN=FALSE '
-                                '+ branch/hybrid rpointer.* reset + sbatch')
     p_rebuild.add_argument('--execute', action='store_true',
                            help='Actually rebuild (default: preview only)')
 

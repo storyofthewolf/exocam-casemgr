@@ -21,8 +21,8 @@ SAFETY
   `xml --query` (without --change).
 
   Recompiling is not this tool's job: no verb here runs <case>.build. After a
-  hand-edit under SourceMods, use `build.py rebuild` (--send-it to relaunch in
-  the same pass).
+  hand-edit under SourceMods, use `build.py rebuild`, then relaunch from here
+  (submit / continue / restart).
 
   Double-gate ergonomics (matching build.py make): these verbs first print a
   per-case preview, then --execute prints ONE batch [yes/no] confirmation
