@@ -16,9 +16,13 @@ registry file is required.
 
 SAFETY
 ------
-  xml, continue, restart, rebuild, and submit require explicit case names or
-  --prefix. There is no --all flag. check is read-only and needs no --execute;
-  so is `xml --query` (without --change).
+  xml, continue, restart, and submit require explicit case names or --prefix.
+  There is no --all flag. check is read-only and needs no --execute; so is
+  `xml --query` (without --change).
+
+  Recompiling is not this tool's job: no verb here runs <case>.build. After a
+  hand-edit under SourceMods, use `build.py rebuild` (--send-it to relaunch in
+  the same pass).
 
   Double-gate ergonomics (matching build.py make): these verbs first print a
   per-case preview, then --execute prints ONE batch [yes/no] confirmation
@@ -35,7 +39,7 @@ SAFETY
   batch [yes/no] decides.
 
 Run any subcommand with --help for its full description and options
-(e.g. `python runmgr.py rebuild --help`).
+(e.g. `python runmgr.py restart --help`).
 """
 
 import argparse
@@ -619,147 +623,6 @@ def cmd_restart(args, paths):
             print(f"  {case}: submitted job {detail}")
         else:
             print(f"  {case}: ERROR: {detail}")
-
-
-# ---------------------------------------------------------------------------
-# Subcommand: rebuild
-# ---------------------------------------------------------------------------
-
-def cmd_rebuild(args, paths):
-    """
-    Recompile ./<case>.build, then CONTINUE_RUN=FALSE + rpointer reset + sbatch.
-
-    Use this after you have hand-edited source under SourceMods across an
-    ensemble — any file, anywhere in the tree — and every case needs the same
-    recompile-and-relaunch with no per-case parameter or XML value changing.
-    rebuild never edits source itself: you make the edits, it recompiles what
-    is already there and relaunches from the reference point, across a set of
-    cases in one pass.
-
-    Choosing between this and `build.py patch`:
-
-      changing exoplanet_mod.F90 parameters   -> build.py patch --set ...
-          patch automates the edit for that one file (the parameters that
-          change often) and rebuilds, but never submits.
-      any other SourceMods edit               -> edit by hand, then rebuild
-          patch is deliberately limited to exoplanet_mod.F90; extending it to
-          arbitrary source edits would be far more trouble than editing the
-          file directly. rebuild covers that case.
-      already ran patch, now need to relaunch -> runmgr.py restart
-          patch has already recompiled; restart submits without a second
-          compile. Use rebuild instead only if the case is branch/hybrid and
-          needs the rpointer reset — that costs one redundant recompile.
-
-    No --set: this verb makes no XML edits beyond CONTINUE_RUN=FALSE. For
-    XML changes use restart or xml --change.
-
-    For RUN_TYPE=branch/hybrid cases, resets run/rpointer.* from archive (or
-    long_term, if since retired) <RUN_REFCASE>/rest/<RUN_REFDATE>-00000/
-    before submitting — the same reasoning and mechanism as `restart`: a
-    prior run segment can leave rpointer.* pointing past the reference point,
-    which CESM reads independent of RUN_REFCASE/RUN_REFDATE, so a stale
-    pointer set fails at startup even though the reference restart files are
-    still sitting in run/ untouched. If the reference set can't be found, a
-    WARNING is printed and rpointer.* is left untouched.
-
-    Status gating (checked via CaseStatus + SLURM probe):
-      RUNNING / RESUBMITTED  — hard block: skipped, never rebuilt or submitted
-                                (unlike build.py patch, which allows
-                                recompiling a live binary — rebuild also
-                                resubmits, so an active case is never touched)
-      COMPLETE                — the normal case
-      anything else           — flagged in the preview (not blocked)
-
-    Cases with no <case>.build are skipped before anything is touched.
-
-    The per-case preview is followed by a single batch [yes/no] before any
-    case is rebuilt or submitted (the same double-gate as restart/build.py
-    make). Without --execute, prints the preview and exits. Requires
-    explicit case names or --prefix — no --all flag.
-
-    A failed compile is reported per-case and that case is not submitted;
-    the rest of the batch continues.
-    """
-    from build import rebuild_case
-
-    caseroot = paths.get('caseroot', '')
-    if not caseroot:
-        sys.exit("ERROR: caseroot path not configured.")
-
-    cases = _resolve_cases(args, paths, 'rebuild')
-
-    # Phase 1 — preview; hard-block active jobs; collect actionable cases.
-    actionable = []  # (case, case_dir, rptr_files)
-    for case in cases:
-        case_dir = os.path.join(caseroot, case)
-        if not os.path.isdir(case_dir):
-            print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
-            continue
-
-        build_script = os.path.join(case_dir, f'{case}.build')
-        if not os.path.isfile(build_script):
-            print(f"  {case}: SKIP — not built ({case}.build not found).")
-            continue
-
-        cur_continue = _read_case_xml_var(case_dir, 'CONTINUE_RUN') or '?'
-
-        status_label = _probe_status(case_dir, case)
-        if status_label in ACTIVE_STATUSES:
-            print(f"  {case}: [{status_label}] — skipping (job already active)")
-            continue
-
-        flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
-        print(f"  {case}  [{status_label}]{flag}")
-        print(f"    rebuild: {build_script}")
-        print(f"    CONTINUE_RUN: {cur_continue} -> FALSE")
-
-        run_type, refdir, rptr_files, rptr_warn = _rpointer_reset_plan(case_dir, case, paths)
-        if run_type in ('branch', 'hybrid'):
-            if rptr_files:
-                print(f"    rpointer.*: reset from {refdir}/")
-            else:
-                print(f"    ! WARNING: RUN_TYPE={run_type} but {rptr_warn} — "
-                      f"rpointer.* left as-is, restart may fail")
-
-        print(f"    sbatch: {case}.run")
-        actionable.append((case, case_dir, rptr_files))
-
-    if not args.execute:
-        preview_hint(args.execute)
-        return
-    if not actionable:
-        print("\nNo cases to rebuild.")
-        return
-
-    # Phase 2 — single batch gate, then compile + apply xmlchange + sbatch.
-    if not batch_confirm("Rebuild and restart (CONTINUE_RUN=FALSE)", len(actionable)):
-        print("Aborted.")
-        return
-
-    for case, case_dir, rptr_files in actionable:
-        ok, detail = rebuild_case(case_dir, case)
-        if not ok:
-            print(f"  {case}: ERROR: {detail}")
-            continue
-
-        try:
-            _apply_xmlchange(case_dir, 'CONTINUE_RUN', 'FALSE')
-        except RuntimeError as e:
-            print(f"  {case}: ERROR: {e}")
-            continue
-
-        if rptr_files:
-            try:
-                _reset_rpointers(case_dir, rptr_files)
-            except OSError as e:
-                print(f"  {case}: ERROR: failed to reset rpointer.*: {e}")
-                continue
-
-        ok, detail = submit_case(case_dir, case)
-        if ok:
-            print(f"  {case}: rebuilt, submitted job {detail}")
-        else:
-            print(f"  {case}: rebuilt, ERROR: {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -1581,22 +1444,6 @@ def build_parser():
     p_restart.add_argument('--execute', action='store_true',
                            help='Actually perform actions (default is preview only)')
 
-    # ---- rebuild ----
-    p_rebuild = top_sub.add_parser(
-        'rebuild',
-        help='Recompile ./<case>.build as-is after a hand-edit anywhere under '
-             'SourceMods, then CONTINUE_RUN=FALSE + rpointer reset + sbatch',
-        description=cmd_rebuild.__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p_rebuild.add_argument('cases', nargs='*',
-                           help='Case name(s) to rebuild (or use --prefix; no --all flag)')
-    p_rebuild.add_argument('--prefix', metavar='STR', default=None,
-                           help='Case-insensitive prefix filter; '
-                                'cannot combine with explicit case names')
-    p_rebuild.add_argument('--execute', action='store_true',
-                           help='Actually perform actions (default is preview only)')
-
     # ---- submit ----
     p_submit = top_sub.add_parser(
         'submit',
@@ -1644,9 +1491,6 @@ def main():
 
     elif args.group == 'restart':
         cmd_restart(args, paths)
-
-    elif args.group == 'rebuild':
-        cmd_rebuild(args, paths)
 
     elif args.group == 'submit':
         cmd_submit(args, paths)
