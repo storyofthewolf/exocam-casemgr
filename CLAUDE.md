@@ -168,6 +168,16 @@ Added 2026-07-27 for the case that prompted it: an across-the-ensemble bug fix t
 
 `--send-it` stays exclusive to `make`, where it belongs: a brand-new case has no run state to preserve, so building and submitting can safely fold into one step. A rebuilt case has run state, so they cannot.
 
+Relaunching is therefore always a second, explicit command. `build.py rebuild --help` carries the three recipes as workflow guidance, and the post-batch NOTE points at it:
+
+| After a rebuild, to… | run |
+|---|---|
+| resume where the run left off (common) | `runmgr.py continue` — sets `CONTINUE_RUN=TRUE`, leaves `rpointer.*` alone |
+| relaunch from the reference point (branch/hybrid) | `runmgr.py restart` — sets `CONTINUE_RUN=FALSE` + resets `rpointer.*` |
+| launch a case that has never run | `runmgr.py submit` — sbatch as-is |
+
+**`submit` submits whatever the XML already says** — it makes no `xmlchange` calls at all. On a case whose `CONTINUE_RUN` is already `TRUE` it happens to continue correctly, but on one set to `FALSE` it relaunches from the beginning, overwriting a run the user meant to continue. `continue` is the correct verb whenever continuation is the intent, since it sets the var explicitly and previews the value (`CONTINUE_RUN: TRUE -> TRUE`) before the confirm.
+
 - **RUNNING/RESUBMITTED are flagged, never blocked** — the same policy as `patch`, and safe precisely because `rebuild` does not resubmit. Recompiling a queued case so its next segment picks up the new binary is a supported use.
 - Cases with no `<case>.build` are skipped before anything is touched.
 - A failed compile is reported per-case; the rest of the batch continues (same pattern as `patch`).

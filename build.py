@@ -2018,13 +2018,33 @@ def cmd_rebuild(args):
 
     This verb compiles and stops. It never submits, never runs xmlchange, and
     never touches run/rpointer.*, because how a rebuilt case should resume is
-    a separate decision it cannot make for you: continuing an in-progress run
-    from where it left off (runmgr.py continue, CONTINUE_RUN=TRUE) is just as
-    common as relaunching from the reference point (runmgr.py restart,
-    CONTINUE_RUN=FALSE + rpointer reset), and forcing either one here would
-    be wrong half the time. Launch a freshly built case with runmgr.py
-    submit. `make --send-it` folds building and submitting together because a
-    brand-new case has no run state to preserve; a rebuilt one does.
+    a separate decision it cannot make for you — so relaunching is always a
+    second, explicit command:
+
+      resume where the run left off (the common case)
+          build.py rebuild --prefix grp3 --execute
+          runmgr.py continue --prefix grp3 --execute
+              Sets CONTINUE_RUN=TRUE and submits. rpointer.* is left alone,
+              so the run picks up from its latest restart with the new binary.
+
+      relaunch from the reference point (branch/hybrid)
+          build.py rebuild --prefix grp3 --execute
+          runmgr.py restart --prefix grp3 --execute
+              Sets CONTINUE_RUN=FALSE and resets run/rpointer.* from
+              RUN_REFCASE/RUN_REFDATE, without which a branch/hybrid case
+              fails at startup on a stale pointer set.
+
+      launch a case that has never run
+          runmgr.py submit --prefix grp3 --execute
+              sbatch as-is, no xmlchange. NOTE that submit runs whatever the
+              XML already says: on a case whose CONTINUE_RUN is FALSE it
+              relaunches from the beginning, overwriting the run you may have
+              meant to continue. Use `continue` when you mean to continue.
+
+    Both continue and restart are equally common after a rebuild, which is why
+    forcing either one here would be wrong half the time. `make --send-it`
+    folds building and submitting together only because a brand-new case has
+    no run state to preserve; a rebuilt one does.
 
     Status gating (checked via CaseStatus + SLURM probe): RUNNING and
     RESUBMITTED are flagged in the preview, not blocked — the same policy as
@@ -2107,8 +2127,10 @@ def cmd_rebuild(args):
     if failed:
         print(f"  {len(failed)} build(s) FAILED: {', '.join(failed)}")
     if built:
-        print("  NOTE: nothing was submitted. Launch with `runmgr.py submit`, "
-              "or resume with `runmgr.py continue` / `restart`.")
+        print("  NOTE: nothing was submitted. Resume with `runmgr.py continue` "
+              "(CONTINUE_RUN=TRUE), or relaunch from the reference point with "
+              "`runmgr.py restart`.")
+        print("        See `build.py rebuild --help` for which one to use.")
 
 
 def main():
