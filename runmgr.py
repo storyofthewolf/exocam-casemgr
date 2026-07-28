@@ -27,9 +27,10 @@ SAFETY
   Double-gate ergonomics (matching build.py make): these verbs first print a
   per-case preview, then --execute prints ONE batch [yes/no] confirmation
   before acting on the whole set. RUNNING/RESUBMITTED cases are hard-blocked
-  (dropped from the set); surprising statuses (non-COMPLETE, non-BUILT, ...)
-  are flagged in the preview but not separately prompted — the single batch
-  confirm covers them.
+  (dropped from the set); every other status proceeds, with its label shown
+  per case. The label is reported, not judged — BUILT, FAILED, and WALLCLOCK
+  are all ordinary inputs to these verbs — and the single batch confirm is
+  the decision point.
 
   REST_N/STOP_N: continue/restart --set and xml --change print a WARNING (not
   a block) when the pending edit would leave the restart interval longer than
@@ -414,8 +415,12 @@ def cmd_continue(args, paths):
 
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped, never submitted
-      COMPLETE               — the normal case
-      anything else          — flagged in the preview (not blocked)
+      anything else          — proceeds; the status label is shown per case
+
+    The label is reported, not judged: BUILT (e.g. after `build.py rebuild`),
+    FAILED, and WALLCLOCK are all ordinary inputs to this verb, so no status
+    is singled out as surprising. The single batch [yes/no] is the decision
+    point.
 
     Cases with no <case>.run are skipped before any xmlchange is applied —
     a case sbatch cannot launch is never modified.
@@ -457,8 +462,7 @@ def cmd_continue(args, paths):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
-        print(f"  {case}  [{status_label}]{flag}")
+        print(f"  {case}  [{status_label}]")
         print(f"    CONTINUE_RUN: {cur_continue} -> TRUE")
         for var, new_val in set_vars:
             print(f"    {var}: {cur_vals[var]} -> {new_val}")
@@ -526,8 +530,13 @@ def cmd_restart(args, paths):
 
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped, never submitted
-      COMPLETE               — the normal case
-      anything else          — flagged in the preview (not blocked)
+      anything else          — proceeds; the status label is shown per case
+
+    The label is reported, not judged. BUILT is the normal state after
+    `build.py rebuild` (which appends 'build complete' to CaseStatus, so a
+    previously COMPLETE case reads BUILT afterward), and FAILED/WALLCLOCK are
+    exactly the states this verb exists to relaunch. The single batch [yes/no]
+    is the decision point.
 
     Cases with no <case>.run are skipped before any xmlchange is applied —
     a case sbatch cannot launch is never modified.
@@ -569,8 +578,7 @@ def cmd_restart(args, paths):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        flag = '' if status_label == 'COMPLETE' else '  <- not COMPLETE'
-        print(f"  {case}  [{status_label}]{flag}")
+        print(f"  {case}  [{status_label}]")
         print(f"    CONTINUE_RUN: {cur_continue} -> FALSE")
         for var, new_val in set_vars:
             cur = cur_vals.get(var, '?')
@@ -640,10 +648,12 @@ def cmd_submit(args, paths):
 
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped (a job is already active)
-      BUILT / COMPLETE       — the normal case (BUILT is the normal post-make
-                               state; COMPLETE covers re-launch and clones that
-                               inherit the source's CaseStatus)
-      anything else          — flagged in the preview (not blocked)
+      anything else          — proceeds; the status label is shown per case
+
+    The label is reported, not judged: BUILT is the normal post-make state,
+    COMPLETE covers re-launch and clones that inherit the source's CaseStatus,
+    and the rest are shown as-is. The single batch [yes/no] is the decision
+    point.
 
     The per-case preview is followed by a single batch [yes/no] before any job
     is submitted (the same double-gate as build.py make). Without --execute,
@@ -675,8 +685,7 @@ def cmd_submit(args, paths):
             print(f"  {case}: [{status_label}] — skipping (job already active)")
             continue
 
-        flag = '' if status_label in ('BUILT', 'COMPLETE') else '  <- not BUILT/COMPLETE'
-        print(f"  {case}  [{status_label}]{flag}")
+        print(f"  {case}  [{status_label}]")
         print(f"    sbatch: {run_script}")
         actionable.append((case, case_dir))
 

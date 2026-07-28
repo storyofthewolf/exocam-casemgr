@@ -126,7 +126,7 @@ A SLURM wall-clock kill never updates `CaseStatus` (it would otherwise read `RUN
 1. `run.out` is **appended to on every run attempt**, so only the segment after the **last** `CSM EXECUTION BEGINS HERE` line is examined — a timeout in an earlier segment followed by a fresh success must not register.
 2. Returns `True` if any line in that last segment contains **both** `CANCELLED` and `DUE TO TIME LIMIT`. Missing/unreadable file → `False`.
 
-`WALLCLOCK` is a probe-derived label (like `RESUBMITTED`/`RUNNING?`), not a `CaseStatus` event mapping. It is non-`COMPLETE`, so the run-control verbs (`continue`/`restart`/`submit`) **flag** it in the per-case preview (`<- not COMPLETE`/`<- not BUILT/COMPLETE`), the same as `FAILED` — appropriate for a timed-out case the user wants to relaunch. Wired into all four probe sites: `check`, `continue`, `restart`, `submit`.
+`WALLCLOCK` is a probe-derived label (like `RESUBMITTED`/`RUNNING?`), not a `CaseStatus` event mapping. The run-control verbs (`continue`/`restart`/`submit`) show it in the per-case preview and proceed — a timed-out case is exactly what the user is relaunching. Wired into all four probe sites: `check`, `continue`, `restart`, `submit`.
 
 ## Run-control gating (continue / restart / submit / xml --change)
 
@@ -136,9 +136,10 @@ All four run-control verbs use the **same double-gate ergonomics as `build.py ma
 2. **Gate 2 — a single batch `[yes/no]`.** With `--execute`, after the preview the verb asks **one** confirmation (`Continue … and submit N case(s)? [yes/no]`, `Submit N case(s)?`, `Apply XML changes to N case(s)?`) covering the whole set, then acts. Answering no → `Aborted.`, nothing submitted. This replaced the old per-case soft-block prompts.
 
 Status handling within the preview:
-- **RUNNING / RESUBMITTED** → **hard block**: dropped from the set, never submitted (a job is already active).
-- **COMPLETE** (and **BUILT** for `submit`) → the normal, unflagged case.
-- **anything else** (FAILED, WALLCLOCK, RUNNING?, …) → **flagged** in the preview line (`<- not COMPLETE`), but not separately prompted — the single batch confirm covers it.
+- **RUNNING / RESUBMITTED** → **hard block**: dropped from the set, never submitted (a job is already active), with an explicit `— skipping (job already active)` line.
+- **anything else** → proceeds. The preview prints the case and its status label (`<case>  [BUILT]`) and nothing more.
+
+**The label is reported, not judged** (owner decision, 2026-07-27). An earlier version appended `<- not COMPLETE` (`<- not BUILT/COMPLETE` for `submit`) to any status that wasn't the expected one. It was removed: the text restated the label printed immediately beside it, gated nothing (it fed only its own `print`), and misfired on the states these verbs exist to handle — `FAILED` and `WALLCLOCK` are the normal reasons to relaunch, and **`build.py rebuild` appends `build complete` to `CaseStatus`, so every case in a rebuilt ensemble reads `BUILT` and drew the flag** on the intended rebuild → restart workflow. The single batch `[yes/no]` is the decision point.
 
 `xml --query` (no `--change`) is read-only and never gates. `batch_confirm(action, n)` in `manage_utils.py` is the shared gate helper (runmgr's former private `_batch_confirm` copy was removed); `submit_case()` (in `manage_utils.py`) is the single `sbatch` path used by all three submitting verbs — `continue`/`restart` no longer carry their own inline `subprocess.run(['sbatch', …])` block. `_apply_xmlchange` raises `RuntimeError` (caught per-case) when `./xmlchange` is missing, so a bad case dir reports an error instead of crashing the batch.
 
