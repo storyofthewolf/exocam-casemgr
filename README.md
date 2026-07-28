@@ -19,7 +19,7 @@ Python 3.8+.
 
 | File | Purpose |
 |---|---|
-| `build.py` | Build script generator — validation, Fortran patching, shell script writer |
+| `build.py` | Build script generator — validation, Fortran patching, shell script writer; owns every compile (`generate`/`make`/`patch`/`rebuild`) |
 | `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `datamgr.py` | Data management — disk usage reporting and case retirement |
@@ -123,6 +123,36 @@ python runmgr.py submit my_case --execute             # sbatch the built case as
 step. Either way, `submit` makes no `xmlchange` calls — it runs exactly what you
 built. Use `runmgr.py continue` / `restart` instead to manage a case that has
 already run.
+
+### Recompiling existing cases
+
+After hand-editing source under `SourceMods` across an ensemble, `build.py rebuild`
+recompiles every affected case in one pass:
+
+```bash
+python build.py rebuild --prefix exovolc_hunga_       # preview
+python build.py rebuild --prefix exovolc_hunga_ --execute
+python build.py rebuild case_a case_b --execute       # explicit names
+```
+
+`rebuild` **compiles and stops** — it never submits, never runs `xmlchange`, and
+never touches `rpointer.*`. There is no `--send-it`: how a rebuilt case should
+resume is your decision, because resuming where the run left off
+(`runmgr.py continue`) is as common as relaunching from the reference point
+(`runmgr.py restart`). Relaunch as a separate, explicit step:
+
+```bash
+python build.py rebuild --prefix grp3 --execute
+python runmgr.py continue --prefix grp3 --execute     # CONTINUE_RUN=TRUE, keep going
+#   ...or...
+python runmgr.py restart --prefix grp3 --execute      # CONTINUE_RUN=FALSE + rpointer reset
+```
+
+`runmgr.py submit` runs whatever the XML already says — on a case whose
+`CONTINUE_RUN` is `FALSE` it relaunches from the beginning, so prefer `continue`
+when you mean to continue. For changing an `exoplanet_mod.F90` parameter rather
+than a hand-edited file, use `build.py patch` (which edits and rebuilds, but also
+does not submit).
 
 To run a single build script directly:
 

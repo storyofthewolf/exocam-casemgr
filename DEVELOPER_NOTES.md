@@ -88,6 +88,8 @@ python build.py --scripts-dir scripts/ generate matrix.yaml
 python build.py generate --list                        # list experiment matrices
 python build.py make                                   # run all *_build.sh (with confirmation)
 python build.py make --prefix ExoCAM_thai              # run only matching scripts
+python build.py patch --prefix noO3 --set exo_convect_plim=5.0 --execute  # edit exoplanet_mod.F90 + rebuild
+python build.py rebuild --prefix grp3 --execute        # recompile existing cases after a SourceMods hand-edit
 
 # Scan cases into registry
 python scan.py                                         # scan caseroot, print only
@@ -122,8 +124,10 @@ python datamgr.py retire my_case --purge --execute                              
 python runmgr.py check                                 # probe SLURM, show case status
 python runmgr.py check --info                         # include CESM event log tail
 python runmgr.py check --energy                       # include energy balance (TS/FSNT/FLNT)
+python runmgr.py submit case1 --execute                # sbatch as-is, no xmlchange (after build.py make)
 python runmgr.py continue case1 --set STOP_N=10 --set RESUBMIT=5  # CONTINUE_RUN=TRUE + xmlchange
 python runmgr.py restart case1 --set RUN_STARTDATE=0001-01-01 --execute  # CONTINUE_RUN=FALSE + xmlchange
+python runmgr.py xml --prefix grp3 --query STOP_N      # inspect XML across a set, never submits
 python datamgr.py clean purge-bld my_case --execute
 python datamgr.py clean purge-bld my_case --logs-only --execute
 python datamgr.py clean purge-restarts my_case --keep 1 --execute
@@ -275,6 +279,12 @@ All functions take explicit file paths and return dicts. No filesystem side effe
 
 ## build.py — key constants and validation logic
 
+**Subcommands:** `generate`, `make`, `patch`, `rebuild`. **Every compile in the toolchain enters through this module** — no `runmgr.py` verb runs `<case>.build`.
+
+**`rebuild` subcommand** (`cmd_rebuild`, added 2026-07-27) — recompiles `./<case>.build` across existing cases after a hand-edit anywhere under `SourceMods`. Compiles and stops: no `sbatch`, no `xmlchange`, no `rpointer.*` touch, and no `--send-it` (that flag is exclusive to `make`, where folding build+submit is safe because a fresh case has no run state to preserve). Flags `RUNNING`/`RESUBMITTED` without blocking (`patch` policy — safe because nothing is resubmitted). Selection via `_require_cases()`; preview by default, `--execute` adds one batch `[yes/no]`. Only cross-module import is `runmgr._probe_status` for the status column.
+
+**`patch` vs `rebuild`** — the split is *scope of the source edit*, not whether a compile happens. `patch` automates the edit for `exoplanet_mod.F90` alone (whose `parameter` constants change often enough to justify a `--set` interface); `rebuild` is the general escape hatch for any other `SourceMods` file, which you edit by hand. Extending `patch` to arbitrary source edits would be more arduous than editing the file directly.
+
 **`EXO_PARAMS`** — parameters patchable from the experiment matrix into `exoplanet_mod.F90`:
 gas bars (`exo_co2bar`, `exo_ch4bar`, `exo_n2bar`, `exo_o2bar`, `exo_h2bar`, `exo_arbar`),
 geophysical (`exo_gravity`, `exo_radius`, `exo_porb`, `exo_ndays`, `exo_sday`, `exo_scon`, `exo_eccen`, `exo_obliq`),
@@ -409,7 +419,7 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 
 ## runmgr.py — run lifecycle management
 
-Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output purge/move lives in `datamgr.py clean` — see above.)
+Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output purge/move lives in `datamgr.py clean` — see above. Recompiling lives in `build.py`: **no runmgr verb runs `<case>.build`** — see `build.py rebuild`.)
 
 **`check` subcommand:**
 - Probes SLURM for running jobs (`squeue --name <case> -h`)
@@ -430,15 +440,24 @@ Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output p
 - Sets `CONTINUE_RUN=TRUE` and sbatches the run script
 - Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
 - Example: `--set STOP_N=10 --set RESUBMIT=5`
-- Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; others → soft-warn with per-case confirmation
-- Preview mode by default; `--execute` required to submit
+- Status gating: RUNNING/RESUBMITTED → hard block (dropped from the set); everything else proceeds with its status label shown. The label is reported, not judged — `BUILT` (normal after `build.py rebuild`), `FAILED`, and `WALLCLOCK` are all ordinary inputs
+- Preview mode by default; `--execute` then asks one batch `[yes/no]` covering the whole set
 
 **`restart` subcommand:**
 - Sets `CONTINUE_RUN=FALSE` and sbatches the run script (for rerunning from scratch)
 - Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
 - Example: `--set RUN_STARTDATE=0001-01-01 --set RESUBMIT=9`
-- Status gating: RUNNING/RESUBMITTED → hard block; COMPLETE → silent; others → soft-warn with per-case confirmation
-- Preview mode by default; `--execute` required to submit
+- Status gating: identical to `continue` (see above)
+- Preview mode by default; `--execute` then asks one batch `[yes/no]` covering the whole set
+- **branch/hybrid only:** resets `rpointer.*` in the run dir from the reference restart set — see below
+
+**rpointer reset (`_rpointer_reset_plan` / `_reset_rpointers` / `_find_refdir` / `_run_dir`):**
+- Applies to `RUN_TYPE=branch`/`hybrid` only. A prior segment advances `rpointer.*` past `RUN_REFCASE`/`RUN_REFDATE`; CESM reads those pointers for the actual restart filenames independent of the XML vars, so a stale set fails at startup
+- Source: `archive/<RUN_REFCASE>/rest/<RUN_REFDATE>-00000/`, falling back to `long_term/` if the reference case was retired
+- Destination: **`<paths.rundir>/<case>/run`** (`_run_dir`) — `RUNDIR` is its own filesystem root (`$CESMSCRATCHROOT/rundir/$CASE/run`); `<caseroot>/<case>/run` does not exist
+- All five `rpointer.{atm,drv,ice,lnd,ocn}` are copied together, overwriting
+- `RUN_TYPE=startup` is a deliberate no-op: `CONTINUE_RUN=FALSE` + `startup` initializes from `ncdata` at `RUN_STARTDATE` and never reads `rpointer.*`, so leftover pointers are inert. The preview says `rpointer.*: not needed` rather than printing nothing. Keying on `RUN_TYPE` (not on `RUN_REFCASE` being set) is what prevents copying a foreign case's pointers into a startup case that carries leftover clone-source refs
+- The plan checks both source and destination, so a missing run dir warns in the preview instead of failing under `--execute`
 
 ---
 
