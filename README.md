@@ -124,6 +124,39 @@ step. Either way, `submit` makes no `xmlchange` calls — it runs exactly what y
 built. Use `runmgr.py continue` / `restart` instead to manage a case that has
 already run.
 
+### Changing a compiled-in parameter (`build.py patch`)
+
+`exoplanet_mod.F90` parameters are Fortran `parameter` constants compiled into the
+binary — no `xmlchange` or `user_nl` path can reach them, and `generate` would
+recreate the case and destroy the run. `build.py patch` is the **only** way to
+change one in an already-built case: it rewrites the `parameter ::` line in place
+and reruns `<case>.build`.
+
+```bash
+python build.py patch --prefix noO3_grp3 --set exo_convect_plim=5.0        # preview
+python build.py patch --prefix noO3_grp3 --set exo_convect_plim=5.0 --execute
+python build.py patch case_a case_b --set do_exo_rt_clearsky=true --execute
+```
+
+`--set VAR=VALUE` is repeatable and accepts any `EXO_PARAMS` member; values are
+type-checked against the same table `generate --verify` uses, before anything is
+touched. Preview by default; `--execute` adds one batch `[yes/no]` over the whole
+set.
+
+Notes:
+
+- **Patching a gas bar warns.** `exo_n2bar` was computed at generate time as
+  `target − sum(gases)` and is *not* recomputed, so patching a gas shifts total
+  surface pressure by the delta. Harmless at trace (ppm) magnitudes; for a real
+  composition change, regenerate instead.
+- **`RUNNING`/`RESUBMITTED` cases are flagged, not blocked** — recompiling a queued
+  case so its next segment picks up the new binary is a supported use. (`patch`
+  does not submit.)
+- **Experiment matrices are not updated.** A reminder prints; close the drift by
+  hand or a future `generate` silently reverts the change.
+- Like `rebuild`, `patch` never submits — relaunch with `runmgr.py continue` /
+  `restart` as a separate step.
+
 ### Recompiling existing cases
 
 After hand-editing source under `SourceMods` across an ensemble, `build.py rebuild`
@@ -150,9 +183,12 @@ python runmgr.py restart --prefix grp3 --execute      # CONTINUE_RUN=FALSE + rpo
 
 `runmgr.py submit` runs whatever the XML already says — on a case whose
 `CONTINUE_RUN` is `FALSE` it relaunches from the beginning, so prefer `continue`
-when you mean to continue. For changing an `exoplanet_mod.F90` parameter rather
-than a hand-edited file, use `build.py patch` (which edits and rebuilds, but also
-does not submit).
+when you mean to continue.
+
+`patch` and `rebuild` divide by **scope of the source edit**, not by whether a
+compile happens: `patch` automates the edit for `exoplanet_mod.F90` alone (the
+parameters that change often enough to warrant a `--set` interface), while
+`rebuild` recompiles after you have hand-edited any other file under `SourceMods`.
 
 To run a single build script directly:
 

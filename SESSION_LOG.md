@@ -22,9 +22,12 @@ commit history does not show. Newest entry at the bottom.
 - **Keying the rpointer reset on `RUN_REFCASE` being set** rather than on `RUN_TYPE`. Never implemented, and the survey showed why it would be wrong: `collapse` is `RUN_TYPE=startup` but carries a leftover `RUN_REFCASE=mars_2barCO2_dry_tpw` from a clone source, so that condition would have copied an unrelated case's pointers in. Guarded with a comment.
 
 **Open issues**
-- **The rpointer reset never verifies the restart `.nc` files it points at.** It checks that `rpointer.*` exist in `archive/`/`long_term/` and that the destination run dir exists, but not that the `.r.`/`.i.` files named inside those pointers are actually in the run dir. A clean preview can still yield a CESM startup failure. Added to CLAUDE.md known limitations; cheapest remaining hardening in this area.
-- The `exovolc_hunga_` pointers read year 0007 while `RUN_REFDATE` is 0061 — flagged to the owner as worth confirming that 0061 is the intended reference point for that ensemble. Not resolved in-session.
 - Owner noted these ergonomics may be revisited as use continues; nothing here should be treated as settled by fiat.
+
+**Resolved before session close**
+- **Verifying the restart `.nc` files the copied pointers name: rejected as overkill** (owner). The pointers are resolved from the case's own `RUN_REFCASE`/`RUN_REFDATE` and copied directly out of the same `archive/` restart set that holds those files — a mismatch would mean the archive set is itself corrupt, which is not runmgr's problem to detect. Recorded in CLAUDE.md's rpointer section as a "don't add it" note rather than a known limitation, so it is not re-raised as a gap.
+- The `exovolc_hunga_` year-0007-vs-0061 pointer discrepancy was fixed by the owner; the ensemble restarted successfully.
+- `build.py patch` is now documented in README (it had never been, predating this session).
 
 **Notes**
 - **The local fixture encoded the same wrong assumption as the bug, and therefore validated it.** `_reset_rpointers` wrote to `<caseroot>/<case>/run`, which has never existed on Discover — `RUNDIR` is its own filesystem root (`$CESMSCRATCHROOT/rundir/$CASE/run`). The fixture created `<caseroot>/<case>/run` because it was built from the code's assumptions rather than from the machine's real layout, so every local test passed while the feature could not work in production. It surfaced only when run against a real 20-case ensemble. Lesson for future fixtures: derive the layout from the target system (`env_run.xml`, `env_build.xml`), not from the code under test.
