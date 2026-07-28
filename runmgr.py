@@ -193,6 +193,14 @@ def _rpointer_reset_plan(case_dir, case, paths):
     may be falsy/empty if run_type isn't branch/hybrid or the reference set
     can't be found; warning is a human-readable reason in that case.
     """
+    # startup is a deliberate no-op, not an unhandled case. `restart` on a
+    # startup case means "run from the beginning": CONTINUE_RUN=FALSE with
+    # RUN_TYPE=startup initializes from ncdata at RUN_STARTDATE and never
+    # reads rpointer.*. Stale pointers left by earlier segments are inert and
+    # are ignored, never reset -- there is no reference set they should name.
+    # (Some startup cases also carry a leftover RUN_REFCASE/RUN_REFDATE from a
+    # clone source; keying on RUN_TYPE rather than those vars is what keeps a
+    # foreign case's pointers from being copied in.)
     run_type = _read_case_xml_var(case_dir, 'RUN_TYPE')
     if run_type not in ('branch', 'hybrid'):
         return run_type, None, [], None
@@ -554,6 +562,11 @@ def cmd_restart(args, paths):
     reference set can't be found, a WARNING is printed and rpointer.* is left
     untouched (the case likely fails at startup).
 
+    For RUN_TYPE=startup, rpointer.* is never touched and the preview says so.
+    CONTINUE_RUN=FALSE on a startup case initializes from ncdata at
+    RUN_STARTDATE without reading rpointer.* at all, so any pointers left by
+    earlier segments are inert checkpoints and are correctly ignored.
+
     Status gating (checked via CaseStatus + SLURM probe):
       RUNNING / RESUBMITTED  — hard block: skipped, never submitted
       anything else          — proceeds; the status label is shown per case
@@ -620,6 +633,11 @@ def cmd_restart(args, paths):
             else:
                 print(f"    ! WARNING: RUN_TYPE={run_type} but {rptr_warn} — "
                       f"rpointer.* left as-is, restart may fail")
+        else:
+            # Say so explicitly rather than printing nothing: a silent preview
+            # cannot be told apart from a reset that was skipped by mistake.
+            print(f"    rpointer.*: not needed (RUN_TYPE={run_type} starts from "
+                  f"ncdata at RUN_STARTDATE)")
 
         print(f"    sbatch: {run_script}")
         actionable.append((case, case_dir, rptr_files))
