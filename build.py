@@ -1171,14 +1171,32 @@ def _branch_var_block(spec):
     RUN_REFDATE is YYYY-MM-DD (from env_run.xml), but CESM names restart directories
     YYYY-MM-DD-SSSSS (date + seconds). The seconds field is always 00000, so -00000
     is appended unconditionally when constructing RUN_REFDIR.
+
+    RUN_REFDIR is resolved by the generated script at build time, not here: a
+    reference case is either still in the active archive or has been retired to
+    long-term storage by `datamgr.py retire`, and only the HPC can say which.
+    Build scripts are generated locally, where neither root is mounted, so a
+    generate-time probe would report "not found" for every case and silently
+    emit the wrong root. The two roots are tried in order, active first, since
+    a case that lives in both is mid-retirement and the active copy is current.
     """
     return [
         f"RUN_REFCASE={spec['run_refcase']}",
         f"RUN_REFDATE={spec['run_refdate']}",
-        "# Set RUN_REFDIR to the location of the reference restart files:",
-        "#   active refcase:   ${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
-        "#   retired refcase:  ${LONG_TERM}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
-        "RUN_REFDIR=${ARCHIVE}/${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
+        "REST_SUBDIR=${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
+        "# Locate the reference restart set: active archive, else long-term",
+        "# storage (where datamgr.py retire moves a retired case).",
+        'if [ -d "${ARCHIVE}/${REST_SUBDIR}" ]; then',
+        "  RUN_REFDIR=${ARCHIVE}/${REST_SUBDIR}",
+        'elif [ -d "${LONG_TERM}/${REST_SUBDIR}" ]; then',
+        "  RUN_REFDIR=${LONG_TERM}/${REST_SUBDIR}",
+        "else",
+        '  echo "ERROR: no restart set for RUN_REFCASE=${RUN_REFCASE} '
+        'RUN_REFDATE=${RUN_REFDATE}"',
+        '  echo "  looked in: ${ARCHIVE}/${REST_SUBDIR}"',
+        '  echo "             ${LONG_TERM}/${REST_SUBDIR}"',
+        "  exit 1",
+        "fi",
     ]
 
 

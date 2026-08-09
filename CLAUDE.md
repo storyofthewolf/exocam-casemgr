@@ -147,7 +147,7 @@ Status handling within the preview:
 
 `restart` sets `CONTINUE_RUN=FALSE` to relaunch from `RUN_REFCASE`/`RUN_REFDATE`, but CESM's component models read `run/rpointer.*` for the actual restart filenames — independent of those XML vars. A prior run segment (e.g. `continue`) advances `rpointer.*` past the reference point; the reference `.r.`/`.i.` files are still sitting untouched in `run/`, but the pointer no longer names them, and the restart fails at startup. This surfaced in real operation (2026-07-27).
 
-For every case where live XML reads `RUN_TYPE=branch` or `hybrid`, `restart` locates `archive/<RUN_REFCASE>/rest/<RUN_REFDATE>-00000/` (falling back to `long_term/` if the reference case has since been retired — the same two locations `build.py`'s generated `RUN_REFDIR` comment documents), and copies every `rpointer.*` file there into `<case>/run/`, overwriting whatever is present. This is disclosed in the preview (`rpointer.*: reset from <refdir>/`) and happens for the whole batch, gated by the same single `[yes/no]` as the rest of the verb — no separate flag or confirm.
+For every case where live XML reads `RUN_TYPE=branch` or `hybrid`, `restart` locates `archive/<RUN_REFCASE>/rest/<RUN_REFDATE>-00000/` (falling back to `long_term/` if the reference case has since been retired — the same two locations, in the same order, that `build.py`'s generated `RUN_REFDIR` block resolves at build time), and copies every `rpointer.*` file there into `<case>/run/`, overwriting whatever is present. This is disclosed in the preview (`rpointer.*: reset from <refdir>/`) and happens for the whole batch, gated by the same single `[yes/no]` as the rest of the verb — no separate flag or confirm.
 
 - All five `rpointer.{atm,drv,ice,lnd,ocn}` files are reset together, never just `rpointer.atm` — the driver and every component read their own pointer at startup, so resetting a subset would leave the fileset internally inconsistent.
 - `startup`-type cases never carry `RUN_REFCASE`/`RUN_REFDATE` and are unaffected — no rpointer line appears in their preview.
@@ -203,6 +203,27 @@ Relaunching is therefore always a second, explicit command. `build.py rebuild --
 - Requires `--energy` (`--keep` alone → `ERROR: --keep requires --energy.`, exit 1).
 - Filename mirrors `datamgr avg`'s convention: with `-n N` → `<case>.cam.h0.avg_last{N}yr.nc`; bare 12-month (`--keep` without `-n`) → `<case>.cam.h0.avg_last12mo.nc`. With `-n N` the inputs (last `12*N` months, avg files excluded) are identical to `datamgr avg --last N --models atm`, so the kept file is interchangeable with that product.
 - `ncra -O` overwrites an existing avg file at the target; the kept path is printed on a `Saved avg:` line under the energy report. `_energy_balance(keep_path=…)` is the single code path — `keep_path=None` restores the temp-and-delete behavior.
+
+---
+
+## RUN_REFDIR — resolving a branch/hybrid reference restart set
+
+`_branch_var_block` (build.py) emits `RUN_REFCASE`/`RUN_REFDATE` plus a shell block that resolves `RUN_REFDIR` **in the generated script, at build time on the HPC** — not at generate time in Python:
+
+```bash
+REST_SUBDIR=${RUN_REFCASE}/rest/${RUN_REFDATE}-00000
+if   [ -d "${ARCHIVE}/${REST_SUBDIR}" ];   then RUN_REFDIR=${ARCHIVE}/${REST_SUBDIR}
+elif [ -d "${LONG_TERM}/${REST_SUBDIR}" ]; then RUN_REFDIR=${LONG_TERM}/${REST_SUBDIR}
+else  echo "ERROR: ..." ; exit 1 ; fi
+```
+
+A reference case is either still in the active archive or has been retired to long-term storage by `datamgr.py retire`. Before 2026-08-08 the line was hardcoded to `${ARCHIVE}/...`, so a hybrid/branch build off a retired refcase could not reach its restart set and failed at the `cp ${RUN_REFDIR}/*` step.
+
+- **The probe must run on the HPC, not at generate time.** Build scripts are generated locally (the documented workflow), where neither `archive` nor `long_term` is mounted. A Python-side `os.path.exists()` test would therefore report "not found" for *every* case and silently emit the wrong root — the same bug, minus the error message. This is why there is no `refcase_root` YAML key: detection happens where the filesystem is, and no suite has to declare anything. (A `refcase_root: long_term` placeholder briefly existed in two volcano suites as a proposal; it was removed when this landed.)
+- **Active is tried first.** A case present in both roots is mid-retirement, and the active copy is the current one.
+- **Neither root → hard `exit 1`** naming both searched paths, before `create_newcase`/`create_clone` runs. Under the script's `set -e` this aborts the build immediately rather than letting an unset `RUN_REFDIR` reach `cp`.
+- Same two locations, same order, as `runmgr.py restart`'s rpointer reset (`_find_refdir`) — the two must not disagree about where a reference set lives.
+- Emitted for `run_type: branch`/`hybrid` only; `startup` cases get no block. Applies to newcase and clone alike (both call `_branch_var_block`).
 
 ---
 
