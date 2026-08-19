@@ -8,6 +8,7 @@ Usage:
   python scan.py --update            # scan active caseroot, write active.yaml
   python scan.py --retired           # scan long_term archive, print only
   python scan.py --retired --update  # scan long_term archive, write retired.yaml
+  python scan.py --refresh           # update BOTH registries in one go
 
 With no arguments, scans all cases under caseroot from config_registry.yaml.
 Each argument may be a bare case name, an absolute path, or a parent directory.
@@ -350,9 +351,12 @@ def _rows_to_ordered(rows):
     return {'cases': ordered}
 
 
+# Named --refresh (not --update / --retired --update) because it is correct
+# for both registries; the old header hardcoded the retired command even when
+# writing active.yaml.
 _REGISTRY_HEADER = (
     "# Auto-generated cache — regenerate with: "
-    "python scan.py --retired --update\n"
+    "python scan.py --refresh\n"
 )
 
 
@@ -423,6 +427,50 @@ def scan_archive_entries(long_term_path):
     return rows
 
 
+def _refresh(parser, args, script_dir):
+    """Update both registries in one run: active scan, then retired scan.
+
+    Equivalent to 'scan.py --update' followed by 'scan.py --retired --update',
+    which is the pair the query.py staleness warning points at. The retired
+    half is skipped with a note (not an error) when long_term is unconfigured,
+    so --refresh still does useful work on a machine without archive storage.
+    """
+    caseroot  = _load_caseroot(args.config_registry)
+    long_term = _load_long_term(args.config_registry)
+
+    if not caseroot:
+        parser.error("--refresh needs paths.caseroot in config_registry.yaml")
+
+    # --- active half ---
+    print(f"Refreshing active registry — scanning caseroot: {caseroot}")
+    live_rows = []
+    for casedir in find_case_dirs(caseroot):
+        print(f"Inspecting: {casedir}")
+        try:
+            row = inspect_case(casedir)
+            live_rows.append(row)
+            # inspect_case stores None (not []) when a case is clean
+            for w in row['warnings'] or []:
+                print(f"  WARNING: {w}")
+        except Exception as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+
+    active_path = os.path.join(script_dir, 'active.yaml')
+    print(write_registry(live_rows, active_path))
+
+    # --- retired half ---
+    if not long_term:
+        print("NOTE: paths.long_term not set in config_registry.yaml — "
+              "retired.yaml not refreshed.", file=sys.stderr)
+        return 0
+
+    print(f"\nRefreshing retired registry — scanning long_term: {long_term}")
+    archive_rows = scan_archive_entries(long_term)
+    retired_path = os.path.join(script_dir, 'retired.yaml')
+    print(write_registry(archive_rows, retired_path))
+    return 0
+
+
 def _resolve_path(p, caseroot):
     """
     If p is already an absolute path or a relative path that exists as-is,
@@ -448,6 +496,7 @@ def main():
             '  python scan.py --update               # scan active caseroot, write active.yaml\n'
             '  python scan.py --retired              # scan long_term archive, print only\n'
             '  python scan.py --retired --update     # scan long_term archive, write retired.yaml\n'
+            '  python scan.py --refresh              # update BOTH registries in one go\n'
             '  python scan.py my_case --registry active.yaml --update\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -470,7 +519,24 @@ def main():
                         dest='config_registry',
                         help='Path to config_registry.yaml '
                              '(default: config_registry.yaml next to this script)')
+    parser.add_argument('--refresh', action='store_true',
+                        help='Update BOTH registries in one run: a full active scan '
+                             '(caseroot -> active.yaml) followed by a retired scan '
+                             '(long_term -> retired.yaml). Equivalent to '
+                             "'scan.py --update' then 'scan.py --retired --update'. "
+                             'Cannot be combined with paths, --update, --retired, or '
+                             '--registry.')
     args = parser.parse_args()
+
+    if args.refresh:
+        conflicts = [name for name, val in (('paths', args.paths),
+                                            ('--update', args.update),
+                                            ('--retired', args.retired),
+                                            ('--registry', args.registry)) if val]
+        if conflicts:
+            parser.error('--refresh cannot be combined with: '
+                         + ', '.join(conflicts))
+        return _refresh(parser, args, script_dir=os.path.dirname(os.path.abspath(__file__)))
 
     # resolve default registry filename based on mode
     script_dir = os.path.dirname(os.path.abspath(__file__))

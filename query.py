@@ -22,6 +22,17 @@ Examples
   python query.py export my_base_case -o clone.yaml --clone
   python query.py --retired search                           # search retired cases
   python query.py --retired show ExoCAM_thai_ben1_L51_n68equiv
+
+REGISTRIES
+----------
+query.py reads the YAML registries (active.yaml / retired.yaml) and never
+scans case directories itself, so its results are only as current as the
+last scan. scan.py writes them:
+
+  python scan.py --refresh     # update BOTH registries (active + retired)
+
+A reminder is printed when the registry looks out of date; --no-stale-check
+suppresses it.
 """
 
 import argparse
@@ -477,6 +488,114 @@ def _dump_matrix(matrix):
 
 
 # ---------------------------------------------------------------------------
+# Registry staleness check
+#
+# query.py reads the registries and never writes them, so it can go stale
+# silently. These helpers detect that and print a one-line reminder; they
+# never scan, never write, and never block the query.
+#
+# The two sides use different signals because the registries are maintained
+# differently. active.yaml is rebuilt from live case dirs, so a case dir
+# touched after the registry was written means the registry is behind (mtime
+# comparison). retired.yaml is built from the case.yaml records that
+# datamgr retire already wrote, and retired records never change once
+# written, so the only staleness that matters is a retired case missing from
+# the registry entirely (set comparison).
+# ---------------------------------------------------------------------------
+
+def _load_paths(config_registry_path):
+    """Return the paths block from config_registry.yaml, or {} if unavailable."""
+    if not config_registry_path or not os.path.exists(config_registry_path):
+        return {}
+    try:
+        with open(config_registry_path) as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return (data or {}).get('paths', {}) or {}
+
+
+def _active_stale(registry_path, caseroot):
+    """Return count of case dirs under caseroot modified after registry_path.
+
+    Stats the case dirs only — no file reads, no recursion — so this stays
+    in the millisecond range even for a large caseroot.
+    """
+    if not caseroot or not os.path.isdir(caseroot):
+        return 0
+    try:
+        reg_mtime = os.path.getmtime(registry_path)
+    except OSError:
+        return 0
+    newer = 0
+    try:
+        names = os.listdir(caseroot)
+    except OSError:
+        return 0
+    for name in names:
+        d = os.path.join(caseroot, name)
+        try:
+            if os.path.isdir(d) and os.path.getmtime(d) > reg_mtime:
+                newer += 1
+        except OSError:
+            continue
+    return newer
+
+
+def _retired_missing(registry_path, long_term):
+    """Return count of long_term/<case>/case.yaml records absent from the registry."""
+    if not long_term or not os.path.isdir(long_term):
+        return 0
+    try:
+        with open(registry_path) as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return 0
+    known = set()
+    for entry in data.get('cases', []):
+        name = (entry.get('meta') or {}).get('case_name')
+        if name:
+            known.add(name)
+    missing = 0
+    try:
+        names = os.listdir(long_term)
+    except OSError:
+        return 0
+    for name in names:
+        if not os.path.isfile(os.path.join(long_term, name, 'case.yaml')):
+            continue
+        if name not in known:
+            missing += 1
+    return missing
+
+
+def _warn_if_stale(registry_path, retired, config_registry_path):
+    """Print a one-line staleness reminder to stderr. Never writes or scans."""
+    paths = _load_paths(config_registry_path)
+    try:
+        written = datetime.datetime.fromtimestamp(
+            os.path.getmtime(registry_path)).strftime('%Y-%m-%d %H:%M')
+    except OSError:
+        return
+
+    if retired:
+        n = _retired_missing(registry_path, paths.get('long_term'))
+        if n:
+            print(f"NOTE: {n} retired case(s) in long_term have no entry in "
+                  f"{os.path.basename(registry_path)} (written {written}).\n"
+                  f"      Run 'scan.py --refresh' to refresh both registries.",
+                  file=sys.stderr)
+        return
+
+    n = _active_stale(registry_path, paths.get('caseroot'))
+    if n:
+        print(f"NOTE: {n} case dir(s) modified since "
+              f"{os.path.basename(registry_path)} was written ({written}).\n"
+              f"      Run 'scan.py --refresh' to refresh both registries.",
+              file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -491,6 +610,13 @@ def build_parser():
     parser.add_argument('--retired', action='store_true',
                         help='Query retired.yaml instead of active.yaml '
                              '(shorthand for --registry retired.yaml)')
+    parser.add_argument('--config-registry', dest='top_config_registry',
+                        default=DEFAULT_CONFIG, metavar='PATH',
+                        help='config_registry.yaml used to locate caseroot/long_term '
+                             'for the registry staleness check '
+                             f'(default: {DEFAULT_CONFIG})')
+    parser.add_argument('--no-stale-check', action='store_true',
+                        help='Suppress the registry staleness reminder')
 
     sub = parser.add_subparsers(dest='command', metavar='SUBCOMMAND', help=argparse.SUPPRESS)
     sub.required = True
@@ -575,7 +701,11 @@ def main():
         args.registry = RETIRED_REGISTRY
 
     if not os.path.exists(args.registry):
-        sys.exit(f"ERROR: registry not found: {args.registry}")
+        sys.exit(f"ERROR: registry not found: {args.registry}\n"
+                 f"       Run 'scan.py --refresh' to build both registries.")
+
+    if not args.no_stale_check:
+        _warn_if_stale(args.registry, args.retired, args.top_config_registry)
 
     rows = load_registry(args.registry)
 
