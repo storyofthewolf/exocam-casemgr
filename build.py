@@ -16,7 +16,9 @@ ExoCAM case build tool. Three subcommands:
   make      Run generated *_build.sh scripts from scripts-dir: explicit NAME
             args, --prefix, or --all (a bare `make` just lists the scripts).
             Builds but does not submit; --send-it also sbatches each case
-            (submission otherwise belongs to runmgr.py submit).
+            (submission otherwise belongs to runmgr.py submit). --no-build
+            stops short of <case>.build, leaving the case set up but
+            uncompiled so SourceMods can be hand-edited first.
 
   patch     Edit exoplanet_mod.F90 parameters in place in existing cases and
             rerun <case>.build — the only way to change a compiled-in Fortran
@@ -1050,6 +1052,33 @@ def _build_clm_update_block(spec, paths):
     return lines
 
 
+def _build_compile_block(step_no):
+    """Emit the final build step, skippable via CASEMGR_SKIP_BUILD=1.
+
+    `build.py make --no-build` sets that env var so a case is created,
+    configured and cesm_setup'd but left uncompiled — the debugging /
+    experimentation workflow where SourceMods gets hand-edited before the
+    first compile. Anything else (a bare run of the script by hand, or a
+    plain `make`) leaves the var unset and builds as always.
+    """
+    return [
+        "# -----------------------------------------------------------",
+        f"# STEP {step_no}: build  (submission is always manual)",
+        "# -----------------------------------------------------------",
+        "if [ \"${CASEMGR_SKIP_BUILD:-0}\" = \"1\" ]; then",
+        "  echo \"Skipping build (CASEMGR_SKIP_BUILD=1): ${CASE}\"",
+        "  echo \"Case is set up but NOT compiled.\"",
+        "  echo \"To build after editing SourceMods:\"",
+        "  echo \"  cd ${CASEROOT}/${CASE} && ./${CASE}.build\"",
+        "  echo \"  (or: build.py rebuild ${CASE} --execute)\"",
+        "else",
+        "  ./${CASE}.build",
+        "  echo \"Build complete: ${CASE}\"",
+        "  echo \"To submit: cd ${CASEROOT}/${CASE} && ./${CASE}.run\"",
+        "fi",
+    ]
+
+
 def _build_run_script_block(spec):
     """
     Return shell lines to patch SBATCH directives into ${CASE}.run after cesm_setup.
@@ -1382,13 +1411,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         *_build_run_script_block(spec),
         *_build_branch_post_setup(spec, paths),
         "",
-        "# -----------------------------------------------------------",
-        "# STEP 7: build  (submission is always manual)",
-        "# -----------------------------------------------------------",
-        "./${CASE}.build",
-        "",
-        "echo \"Build complete: ${CASE}\"",
-        "echo \"To submit: cd ${CASEROOT}/${CASE} && ./${CASE}.run\"",
+        *_build_compile_block(7),
     ]
 
     with open(script_path, 'w') as f:
@@ -1519,13 +1542,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         *_build_run_script_block(spec),
         *_build_branch_post_setup(spec, paths),
         "",
-        "# -----------------------------------------------------------",
-        "# STEP 6: build  (submission is always manual)",
-        "# -----------------------------------------------------------",
-        "./${CASE}.build",
-        "",
-        "echo \"Build complete: ${CASE}\"",
-        "echo \"To submit: cd ${CASEROOT}/${CASE} && ./${CASE}.run\"",
+        *_build_compile_block(6),
     ]
 
     with open(script_path, 'w') as f:
@@ -1752,6 +1769,11 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
 def cmd_make(args):
     import glob
 
+    no_build = getattr(args, 'no_build', False)
+    if no_build and getattr(args, 'send_it', False):
+        sys.exit("ERROR: --no-build cannot be combined with --send-it "
+                 "(an uncompiled case has nothing to submit).")
+
     scripts_dir = args.scripts_dir
     pattern = os.path.join(scripts_dir, '*_build.sh')
     all_scripts = sorted(glob.glob(pattern))
@@ -1788,9 +1810,20 @@ def cmd_make(args):
     if not all_scripts:
         sys.exit(f"No matching *_build.sh scripts found in {scripts_dir}")
 
+    if no_build:
+        stale = [os.path.basename(s) for s in all_scripts
+                 if 'CASEMGR_SKIP_BUILD' not in open(s).read()]
+        if stale:
+            sys.exit("ERROR: --no-build requires scripts with the skip-build guard; "
+                     "these predate it and would compile anyway:\n  "
+                     + "\n  ".join(stale)
+                     + "\nRegenerate them with `build.py generate`.")
+
     print("Scripts to run:")
     for s in all_scripts:
         print(f"  {os.path.basename(s)}")
+    if no_build:
+        print("\n--no-build: cases will be created and configured but NOT compiled.")
     print()
 
     try:
@@ -1807,6 +1840,10 @@ def cmd_make(args):
     passed = []
     failed = []
 
+    run_env = dict(os.environ)
+    if no_build:
+        run_env['CASEMGR_SKIP_BUILD'] = '1'
+
     t_start = datetime.datetime.now()
 
     for script_path in all_scripts:
@@ -1814,11 +1851,12 @@ def cmd_make(args):
         # strip _build.sh suffix to get case name
         case_name = basename[:-len('_build.sh')]
         log_path = os.path.join(logs_dir, f"{case_name}.build.log")
-        print(f"Building: {case_name} ... ", end='', flush=True)
+        label = "Creating" if no_build else "Building"
+        print(f"{label}: {case_name} ... ", end='', flush=True)
         result = subprocess.run(
             ['bash', script_path],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True
+            universal_newlines=True, env=run_env
         )
         with open(log_path, 'w') as f:
             f.write(result.stdout)
@@ -1841,6 +1879,11 @@ def cmd_make(args):
     if failed:
         for name in failed:
             print(f"  FAILED: {name}")
+
+    if no_build and passed:
+        print("\nNOTE: cases were set up but not compiled. After editing SourceMods, run:")
+        print(f"  build.py rebuild {' '.join(passed[:3])}"
+              f"{' ...' if len(passed) > 3 else ''} --execute")
 
     if getattr(args, 'send_it', False) and passed:
         _cmd_send_it(passed, scripts_dir, all_scripts)
@@ -2187,6 +2230,12 @@ def main():
                              'or --prefix is given (a bare call with none of these just lists scripts)')
     p_make.add_argument('--send-it', action='store_true',
                         help='Submit each successfully built case via sbatch after building')
+    p_make.add_argument('--no-build', action='store_true',
+                        help='Run every step of the build script EXCEPT the final <case>.build: '
+                             'the case is created, configured and cesm_setup\'d but left '
+                             'uncompiled, so SourceMods can be hand-edited first. Compile later '
+                             'with `build.py rebuild <case> --execute`. Cannot be combined with '
+                             '--send-it. Requires scripts generated on/after 2026-08-23.')
 
     p_patch = sub.add_parser(
         'patch',
