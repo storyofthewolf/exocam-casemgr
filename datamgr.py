@@ -797,7 +797,9 @@ def _copy_case_config(casedir_path, lt_case_dir):
     """Copy SourceMods/, user_* files, and env_* files from casedir to lt_case_dir.
 
     Editor backup files (``user_nl_cice~`` and friends) are skipped -- see
-    ``_is_editor_backup``.
+    ``_is_editor_backup``. Inside SourceMods/ the same filter is applied at
+    every level by ``_ignore_editor_backups``, so nothing with a ``~`` reaches
+    long-term storage.
 
     Returns list of (label, src, dst) describing what was copied.
     """
@@ -838,13 +840,18 @@ def _copy_case_config(casedir_path, lt_case_dir):
     return actions
 
 
+def _ignore_editor_backups(_dirpath, names):
+    """shutil.copytree ``ignore`` callback: drop editor backups at every level."""
+    return [n for n in names if _is_editor_backup(n)]
+
+
 def _execute_copy_case_config(actions):
     """Perform the copies described by _copy_case_config actions list."""
     for label, src, dst in actions:
         if os.path.isdir(src):
             if os.path.exists(dst):
                 shutil.rmtree(dst)
-            shutil.copytree(src, dst)
+            shutil.copytree(src, dst, ignore=_ignore_editor_backups)
         else:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
