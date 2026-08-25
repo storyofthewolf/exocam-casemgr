@@ -29,3 +29,6 @@ exp_matrices/*
 
 # ignore commonly used stem for depreciated files I am not quite ready to delete
 *old*
+
+# ignore scratch directory
+scratch/
