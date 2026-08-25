@@ -781,8 +781,23 @@ def _write_case_yaml(case, lt_case_dir, casedir_path, registry_path):
     return 'stub'
 
 
+def _is_editor_backup(name):
+    """True for editor/tool backup files that should never be archived.
+
+    Covers vi/emacs backups (``user_nl_cice~``), emacs autosaves (``#f#``),
+    and ``.orig``/``.bak``/``.rej``/``.swp`` leftovers. These are transient
+    scratch copies of a real config file, not configuration in their own right.
+    """
+    if name.endswith('~') or (name.startswith('#') and name.endswith('#')):
+        return True
+    return os.path.splitext(name)[1] in ('.orig', '.bak', '.rej', '.swp', '.swo')
+
+
 def _copy_case_config(casedir_path, lt_case_dir):
     """Copy SourceMods/, user_* files, and env_* files from casedir to lt_case_dir.
+
+    Editor backup files (``user_nl_cice~`` and friends) are skipped -- see
+    ``_is_editor_backup``.
 
     Returns list of (label, src, dst) describing what was copied.
     """
@@ -798,8 +813,9 @@ def _copy_case_config(casedir_path, lt_case_dir):
     nl_dst = os.path.join(lt_case_dir, 'namelists')
     try:
         for name in sorted(os.listdir(casedir_path)):
-            if name.startswith('user_') and os.path.isfile(
-                    os.path.join(casedir_path, name)):
+            if (name.startswith('user_')
+                    and not _is_editor_backup(name)
+                    and os.path.isfile(os.path.join(casedir_path, name))):
                 actions.append((f'namelists/{name}',
                                  os.path.join(casedir_path, name),
                                  os.path.join(nl_dst, name)))
@@ -810,8 +826,9 @@ def _copy_case_config(casedir_path, lt_case_dir):
     env_dst = os.path.join(lt_case_dir, 'env')
     try:
         for name in sorted(os.listdir(casedir_path)):
-            if name.startswith('env_') and os.path.isfile(
-                    os.path.join(casedir_path, name)):
+            if (name.startswith('env_')
+                    and not _is_editor_backup(name)
+                    and os.path.isfile(os.path.join(casedir_path, name))):
                 actions.append((f'env/{name}',
                                  os.path.join(casedir_path, name),
                                  os.path.join(env_dst, name)))
