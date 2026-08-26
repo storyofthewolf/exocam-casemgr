@@ -52,8 +52,12 @@ def run_block(lines, nl_text, target='user_nl_cam'):
         if sys.platform == 'darwin':
             script = re.sub(r'sed -i(?! )', "sed -i ''", script)
             script = re.sub(r"sed -i (?!'')", "sed -i '' ", script)
+        # stdout=PIPE/stderr=PIPE rather than capture_output=, and
+        # universal_newlines= rather than text=: Discover's default python3
+        # is 3.6, which has neither of the newer spellings.
         proc = subprocess.run(['bash', '-c', script], cwd=d,
-                              capture_output=True, text=True)
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True)
         out = proc.stdout + proc.stderr
         if os.path.exists(path):
             with open(path) as f:
