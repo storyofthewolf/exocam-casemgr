@@ -73,6 +73,10 @@ cases/ + rundir/ + archive/ on HPC
 - Per-case `nl_cam_params`/`carma_params`/`volc_params`/`cice_params` blocks **merge one level deep** with the base block (`resolve_case`, `NL_GROUP_KEYS`): the case overrides only the inner keys it names and inherits the rest — base-specified keys are never silently dropped. An explicit `key: null` in a per-case block deletes the inherited key. A **bare group stub** (`nl_cam_params:` with nothing under it, YAML null — e.g. every inner key commented out) inherits the base group unchanged; deletion is per inner key only, never wholesale. (Previously a per-case block replaced the whole base dict, and a bare stub nulled it, either of which could silently shed base ozone keys and flip that one case to the zero-ozone newcase default.)
 - `exoplanet_mod.F90` is embedded inline in each build script via heredoc — no staging directory.
 - In clone mode, `user_nl_cam` is copied verbatim from the clone source, so namelist params use **upsert** semantics — since 2026-07-13 implemented as **delete-then-append** (`sed -i "/^KEY\s*=/d"` + `echo >>`): every existing line for the key is deleted, then exactly one is appended. This also collapses duplicates inherited from a clone source built by pre-2026-06 scripts, whose upsert appended instead of replacing (e.g. duplicated cice albedos). **CESM's namelist duplicate policy is last-value-wins**, so those legacy duplicates never corrupted runs, and the scan parsers (`parse_user_nl_cam`/`parse_user_nl_cice`) mirror last-wins so the registry reports the value a run actually used; duplicated keys are flagged in the row's `warnings` field.
+- **Every namelist file-path key goes through a verified upsert** (`_nl_upsert_verified_lines`, build.py — since 2026-08-26). `ncdata` (user_nl_cam) and `finidat`/`fsurdat` (user_nl_clm) were previously written with an unanchored, single-quote-only in-place sed (`sed -i "s|ncdata = '.*'|...|"`). That pattern matched the substring inside commented-out `!ncdata = '...'` lines while missing a live line written with **double** quotes, so a clone faithfully rewrote six dead comments and ran on the clone template's hardcoded IC. It destroyed all 14 `exovolc_ben2_*` runs (aborted at timestep 2 in `MAPZ_MODULE`) and silently mis-initialized a hab1 case. The replacement is delete-then-append with an anchored key pattern (`^[[:space:]]*KEY[[:space:]]*=`, so `!KEY` never matches and quote style is irrelevant), **followed by a verify step in the generated script**: exactly one live line for the key must exist and it must carry the intended value, or the build `exit 1`s before `cesm_setup`. A silent no-op is no longer possible — that was the whole failure mode, and it went undetected for weeks because it only surfaced when a case happened to crash.
+- **A clone that sets no `ncdata` warns at generate time.** Nothing is emitted for it, so nothing can fail — the case inherits whatever IC the clone source's `user_nl_cam` hardcodes. That is legitimate (cloning a case that already has the right IC) but it is exactly how `exovolc_hab1_control_actest` ran hab1 on hab2's atmosphere. The `hungatonga`/`pinatubo`/`tambora` suites (54 cases) all rely on this inheritance from `cam_mixed_fv_modern_eruption`.
+- **A key with a dedicated verified block must not also be set via `nl_cam_params`.** `_build_nl_upsert_block` runs *after* the dedicated block and would silently win, defeating the verify guard. `validate_case` rejects `ncdata`/`finidat`/`fsurdat` inside `nl_cam_params` with a message pointing at the top-level key.
+- `exo_solar_file` (Fortran, not a namelist) keeps replace-in-place sed but is now comment-guarded (`/^[[:space:]]*!/! s|…|`) — it cannot be anchored at start-of-line because the live line is a `character(len=256), parameter ::` declaration.
 - `exort_pkg` ending in `*` signals custom RT copied into SourceMods. In newcase mode this is a validation error; in clone mode it is allowed and triggers `_build_usr_src_fix_block` to rewrite the inherited `-usr_src` path.
 - `runmgr.py check` defaults to **all discoverable cases** when given no names — unlike every destructive subcommand, which requires explicit names.
 - `user_nl_cam` scanning is a **curated whitelist by design** (owner decision, 2026-07-12). `nl_cam_params` is open-ended on the build side — any CAM namelist key upserts into `user_nl_cam` — but `parse_user_nl_cam` extracts only named keys (`ncdata`, `bnd_topo`, `gw_drag_file`, `prescribed_ozone_file`/`_datapath`) plus the `carma_*`/`volc_*` prefix groups. The scanned namelist mixes shipped-template defaults with matrix-set keys, so scanning everything would drag boilerplate into the registry and pin it in exported matrices. Keys are added **à la carte** when they become scientifically worth round-tripping — see "Adding a scanned user_nl_cam key" below. On export the scanned keys are re-nested under `nl_cam_params` (`_NL_CAM_SCANNED_KEYS` in query.py); clone exports drop them (composition is inherited from the clone source).
@@ -413,6 +417,7 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 - For a newcase, the experiment matrix is the sole arbiter of atmospheric composition. Nothing is inherited from the config templates. See "Composition inheritance" above.
 - `rest_n` must never exceed `stop_n` (unit-normalized). Enforced as a hard error in `validate_case`, so no generated build script can write a REST/STOP pair that produces an incomplete restart fileset. See "REST_N ≤ STOP_N guard" above.
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
+- **A namelist write that is supposed to happen must not be able to no-op silently.** Every file-path key written into a namelist by a generated build script goes through `_nl_upsert_verified_lines`, which verifies its own result and `exit 1`s if the key is missing, duplicated, or carries the wrong value. Adding a new such key means using that helper, not a fresh `sed`. See "Every namelist file-path key goes through a verified upsert" above.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
 
 ---
@@ -430,6 +435,39 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ### diff.py: non-standard ExoRT package directory paths
 `build_exort_fileset` constructs the ExoRT reference as `{exort_root}/3dmodels/src.cam.{exort_pkg}/`. Experimental branches outside this path cause RT detection to silently return `{}` — affected files appear as `CASE ONLY`. Cases with non-standard RT are flagged with `*` in `query.py search` output. Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml`.
+
+---
+
+## Session handoff — 2026-08-26
+
+**`ncdata` was never written to the live namelist line.** Diagnosed from the HPC side (see `volcanos/description_paper/notes/casemgr_ncdata_handoff.md`), reproduced and fixed here.
+
+**The bug.** Both call sites (newcase + clone) wrote `ncdata` with
+
+```
+sed -i "s|ncdata = '.*'|ncdata = '<path>'|" user_nl_cam
+```
+
+Two independent defects: the pattern is **not anchored**, so `!ncdata = '...'` contains the substring and every commented line got rewritten; and it is **single-quote-only**, so a live line written with double quotes could not match and survived the clone verbatim. The build faithfully wrote the correct path into six dead comments and left the template's hardcoded IC live. `exovolc_ben1_control/run/atm_in` and `exovolc_ben2_control/run/atm_in` were byte-identical; all 14 ben2 cases aborted at timestep 2 in `MAPZ_MODULE`. The matrix was not at fault — it set `ncdata` correctly.
+
+**Reproduced locally before fixing:** generated `exovolc_ben2_control` from `ben2_suite1.yaml`, ran the emitted sed against a replica namelist, confirmed comments rewritten and live line untouched. A `TestOldPatternIsActuallyBroken` case in the new test file locks that fixture in, so the regression tests can't drift into passing against a fixture that no longer exercises the bug.
+
+**What changed**
+
+1. **`_nl_upsert_verified_lines(key, value, target, label)`** (build.py) — delete-then-append with an anchored key pattern, then a verify step in the generated script: exactly one live line, carrying the intended value, or `exit 1`. Used for `ncdata` (both build paths) and `finidat`/`fsurdat` (`_build_clm_update_block`, which had the identical defect in the mirror-image form: double-quote-only and unanchored).
+2. **Clone-without-`ncdata` warns at generate time.** The one remaining silent path — nothing is emitted, so nothing can fail. This is what `exovolc_hab1_control_actest` hit (the note's unresolved finding #5): it was the *first*, hand-built minimal clone matrix that set no `ncdata`, not a third code path or the `ic_file` gating misfiring. The `hungatonga`/`pinatubo`/`tambora` suites (54 cases) surface this warning too — they inherit from `cam_mixed_fv_modern_eruption` by design, but it is now visible rather than assumed.
+3. **`validate_case` rejects `ncdata`/`finidat`/`fsurdat` inside `nl_cam_params`** — the group upsert runs after the dedicated block and would silently beat it.
+4. **`exo_solar_file` sed comment-guarded** (`/^[[:space:]]*!/!`). Same latent defect class; it is a Fortran `character(...) :: ` declaration so it cannot be start-of-line anchored. Verified it still rewrites the live line and preserves the trailing `!!` comment.
+5. **`tests/test_ncdata_upsert.py`** — 13 tests, the repo's first. Covers double- and single-quoted live lines, comment preservation, duplicate collapse, absent key, prefix-key non-matching, the loud-failure path, the clm mirror, the `nl_cam_params` collision, the solar-file comment guard, and the old-pattern anchor. Run with `python3 tests/test_ncdata_upsert.py`. It shells out to real `sed`/`grep` and normalizes GNU vs BSD in-place flags, so it validates the emitted shell rather than a Python approximation.
+6. **Corrected the misleading comment in 5 matrices** (`ben1_suite1`, `ben2_suite1`, `hab1_ac_test`, `hab1_suite1`, `hab2_suite1`, under `volcanos/description_paper/experiment_yamls/`). It blamed the abort on "leaving `ncdata` unset"; the matrix *did* set it. All 12 matrices still parse.
+
+**Verified:** 118 scripts regenerated across 8 matrices, 0 errors, all pass `bash -n`. The emitted upsert block was executed against replica namelists — comments preserved, live double-quoted line replaced, exactly one live `ncdata` — and the sabotaged-write path exits 1 with an `ERROR:` line.
+
+**Not done — needs the HPC (task 4 of the note, and the audit):**
+- **Fix the two clone templates.** `cam_land_fv_eruption/user_nl_cam:15` hardcodes ben1's IC and `cam_aqua_fv_eruption/user_nl_cam:15` hardcodes hab2's. These are clone *source cases* on Discover, not files in this repo. Comment both out so an inherited value cannot masquerade as a configured one. Until then the fix works but the trap is still armed for any clone that omits `ncdata`.
+- **Audit every generated hab1/hab2 case** the way the note describes (`grep -n '^ *ncdata' <case>/user_nl_cam`), and re-verify the 54 `hungatonga`/`pinatubo`/`tambora` cases now that the warning names them.
+- **Regenerate + rebuild the 14 ben2 cases**, then the note's verification: `ncdata` must name ben2, and ben1/ben2 `atm_in` must now **differ**. Short 1-year `exovolc_ben2_control` before committing the full 14.
+- ben1's 14 completed runs have the correct IC by luck and do not need rerunning on this account.
 
 ---
 

@@ -37,6 +37,7 @@ import datetime
 import os
 import random
 import re
+import shlex
 import subprocess
 import sys
 
@@ -659,6 +660,26 @@ def validate_case(spec, registry):
     # newcase and clone — the xmlchange block below is identical for each)
     errors.extend(_verify_rest_stop(spec))
 
+    # A namelist key that has its own dedicated, verified build block must not
+    # also be set through nl_cam_params: the group upsert runs after the
+    # dedicated block and would silently win, defeating the verify guard.
+    # ncdata is a top-level matrix key; say so rather than letting one path
+    # quietly override the other.
+    nl_cam = spec.get('nl_cam_params') or {}
+    if 'ncdata' in nl_cam:
+        errors.append(
+            "ncdata must not be set inside nl_cam_params — use the top-level "
+            "'ncdata:' key, which is resolved against the IC table and written "
+            "with a verified upsert."
+        )
+    for k in ('finidat', 'fsurdat'):
+        if k not in nl_cam:
+            continue
+        errors.append(
+            f"{k} belongs in user_nl_clm and must not be set inside "
+            f"nl_cam_params — use the top-level '{k}:' key."
+        )
+
     # solar file / exort package consistency
     solar = spec.get('exo_solar_file', '')
     exort_pkg = spec.get('exort_pkg', '')
@@ -942,6 +963,48 @@ def _nl_upsert_lines(param_dict, target='user_nl_cam'):
     return lines
 
 
+def _nl_upsert_verified_lines(key, value, target='user_nl_cam', label=None):
+    """
+    Upsert a single namelist key = 'value' entry and then VERIFY the result,
+    aborting the build if it did not take.
+
+    Used for the file-path keys that must be right or the run is silently
+    wrong on the wrong input data (ncdata, finidat, fsurdat). These were
+    previously written with an unanchored, single-quote-only in-place sed:
+
+        sed -i "s|ncdata = '.*'|ncdata = '<path>'|" user_nl_cam
+
+    That pattern matched the substring inside commented `!ncdata = '...'`
+    lines while missing a live line written with double quotes, so a clone
+    faithfully rewrote six dead comments and inherited the template's
+    hardcoded IC. It destroyed 14 exovolc_ben2_* runs (2026-08-26) and
+    silently mis-initialized at least one hab1 case.
+
+    Delete-then-append fixes both defects at once: the delete pattern is
+    anchored at start-of-line (so `!ncdata` never matches) and matches the
+    key rather than the value (so quote style is irrelevant). The verify
+    step then makes a no-op impossible to miss: exactly one live line for
+    the key must exist and it must name the intended value.
+    """
+    nl_val = _format_nl_value(value)
+    pat = f'^[[:space:]]*{key}[[:space:]]*='
+    what = label or key
+    return [
+        f'if [ -f {target} ]; then sed -i -E "/{pat}/d" {target}; fi',
+        f'echo "{key} = {nl_val}" >> {target}',
+        f'if [ "$(grep -cE \'{pat}\' {target})" -ne 1 ]; then',
+        f'  echo "ERROR: {what}: expected exactly one live \'{key}\' line in {target} after upsert."',
+        f'  grep -nE \'{pat}\' {target} || true',
+        f'  exit 1',
+        f'fi',
+        f'if ! grep -qF {shlex.quote(f"{key} = {nl_val}")} {target}; then',
+        f'  echo "ERROR: {what}: {key} line in {target} does not carry the intended value."',
+        f'  grep -nE \'{pat}\' {target} || true',
+        f'  exit 1',
+        f'fi',
+    ]
+
+
 def _build_nl_upsert_block(spec):
     """
     Return shell lines to upsert carma_params, volc_params, and/or nl_cam_params
@@ -1028,7 +1091,7 @@ def _format_nl_scalar(val):
     return f"'{s.replace(chr(39), chr(92) + chr(39))}'"
 
 
-def _build_clm_update_block(spec, paths):
+def _build_clm_update_block(spec, paths, label=None):
     """
     For land/mixed configs, return sed lines to update finidat and fsurdat
     in user_nl_clm if those keys are present in the spec.
@@ -1046,9 +1109,9 @@ def _build_clm_update_block(spec, paths):
             if not lines:
                 lines.append("")
                 lines.append("# Update CLM initial and surface data file paths in user_nl_clm")
-            lines.append(
-                f'sed -i \'s|{key} = ".*"|{key} = "{_sed_escape_replacement(path_val)}"|\' user_nl_clm'
-            )
+            lines.extend(_nl_upsert_verified_lines(
+                key, path_val, target='user_nl_clm', label=label
+            ))
     return lines
 
 
@@ -1367,14 +1430,14 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# -----------------------------------------------------------",
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
         "",
-        "# Update ncdata path in user_nl_cam",
-        f"sed -i \"s|ncdata = '.*'|ncdata = '{_sed_escape_replacement(ic_path)}'|\" user_nl_cam",
+        "# Set ncdata in user_nl_cam (upsert + verify)",
+        *_nl_upsert_verified_lines('ncdata', ic_path, label=case_name),
         *_build_nl_upsert_block(spec),
-        *_build_clm_update_block(spec, paths),
+        *_build_clm_update_block(spec, paths, label=case_name),
         *_build_docn_update_block(spec),
         "",
         "# Update solar file path in exoplanet_mod.F90",
-        f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{_sed_escape_replacement(solar_file)}'|\" "
+        f"sed -i -E \"/^[[:space:]]*!/! s|exo_solar_file[[:space:]]*=[[:space:]]*'[^']*'|exo_solar_file = '{_sed_escape_replacement(solar_file)}'|\" "
         "SourceMods/src.share/exoplanet_mod.F90",
         "",
         "# -----------------------------------------------------------",
@@ -1489,13 +1552,13 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         ic_path = resolve_ic_path(ic_file, config_type, paths)
         lines += [
             "",
-            "# Update ncdata path in user_nl_cam",
-            f"sed -i \"s|ncdata = '.*'|ncdata = '{_sed_escape_replacement(ic_path)}'|\" user_nl_cam",
+            "# Set ncdata in user_nl_cam (upsert + verify)",
+            *_nl_upsert_verified_lines('ncdata', ic_path, label=case_name),
         ]
 
     lines += [
         *_build_nl_upsert_block(spec),
-        *_build_clm_update_block(spec, paths),
+        *_build_clm_update_block(spec, paths, label=case_name),
         *_build_docn_update_block(spec),
     ]
 
@@ -1503,7 +1566,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         lines += [
             "",
             "# Update solar file path in exoplanet_mod.F90",
-            f"sed -i \"s|exo_solar_file = '.*'|exo_solar_file = '{_sed_escape_replacement(solar_file)}'|\" "
+            f"sed -i -E \"/^[[:space:]]*!/! s|exo_solar_file[[:space:]]*=[[:space:]]*'[^']*'|exo_solar_file = '{_sed_escape_replacement(solar_file)}'|\" "
             "SourceMods/src.share/exoplanet_mod.F90",
         ]
 
@@ -1711,6 +1774,15 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
             ic_file, _ = find_ic_file(spec, registry)
         elif spec.get('ncdata'):
             ic_file, _ = find_ic_file(spec, registry)
+        else:
+            # A clone that names no ncdata keeps whatever IC the clone source's
+            # user_nl_cam hardcodes. That is legitimate (a clone of a case with
+            # the right IC) but it is also how exovolc_hab1_control_actest ran
+            # hab1 on hab2's atmosphere: nothing is emitted, so nothing can
+            # fail. Say so at generate time — this is the one silent path left.
+            print(f"  WARNING: {case_name}: clone sets no 'ncdata' — the case "
+                  f"will inherit the IC hardcoded in {spec.get('clone')}'s "
+                  f"user_nl_cam. Set ncdata explicitly if that is not intended.")
 
         # find and render exoplanet_mod.F90 template into memory
         config_type = spec.get('config_type', '')
