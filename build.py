@@ -48,6 +48,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import compute_pstd_bar
+import derive
 from manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, batch_confirm, preview_hint,
                           ACTIVE_STATUSES, DEFAULT_CONFIG,
@@ -96,6 +97,9 @@ PARAM_TYPES = {
     'exo_mvelp': 'real', 'exo_ve': 'real',
     'exo_convect_plim': 'real', 'exo_albdif': 'real', 'exo_albdir': 'real',
     'Tmax': 'real', 'swFluxLimit': 'real', 'lwFluxLimit': 'real',
+    # derived inputs (build.py prep) -- `star` is a mapping or 'sun', not type-tagged
+    'derive_albedos': 'bool', 'ic_dry': 'bool',
+    'ice_surface': 'str', 'ic_template': 'str',
     # exoplanet_mod ints
     'exo_rad_step': 'int',
     # exoplanet_mod logicals
@@ -447,6 +451,7 @@ def verify_case(spec, registry, paths):
 
     # 2. NetCDF file existence
     config_type = spec.get('config_type', '')
+    derived_paths = {it.path for it in (spec.get('_derived') or [])}
     for field, resolver, restrict in NCFILE_FIELDS:
         if field not in spec or not spec[field]:
             continue
@@ -467,6 +472,13 @@ def verify_case(spec, registry, paths):
         # file alone is. (A missing parent dir is the more common symptom of a
         # mistyped/transposed path.)
         if not os.path.isfile(local):
+            if raw in derived_paths:
+                # A planned derived product that prep has not made yet is an
+                # un-prepped state, not a matrix error: the name is right,
+                # the file is simply not built. Say so and point at prep.
+                warnings.append(f"nc: {field}: derived input not yet made "
+                                f"(run build.py prep on the HPC): {local}")
+                continue
             parent = os.path.dirname(local)
             if parent and not os.path.isdir(parent):
                 errors.append(f"nc: {field}: directory not found: {local}")
@@ -972,6 +984,112 @@ def rebuild_case(case_dir, case_name):
     if rc != 0:
         return False, f'build failed (exit {rc}): {_log_tail(log_path)}  [log: {log_path}]'
     return True, f'built  [log: {log_path}]'
+
+
+# ---------------------------------------------------------------------------
+# Derived inputs (build.py prep) -- see derive.py
+# ---------------------------------------------------------------------------
+
+def _effective_paths(registry, paths_override):
+    """registry.paths with every matrix-level override applied."""
+    paths = dict(registry.get('paths', {}) or {})
+    paths.update({k: v for k, v in (paths_override or {}).items() if v})
+    return paths
+
+
+def apply_derived_inputs(spec, registry, paths):
+    """Resolve the case's derived inputs INTO the spec (mutates it).
+
+    Where the matrix is silent, fills exo_solar_file / ncdata with the derived
+    product paths and records the plan under spec['_derived'] (list of
+    derive.DerivedInput) and spec['_albedo_product'] (path or None), which the
+    script generators turn into the required-inputs block and the albedo
+    upsert. Explicit matrix values are never overwritten.
+
+    Returns (warnings, errors) -- errors are user-facing strings and mean the
+    case must be skipped. Must run after _type_errors has passed (it computes
+    the total pressure).
+    """
+    spec['_derived'] = []
+    spec['_albedo_product'] = None
+    pstd_bar = pressure_str = None
+    if not spec.get('clone') or spec.get('config_type'):
+        try:
+            pstd_bar = compute_pstd_from_spec(spec)
+            pressure_str = bar_to_pressure_str(pstd_bar)
+        except (TypeError, ValueError):
+            pstd_bar = pressure_str = None
+    try:
+        items, effective, warnings = derive.plan_derived_inputs(
+            spec, registry, paths, pstd_bar=pstd_bar, pressure_str=pressure_str)
+    except derive.DeriveError as e:
+        return [], [f"derived inputs: {e}"]
+    if 'exo_solar_file' in effective and not spec.get('exo_solar_file'):
+        spec['exo_solar_file'] = effective['exo_solar_file']
+    if 'ncdata' in effective and not spec.get('ncdata'):
+        spec['ncdata'] = effective['ncdata']
+    spec['_albedo_product'] = effective.get('albedo_product')
+    spec['_derived'] = items
+    return warnings, []
+
+
+def _build_required_inputs_block(spec, case_name):
+    """Shell lines that make a build refuse to start without its derived
+    inputs. Emitted before create_newcase/create_clone so a missing product
+    fails fast, naming the prep command that makes it. One comment per input
+    records the derivation, so the script is the provenance record too."""
+    items = spec.get('_derived') or []
+    if not items:
+        return []
+    lines = [
+        "# -----------------------------------------------------------",
+        "# STEP 0: required derived inputs (made by `build.py prep`)",
+        "# -----------------------------------------------------------",
+    ]
+    for it in items:
+        lines.append(f"# derived: {it.summary}")
+        lines.append(
+            f'[ -f "{it.path}" ] || {{ echo "ERROR: {case_name}: missing derived '
+            f'{it.kind} input {it.path} -- run: build.py prep <matrix> --case '
+            f'{case_name} --execute (on the HPC)"; exit 1; }}')
+    lines.append("")
+    return lines
+
+
+def _build_derived_albedo_block(spec, case_name):
+    """Source the prep albedo product and upsert its four values into
+    user_nl_cice, then verify exactly one live line per key. The values are
+    read at build time from the product file (generate never sees them --
+    the solar file lives on the HPC), so the product's existence is guarded
+    by the required-inputs block above."""
+    product = spec.get('_albedo_product')
+    if not product:
+        return []
+    lines = [
+        "",
+        f"# Derived cice albedos (build.py prep): {os.path.basename(product)}",
+        f'source "{product}"',
+        # Provenance the scanner can read back: which product these four
+        # values came from (its manifest names the star and ice surface).
+        f'if [ -f user_nl_cice ]; then sed -i -E "/^{derive.ALBEDO_PROVENANCE_PREFIX}/d" user_nl_cice; fi; '
+        f'echo "{derive.ALBEDO_PROVENANCE_PREFIX} {product}" >> user_nl_cice',
+    ]
+    for key in derive.ALBEDO_KEYS:
+        var = derive.ALBEDO_SHELL_VARS[key]
+        pat = f'^[[:space:]]*{key}[[:space:]]*='
+        lines.append(
+            f'[ -n "${{{var}:-}}" ] || {{ echo "ERROR: {case_name}: {var} not '
+            f'defined by {product}"; exit 1; }}')
+        lines.append(
+            f'if [ -f user_nl_cice ]; then sed -i -E "/{pat}/d" user_nl_cice; fi; '
+            f'echo "{key} = ${{{var}}}" >> user_nl_cice')
+    for key in derive.ALBEDO_KEYS:
+        pat = f'^[[:space:]]*{key}[[:space:]]*='
+        lines.append(
+            f'[ "$(grep -cE \'{pat}\' user_nl_cice)" -eq 1 ] || {{ echo "ERROR: '
+            f'{case_name}: expected exactly one live \'{key}\' line in '
+            f'user_nl_cice"; exit 1; }}')
+    return lines
 
 
 def _sed_escape_replacement(s):
@@ -1512,6 +1630,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "  exit 1",
         "fi",
         "",
+        *_build_required_inputs_block(spec, case_name),
         "# -----------------------------------------------------------",
         "# STEP 1: create case",
         "# -----------------------------------------------------------",
@@ -1536,6 +1655,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# Set ncdata in user_nl_cam (upsert + verify)",
         *_nl_upsert_verified_lines('ncdata', ic_path, label=case_name),
         *_build_nl_upsert_block(spec),
+        *_build_derived_albedo_block(spec, case_name),
         *_build_clm_update_block(spec, paths, label=case_name),
         *_build_docn_update_block(spec),
         "",
@@ -1637,6 +1757,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"LONG_TERM={paths.get('long_term', 'EDIT_ME')}",
         *(_branch_var_block(spec) if spec.get('run_type') in ('branch', 'hybrid') else []),
         "",
+        *_build_required_inputs_block(spec, case_name),
         "# -----------------------------------------------------------",
         "# STEP 1: create clone",
         "# -----------------------------------------------------------",
@@ -1661,6 +1782,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
 
     lines += [
         *_build_nl_upsert_block(spec),
+        *_build_derived_albedo_block(spec, case_name),
         *_build_clm_update_block(spec, paths, label=case_name),
         *_build_docn_update_block(spec),
     ]
@@ -1828,6 +1950,15 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
         spec = resolve_case(base, case_def)
         spec['_paths_override'] = paths_override
 
+        # Derived inputs: resolve star / ic_template into the effective
+        # exo_solar_file / ncdata and the required-inputs plan. Runs only
+        # once the type tags pass (it computes the total pressure); a type
+        # failure is reported by verify_case/validate_case below instead.
+        d_warnings, d_errors = [], []
+        if not _type_errors(spec):
+            d_warnings, d_errors = apply_derived_inputs(
+                spec, registry, _effective_paths(registry, paths_override))
+
         if verify_only:
             paths = dict(registry.get('paths', {}))
             for k in ['cesm_scripts', 'caseroot', 'exocam_root', 'exort_root']:
@@ -1842,6 +1973,10 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
                     v_errors = validate_case(spec, registry)
                 except (ValueError, TypeError) as exc:
                     v_errors = [f"validation crashed (likely a bad value): {exc}"]
+            v_errors = d_errors + v_errors
+            v_warnings = d_warnings + v_warnings
+            v_notes = [f"derived: {it.summary} -> {it.path}"
+                       for it in spec.get('_derived') or []] + v_notes
             if v_warnings:
                 verify_warned += 1
             if v_errors:
@@ -1862,13 +1997,17 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
                 print(f"  · {n}")
             continue
 
-        errors = validate_case(spec, registry)
+        errors = d_errors + validate_case(spec, registry)
         if errors:
             print(f"\nERROR: {case_name}")
             for e in errors:
                 print(f"  - {e}")
             errors_total += 1
             continue
+        for w in d_warnings:
+            print(f"  WARNING: {case_name}: {w}")
+        for it in spec.get('_derived') or []:
+            print(f"  derived: {case_name}: {it.summary}")
 
         is_clone = bool(spec.get('clone'))
 
@@ -1946,6 +2085,124 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
               f"case(s) skipped due to errors.")
 
     return len(generated), errors_total, named, verify_failed, verify_warned
+
+
+def _matrix_context(matrix_file):
+    """Load a matrix and its registry the way _generate_one_matrix does.
+    Returns (registry, base, cases, paths_override)."""
+    matrix = load_yaml(matrix_file)
+    registry_path = matrix.get('config_registry')
+    if not registry_path:
+        sys.exit("experiment matrix must specify 'config_registry' path")
+    if not os.path.exists(registry_path):
+        sys.exit(f"config_registry not found: {registry_path}")
+    registry = load_yaml(registry_path)
+    paths_override = matrix.get('paths', {}) or {}
+    reg_defaults = registry.get('defaults', {}) or {}
+    base = matrix.get('base', {})
+    for key, val in reg_defaults.items():
+        if key not in base:
+            base[key] = val
+    return registry, base, matrix.get('cases', []), paths_override
+
+
+_DERIVE_ORDER = {'solar': 0, 'albedo': 1, 'ic': 2}
+
+
+def cmd_prep(args):
+    """Materialize the derived inputs a matrix needs (run on the HPC).
+
+    For every selected case, resolve the derived inputs (star -> solar file ->
+    albedos; ic_template -> ncdata) and check whether each product exists
+    under paths.derived_inputs. Present products are left alone; missing ones
+    are made under --execute, in dependency order, one engine call each, each
+    written to a temporary sibling and renamed at the end, with a
+    <file>.prep.yaml manifest beside it. Nothing is ever overwritten -- delete
+    a product to have it remade.
+
+    Preview (default) lists present / MISSING per product and exits 0; a
+    matrix that asks for something impossible is an error either way.
+    """
+    outcome = Outcome()
+    exp_matrices_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'exp_matrices')
+    matrix_paths = []
+    for m in args.matrix:
+        if os.path.exists(m):
+            matrix_paths.append(m)
+            continue
+        candidate = os.path.join(exp_matrices_dir, m)
+        if not os.path.exists(candidate):
+            sys.exit(f"matrix file not found: {m}\n  also checked: {candidate}")
+        matrix_paths.append(candidate)
+
+    wanted = set(args.case or [])
+    prefix = (args.prefix or '').lower()
+    todo = {}          # path -> (DerivedInput, [case names])
+    paths_for = {}     # path -> paths dict to derive with
+    for matrix_path in matrix_paths:
+        registry, base, cases, paths_override = _matrix_context(matrix_path)
+        paths = _effective_paths(registry, paths_override)
+        print(f"=== {matrix_path}")
+        for case_def in cases:
+            case_name = case_def.get('name')
+            if not case_name:
+                continue
+            if wanted and case_name not in wanted:
+                continue
+            if prefix and not case_name.lower().startswith(prefix):
+                continue
+            spec = resolve_case(base, case_def)
+            spec['_paths_override'] = paths_override
+            terrs = _type_errors(spec)
+            if terrs:
+                print(f"ERROR: {case_name}")
+                for e in terrs:
+                    print(f"  - {e}")
+                outcome.fail()
+                continue
+            warnings, errors = apply_derived_inputs(spec, registry, paths)
+            if errors:
+                print(f"ERROR: {case_name}")
+                for e in errors:
+                    print(f"  - {e}")
+                outcome.fail()
+                continue
+            items = spec.get('_derived') or []
+            print(f"{case_name}: " + (f"{len(items)} derived input(s)" if items else "nothing to derive"))
+            for w in warnings:
+                print(f"  ! {w}")
+            for it in items:
+                state = 'present' if os.path.isfile(it.path) else 'MISSING'
+                print(f"  [{state:7s}] {it.kind:6s} {it.path}")
+                print(f"            {it.summary}")
+                if it.path not in todo:
+                    todo[it.path] = (it, [])
+                    paths_for[it.path] = paths
+                todo[it.path][1].append(case_name)
+
+    missing = [t for t in sorted(todo.values(), key=lambda t: (_DERIVE_ORDER[t[0].kind], t[0].path))
+               if not os.path.isfile(t[0].path)]
+    present = len(todo) - len(missing)
+    print(f"\n{len(todo)} distinct product(s): {present} present, {len(missing)} missing.")
+    if not missing:
+        return outcome.exit_code()
+    if not args.execute:
+        print("(preview only -- rerun with --execute to derive the missing products)")
+        return outcome.exit_code()
+
+    for it, users in missing:
+        print(f"\nderiving {it.kind}: {it.path}")
+        print(f"  for: {', '.join(users)}")
+        try:
+            derive.derive(it, paths_for[it.path], verbose=True)
+            print(f"  done: {it.path}")
+        except derive.DeriveError as e:
+            print(f"  ERROR: {e}")
+            outcome.fail()
+        except Exception as e:  # an engine crashed; report, keep going
+            print(f"  ERROR: {type(e).__name__}: {e}")
+            outcome.fail()
+    return outcome.exit_code()
 
 
 def cmd_make(args):
@@ -2426,6 +2683,20 @@ def main():
                        help='Check matrix coherency (value types + netCDF file '
                             'existence) without generating any scripts')
 
+    p_prep = sub.add_parser(
+        'prep',
+        help='Derive missing inputs (solar file, cice albedos, ncdata) for a matrix; run on the HPC',
+        description=cmd_prep.__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p_prep.add_argument('matrix', nargs='+', metavar='MATRIX',
+                        help='one or more experiment_matrix.yaml files')
+    p_prep.add_argument('--case', action='append', metavar='NAME',
+                        help='only this case (repeatable)')
+    p_prep.add_argument('--prefix', metavar='PREFIX',
+                        help='only cases whose name starts with PREFIX (case-insensitive)')
+    p_prep.add_argument('--execute', action='store_true',
+                        help='Derive the missing products (default: preview only)')
+
     p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
     p_make.add_argument('names', nargs='*', metavar='NAME',
                         help='Explicit case names or *_build.sh filenames to run')
@@ -2474,6 +2745,7 @@ def main():
 
     dispatch = {
         'generate': cmd_generate,
+        'prep':     cmd_prep,
         'make':     cmd_make,
         'patch':    cmd_patch,
         'rebuild':  cmd_rebuild,

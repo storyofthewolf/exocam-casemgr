@@ -124,8 +124,25 @@ emitted into the shell script, never run as an in-process side effect of `genera
 
 ## 2026-09-13 — `build.py prep`: derived inputs (star → solar file → albedos; template IC → ncdata)
 
-**Status:** shape agreed with owner 2026-09-13. Supersedes the 2026-06 sketch above
-(Proposal 1 + Proposal 2), which it absorbs. Not implemented.
+**Status:** IMPLEMENTED 2026-09-13 (same day), all six sequencing steps, with these
+deviations from the text below — CLAUDE.md "build.py prep — derived inputs" is now
+the record of behavior:
+
+- `derive_albedos` defaults to true but **only acts when the matrix names `star`**
+  (`star: sun` opts the Sun in). The consistency check proposed below failed: the
+  calculator's solar values (blue ice 0.82/0.25, snow 0.98/0.59) are not the
+  CICE-tuned template defaults (0.67/0.30, 0.80/0.68). A default-on derivation
+  would therefore have silently changed every existing solar matrix. Whether
+  non-solar cases should use raw values or template × (star/sun) ratios is an
+  open owner question.
+- The albedos travel as a sourced shell fragment (`<solar-stem>__<surface>.albedos.sh`)
+  rather than numbers in the script, since `generate` cannot see the spectrum.
+- `--verify` on an un-prepped case warns (`run build.py prep`) instead of failing.
+- Chain B's pressure rescale was validated byte-for-byte against the IDL-made
+  `ic_*bar_L40*` files (the IDL keeps fields in sigma space and rewrites PS/P0 flat).
+- Remaining: Discover setup (grid copy, `paths.*`), and the open questions at the end.
+
+Supersedes the 2026-06 sketch above (Proposal 1 + Proposal 2), which it absorbs.
 
 ### Problem
 

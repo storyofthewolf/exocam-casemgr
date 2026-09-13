@@ -231,6 +231,11 @@ paths:
   long_term: /path/to/long_term
   exocam_root: /path/to/ExoCAM
   exort_root: /path/to/ExoRT
+  derived_inputs: /path/to/derived_inputs        # build.py prep products (solar/, albedo/, ic/)
+  stellar_interpolator: /path/to/stellar-interpolator
+  # btsettl_grid, exocam_py_progs, exort_tools: optional overrides
+ic_templates:                                     # build.py prep, Chain B: tag -> template IC
+  ctrl40: cam_aqua_fv/control_L40.cam.i.0009-01-01-00000.nc   # relative to initial_files/, or absolute
 cesm_config:
   cam_aqua_fv:
     compset: F_AMIP_CN
@@ -279,7 +284,9 @@ All functions take explicit file paths and return dicts. No filesystem side effe
 
 ## build.py — key constants and validation logic
 
-**Subcommands:** `generate`, `make`, `patch`, `rebuild`. **Every compile in the toolchain enters through this module** — no `runmgr.py` verb runs `<case>.build`.
+**Subcommands:** `generate`, `prep`, `make`, `patch`, `rebuild`. **Every compile in the toolchain enters through this module** — no `runmgr.py` verb runs `<case>.build`.
+
+**`prep` subcommand** (`cmd_prep`, added 2026-09-13) — materializes the derived inputs a matrix needs (see `derive.py` below). Selection: `MATRIX...`, `--case NAME` (repeatable), `--prefix`. Preview by default (present / MISSING per product, exit 0 unless a case is a matrix error); `--execute` derives the missing products in dependency order (solar → albedo → ic), one engine call each, without a `[yes/no]` gate (not destructive: never overwrites). Shares `_matrix_context()` with the generate path. `apply_derived_inputs(spec, registry, paths)` is the hook both `generate` and `prep` call after `resolve_case`: it fills `spec['exo_solar_file']`/`spec['ncdata']` where the matrix is silent and records `spec['_derived']` (list of `derive.DerivedInput`) + `spec['_albedo_product']`, which `_build_required_inputs_block` (STEP 0 guard) and `_build_derived_albedo_block` (source product → upsert `user_nl_cice` → verify → provenance comment) render. `verify_case` treats a planned-but-unmade product as a warning.
 
 **`rebuild` subcommand** (`cmd_rebuild`, added 2026-07-27) — recompiles `./<case>.build` across existing cases after a hand-edit anywhere under `SourceMods`. Compiles and stops: no `sbatch`, no `xmlchange`, no `rpointer.*` touch, and no `--send-it` (that flag is exclusive to `make`, where folding build+submit is safe because a fresh case has no run state to preserve). Flags `RUNNING`/`RESUBMITTED`/`QUEUED` without blocking (`patch` policy — safe because nothing is resubmitted). Selection via `_require_cases()`; preview by default, `--execute` adds one batch `[yes/no]`. Only cross-module import is `runmgr._probe_status` for the status column.
 
@@ -312,6 +319,21 @@ RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `ex
 **Branch/hybrid CESM workaround:** CESM requires `RUN_TYPE=startup` during `cesm_setup` when the rundir doesn't yet exist. Build scripts set `startup` before setup, then switch back to `branch`/`hybrid` after copying restart files. `RUN_REFDIR` always appends `-00000` to `RUN_REFDATE` (CESM restart dirs are named `YYYY-MM-DD-SSSSS`; seconds are always zero for ExoCAM cases).
 
 **`_build_usr_src_fix_block` (clone + custom RT):** When `exort_pkg` ends with `*`, `create_clone` inherits `-usr_src` from the source case verbatim. This block reads the inherited `CAM_CONFIG_OPTS` via `xmlquery | sed` (CESM 1.2.1 lacks `xmlquery --value`), extracts the old path, then calls `xmlchange` with the new path inlined as a double-quoted sed replacement so shell variables expand before `xmlchange` sees the value. `xmlchange` rejects unexpanded shell variable references.
+
+---
+
+## derive.py — derived inputs
+
+**Two layers.** `plan_derived_inputs(spec, registry, paths, pstd_bar, pressure_str)` is pure: it parses `star` (`parse_star` → `'sun'` | `{teff, feh, logg, method}`), decides which products the case needs, names them, and returns `(items, effective, warnings)` — `effective` holds the `exo_solar_file`/`ncdata`/`albedo_product` generate should use where the matrix is silent. It raises `DeriveError` for an impossible request (unknown `ic_template` tag, bad `ice_surface`, unknown `exort_pkg`, no `paths.derived_inputs`). `derive(item, paths)` dispatches to the engines (`derive_solar`, `derive_albedos`, `derive_ic`) — run by `prep --execute` only.
+
+**Naming** (`fmt_num` trims floats: `3400.0→3400`, `4.5→4.5`, `0.0→0.0`):
+- solar: `btsettl_T<teff>_g<logg>_m<feh>_<res>.nc` under `solar/`; the raw SED `btsettl_T…_m….txt` under `solar/sed/`; `<res>` from `EXORT_RES[exort_pkg]` (mirrors `build.SOLAR_FILE_STEMS`). `star: sun` → `{exort_root}/data/solar/G2V_SUN_<res>.nc`, no product.
+- albedo: `<solar-stem>__<ice_surface>.albedos.sh` under `albedo/` — a shell fragment defining `ALBICEV/ALBICEI/ALBSNOWV/ALBSNOWI` (`ALBEDO_KEYS`/`ALBEDO_SHELL_VARS`); `read_albedo_product` parses it back.
+- ic: `ic_<tag>_<P>bar_L<nlev>[_dry]_ic.nc` under `ic/<config_type>/`; template from `ic_templates[tag]` via `ic_template_path`.
+
+**Engines** import from their home repos with `_import_from(dir, module)` (dirs from `paths.stellar_interpolator`, `paths.exort_tools` | `<exort_root>/tools`, `paths.exocam_py_progs` | `<exocam_root>/tools/py_progs`): `btsettl_io.SpectralGrid.from_dir` + `interp_btsettl.interpolate/write_sed`; `makeStellarSpectrum_fromSED.make_stellar_file`; `broadband_albedo_calculator.compute_cice_albedos`; `mod_ncdata.modify_ncdata`. Every product is written to `<path>.partial` and `os.replace`d.
+
+**Manifests** (`write_manifest`/`read_manifest`, `<product>.prep.yaml`): kind, product, created, recipe, result, tools (dir + git SHA), casemgr SHA. `provenance_fields(solar_file, ncdata, user_nl_cice)` is what `scan.py` calls; it also reads the `! casemgr derived albedos: <product>` line (`ALBEDO_PROVENANCE_PREFIX`) the build script leaves in `user_nl_cice`.
 
 ---
 

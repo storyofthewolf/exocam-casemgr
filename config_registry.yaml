@@ -29,6 +29,16 @@ paths:
   long_term:    /gpfsm/dnb07/projects/p54/users/etwolf/exocam-archive
   exocam_root:  /gpfsm/dnb33/etwolf/models/ExoCAM
   exort_root:   /gpfsm/dnb33/etwolf/models/ExoRT
+  # Derived inputs (build.py prep): products of Chain A (star -> solar file ->
+  # cice albedos) and Chain B (ic_template -> ncdata) live here, never inside
+  # the ExoCAM/ExoRT checkouts. Subdirs solar/, albedo/, ic/<config_type>/.
+  derived_inputs: /gpfsm/dnb33/etwolf/cesm_scratch/derived_inputs
+  # stellar-interpolator checkout + its BT-Settl grid (grid/ under it by default).
+  # CONFIRM these on Discover -- the grid must be copied there once (~4 GB).
+  stellar_interpolator: /gpfsm/dhome/etwolf/pythonWorkspace/stellar-interpolator
+  # btsettl_grid: /gpfsm/dnb33/etwolf/data/btsettl_grid      # override if not <stellar_interpolator>/grid
+  # exocam_py_progs / exort_tools default to <exocam_root>/tools/py_progs and
+  # <exort_root>/tools; set only to point elsewhere.
 
 # exort_pkg -> substring that must appear in the solar filename basename
 solar_file_stems:
@@ -59,6 +69,20 @@ cesm_config:
     res:      ne16np4_ne16np4
     compset:  E2000C4AQI
     phys:     cam4
+
+# IC templates for build.py prep (Chain B). A matrix `ic_template: <tag>` makes
+# ncdata from the named file at the case's pstd (flat PS field, IDL
+# changepress_cesm.pro semantics), nlev (levels cut from the 66-level WACCM
+# grid when they differ) and ic_dry. Values are relative to
+# {exocam_root}/cesm1.2.1/initial_files/ or absolute. The tag is part of the
+# product name (ic_<tag>_<P>bar_L<nlev>[_dry]_ic.nc), so keep tags short and
+# never reuse one for a different file.
+ic_templates:
+  ctrl40:  cam_aqua_fv/control_L40.cam.i.0009-01-01-00000.nc   # source of every ic_*bar_L40* file
+  ctrl45:  cam_aqua_fv/control_L45.cam.i.0040-01-01-00000.nc
+  ctrl48:  cam_aqua_fv/control_L48.cam.i.0048-01-01-00000.nc
+  ctrl51:  cam_aqua_fv/control_L51.cam.i.nc
+  land40:  cam_land_fv/control_L40_dry.cam.i.nc
 
 # IC file table.
 # These are the files present in cesm1.2.1/initial_files/<config_type>/

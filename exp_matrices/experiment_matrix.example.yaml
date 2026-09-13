@@ -70,6 +70,13 @@ base:
   # -----------------------------------------------------------------------
   exo_scon:     1360.0         # stellar constant (W/m^2)
   # exo_solar_file: /discover/nobackup/etwolf/models/ExoRT/data/solar/BT_Settl_3400K_n68.nc
+  #
+  # Or let `build.py prep` derive the solar file and the sea-ice/snow albedos
+  # from the star (explicit exo_solar_file / cice_params always win):
+  # star: sun                                   # shipped G2V spectrum; derives albedos only
+  # star: {teff: 3400, feh: 0.0, logg: 4.5}     # BT-Settl interpolation -> btsettl_T3400_g4.5_m0.0_<res>.nc
+  # derive_albedos: true                        # default once `star` is set
+  # ice_surface: blueice                        # blueice | mixed  (albice*); snow always snow100um
 
   # -----------------------------------------------------------------------
   # Geophysical parameters
@@ -203,6 +210,10 @@ cases:
     exo_o2bar:           0.0
     nlev:                51
     ncdata: ic_1bar_L51_zmean_ic.nc
+    # or derive the IC from a registry template at this case's pstd/nlev
+    # (config_registry.yaml ic_templates), made by `build.py prep`:
+    # ic_template: ctrl51
+    # ic_dry: true
 
   # Land planet example (cam_land_fv config)
   - name: land_modern_earth

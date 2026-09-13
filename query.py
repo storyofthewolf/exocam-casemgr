@@ -202,7 +202,15 @@ _BASE_FIELD_ORDER = [
     'finidat', 'fsurdat', 'som_pop_frc_file',
     # special
     'nl_cam_params', 'carma_params', 'volc_params', 'cice_params',
+    # derived inputs (build.py prep) -- emitted by _apply_derived_export
+    'star', 'derive_albedos', 'ice_surface', 'ic_template', 'ic_dry',
 ]
+
+# Registry provenance fields (scan 'derived' group) folded into the physics
+# keys above by _apply_derived_export; never exported flat.
+_DERIVED_REGISTRY_KEYS = ('star_teff', 'star_feh', 'star_logg', 'star_method',
+                          'ice_surface', 'albedo_product',
+                          'ic_template', 'ic_dry', 'ic_pstd_bar')
 
 # Flat registry keys (scanned from user_nl_cam) that the matrix nests under
 # nl_cam_params. Scanning is a curated whitelist by design — extend this
@@ -219,6 +227,7 @@ _CLONE_BASE_FIELDS = {
 # Registry keys not forwarded to the matrix
 _SKIP_KEYS = {
     'case_name', 'casedir', 'inspect_date',
+    *_DERIVED_REGISTRY_KEYS,
     'ncdata_pressure_str', 'ncdata_levels',
     'exo_n2bar', 'exo_n2bar_expr',         # N2 is implicit or set via exo_n2bar_explicit
     'exo_sday_expr',
@@ -263,7 +272,57 @@ def _row_to_base(row):
             continue
         out_key = _KEY_RENAMES.get(k, k)
         base[out_key] = v
+    _apply_derived_export(row, base)
     return base
+
+
+def _apply_derived_export(row, base):
+    """Round-trip prep-derived inputs as the physics that made them.
+
+    A case whose solar file / albedos / ncdata came from build.py prep (the
+    scan 'derived' fields are set from the manifests) exports `star`,
+    `ice_surface` + `derive_albedos`, and `ic_template` + `ic_dry` in place of
+    the derived filenames and values, so regenerating from the export
+    re-derives them instead of pinning a product path. Hand-made inputs (no
+    manifest) export as before. Mutates `base` in place, preserving key order.
+    """
+    star = None
+    if row.get('star_teff') is not None:
+        star = {'teff': row['star_teff'], 'feh': row.get('star_feh', 0.0),
+                'logg': row.get('star_logg', 4.5)}
+        if row.get('star_method') and row['star_method'] != 'log':
+            star['method'] = row['star_method']
+        base.pop('exo_solar_file', None)
+    if row.get('ice_surface'):
+        base.pop('cice_params', None)
+        if star is None:
+            star = 'sun'
+    ic_tag = row.get('ic_template')
+    if ic_tag:
+        base.pop('ncdata', None)
+    if star is None and not ic_tag:
+        return
+    out = {}
+    for k, v in base.items():
+        out[k] = v
+        if k == 'exo_scon' and star is not None:
+            out['star'] = star
+            if row.get('ice_surface'):
+                out['derive_albedos'] = True
+                out['ice_surface'] = row['ice_surface']
+        if k == 'nlev' and ic_tag:
+            out['ic_template'] = ic_tag
+            out['ic_dry'] = bool(row.get('ic_dry'))
+    if star is not None and 'star' not in out:
+        out['star'] = star
+        if row.get('ice_surface'):
+            out['derive_albedos'] = True
+            out['ice_surface'] = row['ice_surface']
+    if ic_tag and 'ic_template' not in out:
+        out['ic_template'] = ic_tag
+        out['ic_dry'] = bool(row.get('ic_dry'))
+    base.clear()
+    base.update(out)
 
 
 def _load_registry_defaults(config_registry_path):

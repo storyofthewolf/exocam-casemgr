@@ -54,7 +54,8 @@ cases/ + rundir/ + archive/ on HPC
 ### Module roles
 
 - **`parse_utils.py`** — pure parsing primitives; no filesystem side effects (invariant)
-- **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating; `patch` edits `exoplanet_mod.F90` in place in existing cases and rebuilds; `rebuild` recompiles existing cases after a hand-edit anywhere under `SourceMods` (compiles and stops — no submission, no XML edits). **Compilation lives here and only here** — no `runmgr.py` verb runs `<case>.build`.
+- **`derive.py`** — derived inputs (`build.py prep`): the matrix declares physics (`star`, `ic_template`, `ice_surface`), casemgr derives the filenames. Pure planning layer (`plan_derived_inputs` — names, recipes, the effective `exo_solar_file`/`ncdata`; runs anywhere) is kept apart from the engines (`derive_solar`/`derive_albedos`/`derive_ic` — run by `prep --execute` only, where the data lives). Engines are imported from their home repos via `paths.*` (stellar-interpolator; `ExoRT/tools/makeStellarSpectrum_fromSED.py`; `ExoCAM/tools/py_progs/broadband_albedo_calculator.py` + `mod_ncdata.py`). Products carry a `<file>.prep.yaml` manifest that `scan.py` reads back. See "build.py prep — derived inputs" below.
+- **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `prep` materializes missing derived inputs (solar file, cice albedos, ncdata) on the HPC, idempotent by name; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating; `patch` edits `exoplanet_mod.F90` in place in existing cases and rebuilds; `rebuild` recompiles existing cases after a hand-edit anywhere under `SourceMods` (compiles and stops — no submission, no XML edits). **Compilation lives here and only here** — no `runmgr.py` verb runs `<case>.build`.
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
 - **`datamgr.py`** — case data management: `report` (disk survey), `clean` (surgical purge/move), `avg` (permanent N-year averaging), `retire` (end-of-life archival)
@@ -66,6 +67,7 @@ cases/ + rundir/ + archive/ on HPC
 ### Key non-obvious behaviors
 
 - `scan.py --update` **clobbers** the registry — does not merge with pre-existing content. Live rows take precedence over archive rows on name collision.
+- **Derived inputs are opt-in and named, never silent** (since 2026-09-13). A matrix that says nothing about the star, the albedos or an IC template builds exactly as before. `star: sun` or `star: {teff, feh, logg}` derives `exo_solar_file` (for a non-solar star) and, with `derive_albedos: true` (the default once `star` is set), the four `cice_params` from that spectrum; `ic_template: <tag>` derives `ncdata` from a registry template at the case's `pstd`/`nlev`. Explicit `exo_solar_file`/`cice_params`/`ncdata` always win, with a warning. `generate` computes the product names and emits a **STEP 0 required-inputs block** (one `# derived:` comment per input + an existence guard that `exit 1`s before `create_newcase`); `prep --execute` makes what is missing. A missing product at `--verify` time is a warning (`run build.py prep`), not a failure — the name is right, the file is simply not built yet. **The albedo calculator's solar values (blue ice 0.82/0.25, snow 0.98/0.59) do not reproduce the CICE-tuned template defaults (0.67/0.30, 0.80/0.68)**, which is why derivation requires an explicit `star` key: turning it on by default would have silently changed every solar matrix.
 - `build.py generate` never executes scripts; `build.py make` runs them (with confirmation prompt). **Build output streams to a per-attempt log while the script runs** (since 2026-09-13): `make` writes `scripts-dir/logs/<case>.build.<YYYYmmdd-HHMMSS>.log` with `<case>.build.log` a symlink to the latest attempt; `rebuild_case()` (used by `patch` and `rebuild`) writes `<case>/logs/casemgr_rebuild.<ts>.log` + `casemgr_rebuild.log`, inside the case's own CESM log dir so `purge-logs` tidies them. `_run_streaming()` hands the subprocess the open file, so a build in progress can be tailed, a hung build shows as a file that stopped growing, a killed build keeps everything up to the kill, and attempts are never overwritten. (Previously `make` buffered in memory and wrote afterward; `rebuild_case` returned one line and kept nothing.) `make` **builds but does not submit** — submission is a separate step (`runmgr.py submit`, or `make --send-it` to fold both together). The run verbs are distinct: `submit` (launch a built case as-is, no xmlchange), `continue` (CONTINUE_RUN=TRUE), `restart` (CONTINUE_RUN=FALSE + fixes). `xml` is the odd one out — it changes/queries XML but **never** launches a job, so it has no `submit`/`continue`/`restart` semantics; on `--change --execute` it uses the same single batch `[yes/no]` gate as the other verbs (RUNNING/RESUBMITTED cases are flagged in the preview, not hard-blocked). See "Run-control gating" below.
 - `build.py make` accepts explicit `NAME` positionals (bare case name or full `*_build.sh` filename) to run a named subset, in addition to `--prefix`. If neither `NAME` args nor `--prefix` nor `--all` is given, it just **lists** the scripts in `scripts-dir` and exits — it does not run anything. `--all` is required to intentionally run every script in `scripts-dir` at once, mirroring the "no implicit --all" convention used by destructive `datamgr.py`/`runmgr.py` subcommands.
 - `datamgr.py` status-gates like the run-control verbs: `retire` **hard-blocks** RUNNING/RESUBMITTED cases (probe via `runmgr._probe_status`, lazily imported — the same pattern as `build.py patch`); `clean purge-restarts`/`purge-hist`/`move-hist` **flag** active jobs in the preview without blocking. `retire` has a **duplicate guard** (owner decision, 2026-07-13; replaced the earlier unconditional hard block): if `long_term/<case>` already exists — normally the product of a workflow mis-step, since a case should never live in both active and retired space — each duplicated case gets its own `[yes/no]` prompt under `--execute`. **yes** = the entire existing record (case.yaml, config, preserved data) is deleted in pass 2, after the batch confirm, so the new retirement fully replaces it (never mixed onto it — `shutil.move` onto an existing path would silently overwrite a file or nest a directory, `rest/<date>/<date>`); **no** = the case is skipped for offline resolution. In preview mode the duplicate is flagged without prompting. Without replace consent, a record that appears between preview and execution still blocks the case (TOCTOU re-check). `move-hist` never overwrites — files already present in long-term are skipped and left in the archive. `avg --last` overwrites an existing avg file (`ncra -O`), disclosed in the preview, and gates `--execute` behind the same single batch `[yes/no]` as the clean verbs. `purge-restarts --keep 0` and `purge-hist --keep-years 0` are explicit delete-alls with an honest "keeping NONE" preview; negative values are rejected.
@@ -280,6 +282,34 @@ Rewrites the matching `parameter ::` line in `<case>/SourceMods/src.share/exopla
 
 ---
 
+## build.py prep — derived inputs (star → solar file → albedos; ic_template → ncdata)
+
+```
+build.py generate suite.yaml --verify       # names the derived inputs; warns which are not yet made
+build.py prep suite.yaml                    # preview: present / MISSING per product (run on the HPC)
+build.py prep suite.yaml --execute          # make the missing ones; idempotent by name
+build.py prep suite.yaml --case c1 --execute
+```
+
+Added 2026-09-13 (PROPOSED_PLANS.md, "build.py prep", agreed with owner). Three per-case inputs used to be made by hand across four repos and pasted in as filenames; they are consequences of physics the matrix already states, so **the matrix declares physics and casemgr derives the filenames.**
+
+| Matrix key | Default | Produces | Engine (home repo) |
+|---|---|---|---|
+| `star: sun` \| `{teff, feh, logg[, method]}` | absent = no derivation | `exo_solar_file` (`btsettl_T<teff>_g<logg>_m<feh>_<res>.nc`, `<res>` from `exort_pkg`; `sun` → the shipped `G2V_SUN_<res>.nc`) | stellar-interpolator (`interpolate`, `write_sed`) → `ExoRT/tools/makeStellarSpectrum_fromSED.make_stellar_file` |
+| `derive_albedos` | `true` (only acts when `star` is set) | `cice_params` via `<solar-stem>__<ice_surface>.albedos.sh` | `ExoCAM/tools/py_progs/broadband_albedo_calculator.compute_cice_albedos` |
+| `ice_surface` | `blueice` (\| `mixed`) | the reflectance used for `albice*`; snow always `snow100um` | — |
+| `ic_template: <tag>` | absent = `ic_files` table lookup as before | `ncdata` (`ic_<tag>_<P>bar_L<nlev>[_dry]_ic.nc`) | `ExoCAM/tools/py_progs/mod_ncdata.modify_ncdata` |
+| `ic_dry` | `true` | zero Q/CLDLIQ/CLDICE in the derived IC | — |
+
+- **Where things run.** `generate` stays local and pure: it resolves the product *names* (`derive.plan_derived_inputs`, via `build.apply_derived_inputs`, which fills `spec['exo_solar_file']`/`spec['ncdata']` where the matrix is silent and records the plan in `spec['_derived']`), and emits the STEP 0 guard. It never opens an input file — it cannot, they are on Discover. `prep` runs where the data is, checks existence, and derives only what is missing, in dependency order (solar → albedo → ic), each product written to a `.partial` sibling and renamed, with a `<file>.prep.yaml` manifest (recipe, engine dirs + git SHAs, casemgr SHA). Nothing is ever overwritten; delete a product to remake it. `prep` has no `[yes/no]` gate — it is not destructive.
+- **Albedos travel as a sourced shell fragment, not as numbers in the script.** `generate` cannot compute them (the spectrum is on the HPC), so the product is `<derived_inputs>/albedo/<solar-stem>__<surface>.albedos.sh` defining `ALBICEV/ALBICEI/ALBSNOWV/ALBSNOWI`; the build script `source`s it, upserts the four `user_nl_cice` keys with delete-then-append, verifies exactly one live line per key, and leaves a `! casemgr derived albedos: <product>` comment that `scan.py` reads back. `albice*` come from `ice_surface`, `albsnow*` from the snow spectrum, both computed from **exactly the binned `.nc` the model sees** (the calculator reads ExoRT files directly).
+- **Chain B semantics are the IDL's** (`changepress_cesm.pro`): fields are left alone in hybrid-sigma space and only `PS` (flat) and `P0` are rewritten; a level change (when `nlev` ≠ the template's) cuts the new grid from the bottom of the 66-level WACCM file and interpolates in pressure first. `mod_ncdata.py` reproduces every IDL-made `ic_*bar_L40*` file in `initial_files/cam_aqua_fv` **byte for byte** from `control_L40.cam.i.0009-01-01-00000.nc` (`tests/test_derived_inputs.py::Engines`), and its level change is bit-identical to the old `mod_cam.i.file.py` (now a shim). IDL is legacy; nothing calls it.
+- **Products live under `paths.derived_inputs`** (`solar/`, `solar/sed/`, `albedo/`, `ic/<config_type>/`), never inside the ExoCAM/ExoRT checkouts. `ic_templates` in the registry maps a short tag to a file under `initial_files/` (or an absolute path); the tag is part of the product name, so never reuse one for a different file. `<P>` uses `bar_to_pressure_str`, so a gas-sum `pstd` like `1.000123` names an honest, odd file.
+- **Registry round-trip.** `scan.py` reads the manifests beside the products a case references (`derived` group: `star_teff/feh/logg/method`, `ice_surface`, `albedo_product`, `ic_template`, `ic_dry`, `ic_pstd_bar`); `query.py export` then emits `star`/`ice_surface`+`derive_albedos`/`ic_template`+`ic_dry` in place of the product paths (`_apply_derived_export`), so a regenerated matrix re-derives rather than pins a path. Hand-made inputs (no manifest) export exactly as before. Clone exports drop the derived keys with everything else outside `_CLONE_BASE_FIELDS`.
+- **Discover prerequisites** (not yet done): confirm `paths.stellar_interpolator`, put the BT-Settl grid there once (~4 GB, gitignored), and create `paths.derived_inputs`. Until then `prep --execute` on a `star: {teff…}` case fails at the grid check with a named path.
+
+---
+
 ## build.py generate --verify
 
 `build.py generate <matrix> --verify` checks matrix coherency and **generates no scripts** (exits 1 if any case fails). It catches transposition mistakes — wrong value types, missing input files — before they reach the rendered build scripts. Beyond those hard checks it raises a small number of **scientific-consistency warnings** (see below), which never fail a case or affect the exit code — `--verify` asks, it does not presume to know the science.
@@ -421,6 +451,10 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 3. Add it to `_NL_CAM_SCANNED_KEYS` in query.py — `_row_to_base` then nests it under `nl_cam_params` in exported matrices automatically (`nl_cam_params` is already in `_BASE_FIELD_ORDER`).
 4. Re-scan on the HPC (`scan.py --update`) to populate the new field.
 
+### Adding an IC template for `build.py prep`
+1. Add `tag: <path under cesm1.2.1/initial_files/ or absolute>` to `ic_templates` in `config_registry.yaml`. Keep tags short — the tag is embedded in every product name (`ic_<tag>_…`) — and never reuse a tag for a different file.
+2. Nothing else: `derive.ic_template_path` resolves it and `mod_ncdata` handles any level count ≤ 66.
+
 ### Adding a new netCDF file field to `--verify`
 1. Add `(field, resolver, restrict_config_types)` to `NCFILE_FIELDS` in `build.py`.
 2. The resolver must mirror how the field's build block turns the value into a path (reuse `resolve_ic_path` / `_resolve_clm_field` / `_resolve_verbatim_field` or add one). Existence checking is otherwise automatic, including local/HPC skip handling.
@@ -446,6 +480,7 @@ Total surface pressure (`compute_pstd_from_spec`) is the sum of individual gas b
 - `scan.py --update` clobbers the registry with exactly the cases scanned in the current run. It does not merge with pre-existing registry content.
 - **A namelist write that is supposed to happen must not be able to no-op silently.** Every file-path key written into a namelist by a generated build script goes through `_nl_upsert_verified_lines`, which verifies its own result and `exit 1`s if the key is missing, duplicated, or carries the wrong value. Adding a new such key means using that helper, not a fresh `sed`. See "Every namelist file-path key goes through a verified upsert" above.
 - `exoplanet_mod.F90` is always skipped by `diff.py` (it is patched per-case and is not meaningful to diff).
+- **A derived input is opt-in, named in the matrix, and guarded in the script.** casemgr derives `exo_solar_file`/`cice_params`/`ncdata` only when the matrix names `star`/`ic_template`; explicit values always win; the generated script refuses to start without the product (STEP 0). No engine runs inside `generate`, and `prep` never overwrites a product. The engines stay in their home repos (stellar-interpolator, ExoRT, ExoCAM); casemgr only orchestrates.
 
 ---
 
@@ -462,6 +497,27 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ### diff.py: non-standard ExoRT package directory paths
 `build_exort_fileset` constructs the ExoRT reference as `{exort_root}/3dmodels/src.cam.{exort_pkg}/`. Experimental branches outside this path cause RT detection to silently return `{}` — affected files appear as `CASE ONLY`. Cases with non-standard RT are flagged with `*` in `query.py search` output. Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml`.
+
+---
+
+## Session handoff — 2026-09-13 (evening) — `build.py prep`
+
+**Derived inputs landed** (PROPOSED_PLANS.md "build.py prep", owner-agreed shape). Four repos touched; see the "build.py prep — derived inputs" section above for the design. `tests/test_derived_inputs.py` (31 tests, incl. engine acceptance tests that run only where `/Users/wolfe/models/ExoCAM` + `ExoRT` exist).
+
+- **ExoCAM/tools/py_progs**: `broadband_albedo_calculator.py` rewritten as an importable module (`compute_albedo`, `compute_cice_albedos`; reflectance spectra located relative to the file, not the cwd; CLI unchanged, numbers identical). New `mod_ncdata.py` (importable; pressure rescale finished with the IDL's flat/scaled modes; generic copy-with-substitution writer that preserves every variable and attribute; temp-then-rename). `mod_cam.i.file.py` is now a 5-line shim. README updated.
+- **ExoRT/tools**: `makeStellarSpectrum_fromSED.py` gained `make_stellar_file()` (the whole of the old `main()`, bit-identical output; `verbose`/`plot` switches). Note: the shipped `bt-settl_3000_logg4.5_FeH0_n68.nc` differs from what the current Python binner produces from the same raw file (up to 0.68 W/m² per band) — pre-existing, presumably the IDL era; not touched.
+- **stellar-interpolator**: unchanged; used as a library (`SpectralGrid.from_dir`, `interpolate`, `write_sed`).
+- **casemgr**: `derive.py` (new), `build.py` (`apply_derived_inputs`, `_build_required_inputs_block`, `_build_derived_albedo_block`, `cmd_prep`, verify warning for un-made products), `scan.py` (`derived` group), `query.py` (`_apply_derived_export`), `config_registry.yaml` (`paths.derived_inputs`, `paths.stellar_interpolator`, `ic_templates`).
+
+**Decisions made in-session, worth knowing:**
+1. Derivation is **opt-in via `star`** (see the Key behaviors bullet): the calculator's solar albedos are not the CICE-tuned template values, so a silent default-on would have changed every solar matrix. Open question for the owner: whether M-dwarf cases should use raw calculator values (current) or template values scaled by the star/sun ratio.
+2. `--verify` on an un-prepped case **warns**, not fails; `prep` preview exits 0 when only products are missing and 1 for a matrix error.
+3. The `ic_files` table shows the naming hazard the tag scheme avoids: `ic_1bar_L51_ic.nc` is actually 1.12 bar, `ic_1.2bar_L40_ic.nc` is 1.0 bar, `ic_10bar_L51_zmean_ic.nc` is 2 bar (from the PS survey). Derived names are computed from the recipe, so this cannot recur for products.
+
+### Good starting points for next session
+- **Discover setup**: confirm `paths.stellar_interpolator`, copy the BT-Settl grid, create `paths.derived_inputs`; then `prep --execute` a real M-dwarf suite and build one case end to end. The generated STEP 0 guard has only been exercised locally.
+- Decide the `ice_surface` default (`blueice` now) and the sun/ratio question above.
+- The K2V case in `experiment_matrix.example.yaml` can now be written as `star: {teff: 5000, …}` — a good first real use.
 
 ---
 

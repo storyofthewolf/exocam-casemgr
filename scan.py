@@ -21,6 +21,8 @@ import os
 import sys
 import yaml
 
+import derive
+
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import (
@@ -83,6 +85,13 @@ _REGISTRY_GROUPS = [
     ]),
     ('special', [
         'carma_params', 'volc_params', 'cice_params',
+    ]),
+    # Provenance of inputs made by build.py prep (from the .prep.yaml manifests
+    # beside the products the case references). All None for hand-made inputs.
+    ('derived', [
+        'star_teff', 'star_feh', 'star_logg', 'star_method',
+        'ice_surface', 'albedo_product',
+        'ic_template', 'ic_dry', 'ic_pstd_bar',
     ]),
     ('diagnostics', [
         'warnings', 'config_saved',
@@ -196,6 +205,11 @@ def inspect_case(casedir):
                     f"user_nl_cice: duplicate key(s) "
                     f"{', '.join(cice_nl['nl_duplicates'])} — last value wins "
                     f"(CESM policy); registry reports the effective value")
+
+    # Derived-input provenance (build.py prep manifests beside the products)
+    row.update(derive.provenance_fields(
+        solar_file=row.get('exo_solar_file'), ncdata=row.get('ncdata'),
+        user_nl_cice=os.path.join(casedir, 'user_nl_cice')))
 
     # user_docn.streams.txt.som (aqua and mixed configs only)
     row['som_pop_frc_file'] = None
