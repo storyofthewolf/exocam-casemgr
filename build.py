@@ -1240,16 +1240,58 @@ def _build_docn_update_block(spec):
     ]
 
 
+def _missing_template_error(spec, is_clone, template_path):
+    """Decide what a missing exoplanet_mod.F90 template means for this case.
+
+    Returns an error string (the case must be skipped) or None (the case may
+    proceed with the clone source's F90 inherited unchanged).
+
+    A generated script that carries no rendered F90 still compiles — and a
+    successful build then says nothing about whether the requested experiment
+    was configured. That is the same silent-no-op class as the 2026-08-26
+    ncdata bug, so it is not allowed to reach a script:
+
+      newcase            -> always an error. The ExoCAM config template is
+                            copied into SourceMods with its modern-Earth
+                            defaults, so without the rendered F90 the matrix
+                            is no longer the sole arbiter of composition.
+      clone, matrix sets -> error. Those parameters can only be applied by
+        any EXO_PARAMS       rendering the clone source's F90, which is not
+                            reachable from here (generate on the HPC).
+      clone, no EXO_PARAMS -> allowed: nothing was requested of the F90, so
+                            inheriting the clone source's copy unchanged is
+                            exactly what a clone means. Warned at generate time.
+    """
+    where = template_path or '<no template path could be formed>'
+    if not is_clone:
+        return (f"exoplanet_mod.F90 template not found: {where} — a newcase "
+                f"script must carry the rendered F90 (the matrix is the sole "
+                f"arbiter of composition). Generate where exocam_root is mounted.")
+    requested = sorted(k for k in spec if k in EXO_PARAMS or k == 'exo_n2bar_explicit')
+    if requested:
+        return (f"clone source exoplanet_mod.F90 not found: {where} — the matrix "
+                f"sets {', '.join(requested)}, which can only be applied by "
+                f"rendering that file. Generate on the HPC (where caseroot is "
+                f"mounted), or drop those keys to inherit the clone source's "
+                f"exoplanet_mod.F90 unchanged.")
+    return None
+
+
 def _heredoc_exoplanet_mod(exoplanet_mod_content):
     """
-    Return shell lines that write exoplanet_mod.F90 inline via heredoc,
-    or a comment if the content is None (template was not found).
+    Return shell lines that write exoplanet_mod.F90 inline via heredoc.
+
+    content None means the case is a clone that sets no exoplanet_mod
+    parameters and the clone source's F90 was not readable at generate time
+    (_missing_template_error allowed it): the inherited file is used as-is.
+    No "install manually" placeholder — that text invited a build that
+    silently ignored the matrix.
     """
     if exoplanet_mod_content is None:
         return [
-            "# WARNING: exoplanet_mod.F90 template not found at generation time.",
-            "# Install it manually before building:",
-            "# cp /path/to/exoplanet_mod.F90 SourceMods/src.share/exoplanet_mod.F90",
+            "# exoplanet_mod.F90: inherited unchanged from the clone source.",
+            "# (The matrix sets no exoplanet_mod parameters, and the source F90",
+            "#  was not readable when this script was generated.)",
         ]
     lines = ["cat > SourceMods/src.share/exoplanet_mod.F90 << 'EXOPLANET_MOD_EOF'"]
     lines.extend(exoplanet_mod_content.splitlines())
@@ -1806,9 +1848,15 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
         if template_path and os.path.exists(template_path):
             exoplanet_mod_content = render_exoplanet_mod(template_path, spec, is_clone=is_clone)
         else:
-            src_label = spec.get('clone') if is_clone else (config_type or 'unknown')
-            print(f"  WARNING: template exoplanet_mod.F90 not found for {src_label}; "
-                  f"script will contain a placeholder comment — install manually")
+            problem = _missing_template_error(spec, is_clone, template_path)
+            if problem:
+                print(f"\nERROR: {case_name}")
+                print(f"  - {problem}")
+                errors_total += 1
+                continue
+            print(f"  WARNING: {case_name}: clone source exoplanet_mod.F90 not "
+                  f"readable ({template_path}); the matrix sets no exoplanet_mod "
+                  f"parameters, so the clone inherits it unchanged.")
             exoplanet_mod_content = None
 
         if is_clone:

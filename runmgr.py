@@ -26,8 +26,8 @@ SAFETY
 
   Double-gate ergonomics (matching build.py make): these verbs first print a
   per-case preview, then --execute prints ONE batch [yes/no] confirmation
-  before acting on the whole set. RUNNING/RESUBMITTED cases are hard-blocked
-  (dropped from the set); every other status proceeds, with its label shown
+  before acting on the whole set. RUNNING/RESUBMITTED/QUEUED cases are
+  hard-blocked (dropped from the set); every other status proceeds, with its label shown
   per case. The label is reported, not judged — BUILT, FAILED, and WALLCLOCK
   are all ordinary inputs to these verbs — and the single batch confirm is
   the decision point.
@@ -56,6 +56,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manage_utils import (
     ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES, MODEL_STEM,
+    select_last_monthly_hist,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
@@ -320,29 +321,47 @@ def _rest_stop_warning(case_dir, pending):
             f"CONTINUE_RUN=TRUE will crash.")
 
 
+def _resolve_status(cs, case_dir, case):
+    """Refine a parsed CaseStatus dict into the probe-derived status label.
+
+    The single status resolver behind _probe_status and cmd_check. The SLURM
+    queue is consulted for EVERY case, not only after 'run started' /
+    'run SUCCESSFUL': a case that was just submitted still has 'build complete'
+    (or 'run FAILED', etc.) as its last CaseStatus event, and reading only that
+    event reported it as BUILT — so `submit` could sbatch it a second time.
+
+      job queued + last event 'run SUCCESSFUL' -> RESUBMITTED
+      job queued + last event 'run started'    -> RUNNING (unchanged)
+      job queued + any other last event        -> QUEUED  (submitted, not yet started)
+      no job     + last event 'run started'    -> WALLCLOCK (run.out timeout) or RUNNING?
+      squeue unavailable                       -> the raw CaseStatus label
+    """
+    status_label = cs['status']
+    last = cs['last_event'] or ''
+    job_queued = _squeue_probe(case)
+    if job_queued is True:
+        if last.startswith('run SUCCESSFUL'):
+            status_label = 'RESUBMITTED'
+        elif not last.startswith('run started'):
+            status_label = 'QUEUED'
+    elif job_queued is False and last.startswith('run started'):
+        run_out_path = os.path.join(case_dir, 'run.out')
+        status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
+    return status_label
+
+
 def _probe_status(case_dir, case):
     """Return the CaseStatus + SLURM-probe-derived status label for a case.
 
     Mirrors the gate logic used across continue/restart/submit: reads the last
-    CaseStatus event, and for run started / run SUCCESSFUL refines via squeue +
-    run.out (RESUBMITTED / WALLCLOCK / RUNNING?). Returns 'NO_CASEDIR' if there
-    is no CaseStatus file.
+    CaseStatus event and refines it via the squeue snapshot + run.out
+    (QUEUED / RESUBMITTED / WALLCLOCK / RUNNING?) — see _resolve_status.
+    Returns 'NO_CASEDIR' if there is no CaseStatus file.
     """
     cs = _parse_casestatus(os.path.join(case_dir, 'CaseStatus'))
     if cs is None:
         return 'NO_CASEDIR'
-    status_label = cs['status']
-    if cs['last_event'] and (
-        cs['last_event'].startswith('run started') or
-        cs['last_event'].startswith('run SUCCESSFUL')
-    ):
-        job_queued = _squeue_probe(case)
-        if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
-            status_label = 'RESUBMITTED'
-        elif job_queued is False and cs['last_event'].startswith('run started'):
-            run_out_path = os.path.join(case_dir, 'run.out')
-            status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
-    return status_label
+    return _resolve_status(cs, case_dir, case)
 
 
 def cmd_xml(args, paths):
@@ -448,7 +467,7 @@ def cmd_continue(args, paths):
     preview — not a block. The restart fileset would be incomplete.
 
     Status gating (checked via CaseStatus + SLURM probe):
-      RUNNING / RESUBMITTED  — hard block: skipped, never submitted
+      RUNNING / RESUBMITTED / QUEUED  — hard block: skipped, never submitted
       anything else          — proceeds; the status label is shown per case
 
     The label is reported, not judged: BUILT (e.g. after `build.py rebuild`),
@@ -568,7 +587,7 @@ def cmd_restart(args, paths):
     earlier segments are inert checkpoints and are correctly ignored.
 
     Status gating (checked via CaseStatus + SLURM probe):
-      RUNNING / RESUBMITTED  — hard block: skipped, never submitted
+      RUNNING / RESUBMITTED / QUEUED  — hard block: skipped, never submitted
       anything else          — proceeds; the status label is shown per case
 
     The label is reported, not judged. BUILT is the normal state after
@@ -691,7 +710,7 @@ def cmd_submit(args, paths):
     tool's job to build — a case with no <case>.run is skipped with a message.
 
     Status gating (checked via CaseStatus + SLURM probe):
-      RUNNING / RESUBMITTED  — hard block: skipped (a job is already active)
+      RUNNING / RESUBMITTED / QUEUED  — hard block: skipped (a job is already active)
       anything else          — proceeds; the status label is shown per case
 
     The label is reported, not judged: BUILT is the normal post-make state,
@@ -892,15 +911,6 @@ def _run_out_walltimeout(run_out_path):
     )
 
 
-_RE_HIST_DATE = re.compile(r'\.cam\.h0\.(\d{4}-\d{2})')
-
-
-def _hist_date(filename):
-    """Extract model date stem (YYYY-MM) from a cam.h0 hist filename, or None."""
-    m = _RE_HIST_DATE.search(filename)
-    return m.group(1) if m else None
-
-
 def _energy_balance(case, archive, n_months=12, keep_path=None):
     """Compute global-mean energy balance from the last N atm h0 files.
 
@@ -915,8 +925,9 @@ def _energy_balance(case, archive, n_months=12, keep_path=None):
     keep_path is given, ncra writes the average there instead and the file is
     left in place; saved_path in the return is the retained path (else None).
     With keep_path pointing at archive/<case>/atm/hist/, the kept file uses
-    datamgr avg's naming convention and is interchangeable with what
-    `datamgr avg --last N --models atm` produces from the same inputs.
+    datamgr avg's naming convention and is built from the same inputs
+    (select_last_monthly_hist is the shared selection rule), so it is
+    interchangeable with what `datamgr avg --last N --models atm` produces.
     """
     try:
         import numpy as np
@@ -934,27 +945,15 @@ def _energy_balance(case, archive, n_months=12, keep_path=None):
         print(f"  {case}: WARNING: atm/hist/ not found — skipping --energy")
         return None
 
-    # Collect *.cam.h0.*.nc files that are not avg files, sort lexicographically
-    try:
-        all_files = sorted(
-            f for f in os.listdir(hist_dir)
-            if f.endswith('.nc') and '.cam.h0.' in f and 'avg' not in f
-        )
-    except OSError:
-        print(f"  {case}: WARNING: cannot read atm/hist/ — skipping --energy")
+    # The same selection rule datamgr avg uses (monthly cam.h0 only, avg
+    # products excluded), so a --keep product equals the datamgr one.
+    selected, date_first, date_last = select_last_monthly_hist(hist_dir, 'atm', n_months)
+    if not selected:
+        print(f"  {case}: WARNING: no monthly cam.h0 files found — skipping --energy")
         return None
-
-    if not all_files:
-        print(f"  {case}: WARNING: no cam.h0 files found — skipping --energy")
-        return None
-
-    selected = all_files[-n_months:]
     n_used = len(selected)
     if n_used < n_months:
         print(f"  {case}: WARNING: only {n_used} month(s) available (requested {n_months})")
-
-    date_first = _hist_date(selected[0])
-    date_last = _hist_date(selected[-1])
 
     input_paths = [os.path.join(hist_dir, f) for f in selected]
     if keep_path is not None:
@@ -1135,14 +1134,17 @@ def cmd_check(args, paths):
     Default output per case (single line):
       <case>  [STATUS]  (<timestamp of last CaseStatus line>)
       Status labels: RUNNING, COMPLETE, FAILED, BUILT, CLEANED, UNKNOWN,
-      NO_CASEDIR, RESUBMITTED, RUNNING?, WALLCLOCK
+      NO_CASEDIR, QUEUED, RESUBMITTED, RUNNING?, WALLCLOCK
       Segment history counts are not reported — CaseStatus is inherited by
       cloned cases, making cumulative counts unreliable.
 
-    SLURM probe: when the last CaseStatus event is 'run started' or
-    'run SUCCESSFUL', squeue --name <case> -h is run. A queued job with a
-    SUCCESSFUL last event is shown as RESUBMITTED. If squeue is unavailable or
-    errors, the probe is silently omitted.
+    SLURM probe: one `squeue --me` snapshot per process; every case is
+    membership-tested against it regardless of its last CaseStatus event. A
+    queued job with a SUCCESSFUL last event is shown as RESUBMITTED; a queued
+    job whose last event is anything other than 'run started' / 'run
+    SUCCESSFUL' (typically 'build complete' — just submitted, not yet started)
+    is shown as QUEUED. If squeue is unavailable or errors, the probe is
+    silently omitted and the raw CaseStatus label is shown.
 
     WALLCLOCK: when a 'run started' case is no longer queued, run.out is checked.
     A SLURM wall-clock kill ('CANCELLED ... DUE TO TIME LIMIT' in the last
@@ -1242,26 +1244,8 @@ def cmd_check(args, paths):
             status_label = 'NO_CASEDIR'
             status_ts = ''
         else:
-            status_label = cs['status']
             status_ts = cs['last_ts'] or ''
-
-            # SLURM probe when last event is run started or run SUCCESSFUL
-            if cs['last_event'] and (
-                cs['last_event'].startswith('run started') or
-                cs['last_event'].startswith('run SUCCESSFUL')
-            ):
-                job_queued = _squeue_probe(case)
-                if job_queued is True and cs['last_event'].startswith('run SUCCESSFUL'):
-                    status_label = 'RESUBMITTED'
-                elif job_queued is False and cs['last_event'].startswith('run started'):
-                    # Started but no longer queued — likely crashed without updating CaseStatus.
-                    # SLURM wall-clock kills don't update CaseStatus either, but they DO leave a
-                    # "CANCELLED ... DUE TO TIME LIMIT" line in the last run.out segment.
-                    run_out_path = os.path.join(caseroot, case, 'run.out') if caseroot else ''
-                    if run_out_path and _run_out_walltimeout(run_out_path):
-                        status_label = 'WALLCLOCK'
-                    else:
-                        status_label = 'RUNNING?'
+            status_label = _resolve_status(cs, os.path.join(caseroot, case), case)
 
         info_lines = []
         if do_info and archive:

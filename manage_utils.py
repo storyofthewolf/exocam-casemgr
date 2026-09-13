@@ -25,11 +25,22 @@ MODEL_STEM = {
 }
 AVG_HIST_DEFAULT_MODELS = ['atm', 'lnd', 'ice']
 
+# The primary monthly history stream per component. CAM and CLM write
+# `.h0.`; CICE and POP write a bare `.h.`. Averaging inputs are restricted to
+# this stream so an h1/h2 stream (different variables, different cadence)
+# can never be fed to ncra alongside the monthly files.
+PRIMARY_HIST_STREAM = {
+    'atm': 'h0', 'lnd': 'h0', 'ice': 'h', 'ocn': 'h',
+    'rof': 'h0', 'glc': 'h', 'wav': 'h', 'cpl': 'hi',
+}
+
 # Probe-derived status labels that mean a SLURM job is active for the case
 # right now. Produced by runmgr._probe_status; consumed by the run-control
 # verbs (hard block) and the datamgr destructive verbs (block or flag). One
-# definition so a future label (e.g. PENDING) cannot drift between the tools.
-ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED')
+# definition so a new label cannot drift between the tools. QUEUED = a job is
+# in the queue but the last CaseStatus event predates 'run started' (a case
+# that was just submitted); without it `submit` could sbatch such a case twice.
+ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED', 'QUEUED')
 
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
@@ -149,6 +160,41 @@ def _hist_year(filename):
     """Extract model year string from hist filename, e.g. '0050' from case.cam.h0.0050-01.nc."""
     m = _RE_HIST_YEAR.search(filename)
     return m.group(1) if m else None
+
+
+def select_last_monthly_hist(hist_dir, model, n_months):
+    """Select the last *n_months* monthly primary-stream history files.
+
+    The ONE history-selection rule shared by `runmgr.py check --energy` and
+    `datamgr.py avg --last`, so an `avg_last{N}yr` product means the same
+    inputs whichever tool wrote it. Before 2026-09-13 the two disagreed:
+    check --energy took the last 12*N cam.h0 files while datamgr avg took the
+    last N calendar-year labels across every file in hist/ (so a partial final
+    year shortened the window and h1 streams could enter the average).
+
+    Only `<case>.<stem>.<stream>.YYYY-MM.nc` files count (see
+    PRIMARY_HIST_STREAM); avg products and other streams are excluded.
+    Lexicographic order is chronological for CESM date stems.
+
+    Returns (files, date_first, date_last): basenames sorted ascending, and
+    the YYYY-MM stems of the first and last selected file. ([], None, None)
+    if the directory is missing/unreadable or holds no matching file.
+    """
+    stem = MODEL_STEM.get(model, model)
+    stream = PRIMARY_HIST_STREAM.get(model, 'h0')
+    pat = re.compile(r'\.' + re.escape(stem) + r'\.' + re.escape(stream)
+                     + r'\.(\d{4}-\d{2})\.nc$')
+    try:
+        names = os.listdir(hist_dir)
+    except OSError:
+        return [], None, None
+    dated = sorted((m.group(1), f) for f in names
+                   for m in [pat.search(f)] if m and 'avg' not in f)
+    if not dated:
+        return [], None, None
+    if n_months > 0:
+        dated = dated[-n_months:]
+    return [f for _, f in dated], dated[0][0], dated[-1][0]
 
 
 def hist_info_line(model, hist_dir, files, total):

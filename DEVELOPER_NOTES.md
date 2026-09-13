@@ -281,7 +281,7 @@ All functions take explicit file paths and return dicts. No filesystem side effe
 
 **Subcommands:** `generate`, `make`, `patch`, `rebuild`. **Every compile in the toolchain enters through this module** — no `runmgr.py` verb runs `<case>.build`.
 
-**`rebuild` subcommand** (`cmd_rebuild`, added 2026-07-27) — recompiles `./<case>.build` across existing cases after a hand-edit anywhere under `SourceMods`. Compiles and stops: no `sbatch`, no `xmlchange`, no `rpointer.*` touch, and no `--send-it` (that flag is exclusive to `make`, where folding build+submit is safe because a fresh case has no run state to preserve). Flags `RUNNING`/`RESUBMITTED` without blocking (`patch` policy — safe because nothing is resubmitted). Selection via `_require_cases()`; preview by default, `--execute` adds one batch `[yes/no]`. Only cross-module import is `runmgr._probe_status` for the status column.
+**`rebuild` subcommand** (`cmd_rebuild`, added 2026-07-27) — recompiles `./<case>.build` across existing cases after a hand-edit anywhere under `SourceMods`. Compiles and stops: no `sbatch`, no `xmlchange`, no `rpointer.*` touch, and no `--send-it` (that flag is exclusive to `make`, where folding build+submit is safe because a fresh case has no run state to preserve). Flags `RUNNING`/`RESUBMITTED`/`QUEUED` without blocking (`patch` policy — safe because nothing is resubmitted). Selection via `_require_cases()`; preview by default, `--execute` adds one batch `[yes/no]`. Only cross-module import is `runmgr._probe_status` for the status column.
 
 **`patch` vs `rebuild`** — the split is *scope of the source edit*, not whether a compile happens. `patch` automates the edit for `exoplanet_mod.F90` alone (whose `parameter` constants change often enough to justify a `--set` interface); `rebuild` is the general escape hatch for any other `SourceMods` file, which you edit by hand. Extending `patch` to arbitrary source edits would be more arduous than editing the file directly.
 
@@ -404,7 +404,8 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 
 **History filtering (shared by purge-hist and retire):**
 - `_hist_year(filename)` — extract year string from hist filename (e.g. `'0050'` from `case.cam.h0.0050-01.nc`)
-- `_hist_keep_years_filter(archive_path, models, keep_n)` — partition files by year, return keep/delete lists
+- `_hist_keep_years_filter(archive_path, models, keep_n)` — partition files by year, return keep/delete lists (purge-hist only)
+- `select_last_monthly_hist(hist_dir, model, n_months)` — the one averaging-input rule shared by `runmgr check --energy` and `datamgr avg --last`: last N files of the component's primary monthly stream (`PRIMARY_HIST_STREAM`), avg products and other streams excluded; returns `(files, date_first, date_last)`
 
 **Restart management:**
 - `restart_sets(case, paths)` — list restart sets as `(date_str, path)` tuples, sorted
@@ -422,7 +423,7 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output purge/move lives in `datamgr.py clean` — see above. Recompiling lives in `build.py`: **no runmgr verb runs `<case>.build`** — see `build.py rebuild`.)
 
 **`check` subcommand:**
-- Probes SLURM for running jobs (`squeue --name <case> -h`)
+- Probes SLURM for queued/running jobs (one `squeue --me -h -o %j` snapshot per process, every case tested against it; `_resolve_status` is the single resolver — QUEUED / RESUBMITTED / WALLCLOCK / RUNNING?)
 - Parses `CaseStatus` file (last non-blank line only), extracts event and timestamp
 - Optional `--info`: appends last 5 lines of `${CASE}.log` event file
 - Optional `--energy`: computes global-mean energy balance from 12 most recent cam.h0 files using ncra + netCDF4
@@ -440,7 +441,7 @@ Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output p
 - Sets `CONTINUE_RUN=TRUE` and sbatches the run script
 - Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
 - Example: `--set STOP_N=10 --set RESUBMIT=5`
-- Status gating: RUNNING/RESUBMITTED → hard block (dropped from the set); everything else proceeds with its status label shown. The label is reported, not judged — `BUILT` (normal after `build.py rebuild`), `FAILED`, and `WALLCLOCK` are all ordinary inputs
+- Status gating: RUNNING/RESUBMITTED/QUEUED → hard block (dropped from the set); everything else proceeds with its status label shown. The label is reported, not judged — `BUILT` (normal after `build.py rebuild`), `FAILED`, and `WALLCLOCK` are all ordinary inputs
 - Preview mode by default; `--execute` then asks one batch `[yes/no]` covering the whole set
 
 **`restart` subcommand:**

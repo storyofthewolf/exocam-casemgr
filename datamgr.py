@@ -64,6 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scan import inspect_case, _rows_to_ordered, find_case_dirs
 from manage_utils import (
     ARCHIVE_MODELS, HIST_MODELS, MODEL_STEM, AVG_HIST_DEFAULT_MODELS,
+    PRIMARY_HIST_STREAM, select_last_monthly_hist,
     ACTIVE_STATUSES,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
@@ -1263,10 +1264,15 @@ def cmd_avg_hist(args, paths):
       --info             Print file count, year span, and total size per model.
                          Read-only; --execute is not needed or used.
 
-      --last N           Average the N most recent model years using ncra.
-                         Avg files (filenames containing "avg") are excluded
-                         from inputs. Output is written into the same hist/
-                         directory as the inputs. An existing avg output file
+      --last N           Average the last 12*N monthly primary-stream files
+                         (cam.h0 / clm2.h0 / cice.h ...) per model using ncra.
+                         Avg products and other streams (h1, h2 ...) never
+                         enter the inputs. The same selection rule backs
+                         `runmgr check --energy -n N --keep`, so the two
+                         tools' avg_last{N}yr products are interchangeable.
+                         Fewer than 12*N months available -> all of them are
+                         averaged, with a warning. Output is written into the
+                         same hist/ directory as the inputs. An existing avg output file
                          is OVERWRITTEN (ncra -O) — the preview flags this.
                          Under --execute a single batch [yes/no] covers all
                          selected cases before any ncra runs.
@@ -1315,34 +1321,28 @@ def cmd_avg_hist(args, paths):
         return
 
     # --- --last N mode ---
+    n_months = 12 * last_n
     actions = []
     for case in cases:
         archive_path = os.path.join(archive, case)
         print(f"\n{case}")
-        _, per_model = _hist_keep_years_filter(archive_path, models, last_n)
-
-        all_years_count = len(set(
-            _hist_year(f)
-            for info in per_model.values()
-            for f in info['keep'] + info['delete']
-            if _hist_year(f)
-        ))
-        if all_years_count < last_n:
-            print(f"  WARNING: only {all_years_count} year(s) available, "
-                  f"averaging all {all_years_count} (requested --last {last_n})")
 
         case_cmds = []  # (model, cmd, outpath, n_inputs)
         for model in models:
-            if model not in per_model:
-                print(f"  {model}/hist: no files found, skipping")
-                continue
-
-            info = per_model[model]
-            hist_dir = info['dir']
-            inputs = sorted(f for f in info['keep'] if 'avg' not in f)
+            hist_dir = os.path.join(archive_path, model, 'hist')
+            # Same selection rule as runmgr check --energy: the last 12*N
+            # monthly primary-stream files, avg products and other streams
+            # excluded — so avg_last{N}yr means the same inputs in both tools.
+            inputs, date_first, date_last = select_last_monthly_hist(
+                hist_dir, model, n_months)
             if not inputs:
-                print(f"  {model}/hist: no non-avg files in last {last_n} year(s), skipping")
+                print(f"  {model}/hist: no monthly {MODEL_STEM.get(model, model)}."
+                      f"{PRIMARY_HIST_STREAM.get(model, 'h0')} files found, skipping")
                 continue
+            if len(inputs) < n_months:
+                print(f"  {model}/hist: WARNING: only {len(inputs)} month(s) "
+                      f"available, averaging all of them (requested --last "
+                      f"{last_n} = {n_months} months)")
 
             stem = MODEL_STEM.get(model, model)
             outfile = f"{case}.{stem}.h0.avg_last{last_n}yr.nc"
@@ -1353,7 +1353,8 @@ def cmd_avg_hist(args, paths):
             cmd = ['ncra', '-O'] + input_paths + [outpath]
 
             overwrite = '  (OVERWRITES existing avg file)' if os.path.exists(outpath) else ''
-            print(f"  {model}/hist: {len(inputs)} input file(s) -> {outfile}{overwrite}")
+            print(f"  {model}/hist: {len(inputs)} input file(s) {date_first}..{date_last} "
+                  f"-> {outfile}{overwrite}")
             if not args.execute:
                 print(f"  [preview] would run: {' '.join(cmd)}")
             case_cmds.append((model, cmd, outpath, len(inputs)))

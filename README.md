@@ -149,7 +149,7 @@ Notes:
   `target − sum(gases)` and is *not* recomputed, so patching a gas shifts total
   surface pressure by the delta. Harmless at trace (ppm) magnitudes; for a real
   composition change, regenerate instead.
-- **`RUNNING`/`RESUBMITTED` cases are flagged, not blocked** — recompiling a queued
+- **`RUNNING`/`RESUBMITTED`/`QUEUED` cases are flagged, not blocked** — recompiling a queued
   case so its next segment picks up the new binary is a supported use. (`patch`
   does not submit.)
 - **Experiment matrices are not updated.** A reminder prints; close the drift by
@@ -365,8 +365,8 @@ python datamgr.py avg my_case --last 10 --execute     # average last 10 timestep
 |---|---|
 | `datamgr.py report` | Disk usage table: CASEDIR, BLD, RUN, HIST, LOGS, REST, TOTAL per case. Bare invocation scans all cases and clobbers `usage.yaml`. Named-case or `--prefix` invocations print only. `--cached` prints last saved snapshot. |
 | `datamgr.py avg` | Inspect or compute time-averaged history files using ncra (NCO). |
-| `runmgr.py submit` | `sbatch` a built case as-is — no `xmlchange`. The launch step after `build.py make`. Requires `<case>.run` (skips with a message if not built). Hard-blocks RUNNING/RESUBMITTED; silent for BUILT/COMPLETE; soft-warns otherwise. Preview-only without `--execute`. |
-| `runmgr.py continue` | Set `CONTINUE_RUN=TRUE`, optionally update `STOP_N` and `RESUBMIT` (default 0), then `sbatch` the run script. Hard-blocks on RUNNING/RESUBMITTED; soft-warns for non-COMPLETE. Preview-only without `--execute`. |
+| `runmgr.py submit` | `sbatch` a built case as-is — no `xmlchange`. The launch step after `build.py make`. Requires `<case>.run` (skips with a message if not built). Hard-blocks RUNNING/RESUBMITTED/QUEUED (a just-submitted case reads `QUEUED`, so it cannot be sbatched twice); every other status proceeds with its label shown. Preview-only without `--execute`. |
+| `runmgr.py continue` | Set `CONTINUE_RUN=TRUE`, optionally update `STOP_N` and `RESUBMIT` (default 0), then `sbatch` the run script. Hard-blocks on RUNNING/RESUBMITTED/QUEUED; every other status proceeds with its label shown. Preview-only without `--execute`. |
 | `runmgr.py restart` | Set `CONTINUE_RUN=FALSE`, apply `--set VAR=VALUE` `xmlchange` calls, then `sbatch`. Use to fix and rerun from scratch after a completed or failed run. Same gating as `continue`. |
 | `datamgr.py clean purge-bld` | Delete `rundir/<case>/bld/` (build objects and logs). Safe after a successful build. `--logs-only` removes only `.o`/`.mod` files and keeps logs. |
 | `datamgr.py clean purge-restarts` | Trim old restart sets in `archive/<case>/rest/`, keeping the N most recent (default: 1). |
