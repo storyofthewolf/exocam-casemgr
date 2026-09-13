@@ -70,6 +70,7 @@ from manage_utils import (
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, _hist_keep_years_filter, hist_info_line, restart_sets,
     preview_hint, batch_confirm, _require_cases,
+    Outcome, EXIT_OK,
 )
 
 DEFAULT_USAGE_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -162,26 +163,37 @@ def load_usage_yaml(path):
 # Batch execution for clean verbs
 # ---------------------------------------------------------------------------
 
-def _run_batch(actions, confirm_phrase, execute):
+def _run_batch(actions, confirm_phrase, execute, outcome=None):
     """Gate and run a list of deferred per-case delete/move callables.
 
     `actions` is the list of zero-arg callables built during the preview pass
     (each prints its own result). Ergonomics match retire / the runmgr
     run-control verbs: preview by default, and under --execute a *single* batch
     [yes/no] covering the whole set — not one prompt per case.
+
+    `outcome` is the caller's Outcome tally (skips it counted during the
+    preview); this adds the abort and any per-case OSError, and returns the
+    exit code. A failing action never stops the rest of the batch.
     """
+    outcome = outcome or Outcome()
     if not actions:
         # Nothing actionable; previews (skips) already printed by the caller.
         preview_hint(execute)
-        return
+        return outcome.exit_code()
     if not execute:
         preview_hint(execute)
-        return
+        return outcome.exit_code()
     if not batch_confirm(confirm_phrase, len(actions)):
         print("  Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
     for do in actions:
-        do()
+        try:
+            do()
+        except OSError as e:
+            print(f"  ERROR: {e}")
+            outcome.fail()
+    return outcome.exit_code()
 
 
 def _probe_case_status(case, paths):
@@ -222,11 +234,13 @@ def cmd_purge_bld(args, paths):
         return
 
     label = 'purge' if args.execute else 'preview'
+    outcome = Outcome()
     actions = []
     for case in cases:
         bld = os.path.join(rundir, case, 'bld')
         if not os.path.exists(bld):
             print(f"  {case}: bld/ not found, skipping")
+            outcome.skip()
             continue
         size = dir_size_bytes(bld)
         if args.logs_only:
@@ -252,7 +266,7 @@ def cmd_purge_bld(args, paths):
                 print(f"  {case}: bld/ deleted ({fmt_size(size)} freed)")
         actions.append(_do)
 
-    _run_batch(actions, 'Delete build artifacts for', args.execute)
+    return _run_batch(actions, 'Delete build artifacts for', args.execute, outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -281,11 +295,13 @@ def cmd_purge_restarts(args, paths):
     if not cases:
         return
 
+    outcome = Outcome()
     actions = []
     for case in cases:
         sets = restart_sets(case, paths)
         if not sets:
             print(f"  {case}: no restart sets found, skipping")
+            outcome.skip()
             continue
 
         to_keep   = sets[-args.keep:] if args.keep > 0 else []
@@ -296,6 +312,7 @@ def cmd_purge_restarts(args, paths):
 
         if not to_delete:
             print(f"  {case}: {len(sets)} set(s), nothing to purge (keep={args.keep})")
+            outcome.skip()
             continue
 
         status = _probe_case_status(case, paths)
@@ -311,7 +328,7 @@ def cmd_purge_restarts(args, paths):
             print(f"    {case}: deleted {len(to_delete)} sets ({fmt_size(delete_size)} freed)")
         actions.append(_do)
 
-    _run_batch(actions, 'Delete restart sets for', args.execute)
+    return _run_batch(actions, 'Delete restart sets for', args.execute, outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +375,7 @@ def cmd_purge_hist(args, paths):
     if not cases:
         return
 
+    outcome = Outcome()
     actions = []
     for case in cases:
         archive_path = os.path.join(archive, case)
@@ -367,6 +385,7 @@ def cmd_purge_hist(args, paths):
                 archive_path, models, args.keep_years)
             if not per_model:
                 print(f"  {case}: no hist/ directories found, skipping")
+                outcome.skip()
                 continue
             if args.keep_years == 0:
                 print(f"  {case}: keeping NO years (explicit --keep-years 0 delete-all)")
@@ -393,10 +412,12 @@ def cmd_purge_hist(args, paths):
                 case_total += total
             if not targets:
                 print(f"  {case}: no hist/ directories found, skipping")
+                outcome.skip()
                 continue
 
         if not targets:
             print(f"  {case}: nothing to delete, skipping")
+            outcome.skip()
             continue
 
         status = _probe_case_status(case, paths)
@@ -413,7 +434,7 @@ def cmd_purge_hist(args, paths):
             print(f"    {case}: deleted ({fmt_size(case_total)} freed)")
         actions.append(_do)
 
-    _run_batch(actions, 'Delete history files for', args.execute)
+    return _run_batch(actions, 'Delete history files for', args.execute, outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +466,7 @@ def cmd_purge_logs(args, paths):
     if not cases:
         return
 
+    outcome = Outcome()
     actions = []
     for case in cases:
         case_total = 0
@@ -473,6 +495,7 @@ def cmd_purge_logs(args, paths):
 
         if not targets:
             print(f"  {case}: no log files found, skipping")
+            outcome.skip()
             continue
 
         print(f"  {case}: {fmt_size(case_total)} across {len(targets)} log location(s)")
@@ -487,7 +510,7 @@ def cmd_purge_logs(args, paths):
             print(f"    {case}: deleted ({fmt_size(case_total)} freed)")
         actions.append(_do)
 
-    _run_batch(actions, 'Delete log files for', args.execute)
+    return _run_batch(actions, 'Delete log files for', args.execute, outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +544,7 @@ def cmd_move_hist(args, paths):
     if not cases:
         return
 
+    outcome = Outcome()
     actions = []
     for case in cases:
         status = _probe_case_status(case, paths)
@@ -544,6 +568,10 @@ def cmd_move_hist(args, paths):
                       f"will be SKIPPED (left in archive)")
             case_moves.append((src, dst, files))
 
+        if not case_moves:
+            print(f"  {case}: no hist files found, skipping")
+            outcome.skip()
+
         if case_moves:
             def _do(case=case, case_moves=case_moves):
                 for src, dst, files in case_moves:
@@ -562,7 +590,7 @@ def cmd_move_hist(args, paths):
                     print(msg)
             actions.append(_do)
 
-    _run_batch(actions, 'Move history files for', args.execute)
+    return _run_batch(actions, 'Move history files for', args.execute, outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -960,6 +988,7 @@ def cmd_retire_case(args, paths):
     # runmgr run-control verbs. plans[case] caches the built plan so the
     # execute pass doesn't rebuild.
     plans = {}
+    outcome = Outcome()
 
     # Pass 1: build and print all plans.
     for case in cases:
@@ -983,6 +1012,7 @@ def cmd_retire_case(args, paths):
                       f"CaseStatus label and may be stale (a crashed run also "
                       f"reads 'run started'). Re-run where squeue works to "
                       f"verify and retire.")
+            outcome.skip()
             continue
 
         casedir_path = os.path.join(caseroot, case) if caseroot else ''
@@ -1021,6 +1051,7 @@ def cmd_retire_case(args, paths):
                 else:
                     print(f"  {case}: skipped — resolve the existing long-term "
                           f"record by hand, then re-run retire.")
+                    outcome.skip()
                     continue
 
         sz = case_sizes(case, paths)
@@ -1145,9 +1176,9 @@ def cmd_retire_case(args, paths):
 
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
     if not plans:
-        return
+        return outcome.exit_code()
 
     # Single batch gate covering all selected cases (explicit names or
     # --prefix). batch_confirm requires the literal 'yes' and treats
@@ -1162,7 +1193,8 @@ def cmd_retire_case(args, paths):
     action = 'PURGE — complete erasure of' if args.purge else 'Retire'
     if not batch_confirm(action, len(plans)):
         print("  Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     # Pass 2: execute using cached plans.
     for case in list(plans.keys()):
@@ -1184,6 +1216,7 @@ def cmd_retire_case(args, paths):
         if not p['overwrite_lt'] and os.path.exists(lt_case_dir):
             print(f"\n  {case}: BLOCKED — a long-term record appeared at "
                   f"{lt_case_dir} since the preview; skipping.")
+            outcome.skip()
             continue
 
         print(f"\n  Retiring: {case}")
@@ -1246,6 +1279,7 @@ def cmd_retire_case(args, paths):
         print(f"  Done: {case}  "
               f"(freed {fmt_size(deleted_bytes)} from cesm_scratch, "
               f"kept {fmt_size(kept_bytes)} in long-term)")
+    return outcome.exit_code()
 
 
 # ---------------------------------------------------------------------------
@@ -1322,6 +1356,7 @@ def cmd_avg_hist(args, paths):
 
     # --- --last N mode ---
     n_months = 12 * last_n
+    outcome = Outcome()
     actions = []
     for case in cases:
         archive_path = os.path.join(archive, case)
@@ -1359,8 +1394,11 @@ def cmd_avg_hist(args, paths):
                 print(f"  [preview] would run: {' '.join(cmd)}")
             case_cmds.append((model, cmd, outpath, len(inputs)))
 
+        if not case_cmds:
+            outcome.skip()
+
         if case_cmds:
-            def _do(case=case, case_cmds=case_cmds):
+            def _do(case=case, case_cmds=case_cmds, outcome=outcome):
                 for model, cmd, outpath, n in case_cmds:
                     print(f"  {case}/{model}: running ncra ({n} file(s))...")
                     try:
@@ -1373,11 +1411,12 @@ def cmd_avg_hist(args, paths):
                         print(result.stderr, file=sys.stderr)
                         print(f"  {case}/{model}: ERROR: ncra exited with code "
                               f"{result.returncode}")
+                        outcome.fail()
                         continue
                     print(f"  Written: {outpath}")
             actions.append(_do)
 
-    _run_batch(actions, 'Compute time-averaged history for', args.execute)
+    return _run_batch(actions, 'Compute time-averaged history for', args.execute, outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -1608,10 +1647,13 @@ def main():
         print(f"WARNING: paths not configured: {', '.join(missing_paths)}. "
               f"Set them in config_registry.yaml.", file=sys.stderr)
 
+    # Every verb returns an exit code (see manage_utils EXIT_*); a read-only
+    # verb that returns None exits 0.
     if args.command == 'clean':
-        CLEAN_COMMANDS[args.clean_command](args, paths)
+        code = CLEAN_COMMANDS[args.clean_command](args, paths)
     else:
-        COMMANDS[args.command](args, paths)
+        code = COMMANDS[args.command](args, paths)
+    sys.exit(code or EXIT_OK)
 
 
 if __name__ == '__main__':

@@ -56,7 +56,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manage_utils import (
     ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES, MODEL_STEM,
-    select_last_monthly_hist,
+    select_last_monthly_hist, Outcome, EXIT_OK,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
@@ -401,11 +401,13 @@ def cmd_xml(args, paths):
         sys.exit("ERROR: xml requires at least one --query VAR or --change VAR=VALUE.")
 
     # Phase 1 — preview every case; collect the ones eligible for --change.
+    outcome = Outcome()
     actionable = []  # case_dirs that have a real dir and pending changes
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            outcome.fail()
             continue
 
         # Read current values for everything we're about to show or change.
@@ -432,18 +434,19 @@ def cmd_xml(args, paths):
             actionable.append((case, case_dir))
 
     if not change_vars:
-        return
+        return outcome.exit_code()
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
     if not actionable:
         print("\nNo cases to change.")
-        return
+        return outcome.exit_code()
 
     # Phase 2 — single batch gate, then apply.
     if not batch_confirm("Apply XML changes to", len(actionable)):
         print("Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     for case, case_dir in actionable:
         try:
@@ -451,8 +454,10 @@ def cmd_xml(args, paths):
                 _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
             print(f"  {case}: ERROR: {e}")
+            outcome.fail()
             continue
         print(f"  {case}: applied {len(change_vars)} change(s)")
+    return outcome.exit_code()
 
 
 def cmd_continue(args, paths):
@@ -491,11 +496,13 @@ def cmd_continue(args, paths):
     set_vars = _parse_set_pairs(args.set)
 
     # Phase 1 — preview; hard-block active jobs; collect actionable cases.
+    outcome = Outcome()
     actionable = []  # (case, case_dir)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            outcome.fail()
             continue
 
         # Pre-check the run script before anything else: submit checks it,
@@ -505,6 +512,7 @@ def cmd_continue(args, paths):
         if not os.path.isfile(run_script):
             print(f"  {case}: SKIP — not built ({case}.run not found). "
                   f"Run build.py make first.")
+            outcome.skip()
             continue
 
         cur_continue = _read_case_xml_var(case_dir, 'CONTINUE_RUN') or '?'
@@ -513,6 +521,7 @@ def cmd_continue(args, paths):
         status_label = _probe_status(case_dir, case)
         if status_label in ACTIVE_STATUSES:
             print(f"  {case}: [{status_label}] — skipping (job already active)")
+            outcome.skip()
             continue
 
         print(f"  {case}  [{status_label}]")
@@ -527,15 +536,16 @@ def cmd_continue(args, paths):
 
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
     if not actionable:
         print("\nNo cases to submit.")
-        return
+        return outcome.exit_code()
 
     # Phase 2 — single batch gate, then apply xmlchange + sbatch.
     if not batch_confirm("Continue (CONTINUE_RUN=TRUE) and submit", len(actionable)):
         print("Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     for case, case_dir in actionable:
         try:
@@ -544,6 +554,7 @@ def cmd_continue(args, paths):
                 _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
             print(f"  {case}: ERROR: {e}")
+            outcome.fail()
             continue
 
         ok, detail = submit_case(case_dir, case)
@@ -551,6 +562,8 @@ def cmd_continue(args, paths):
             print(f"  {case}: submitted job {detail}")
         else:
             print(f"  {case}: ERROR: {detail}")
+            outcome.fail()
+    return outcome.exit_code()
 
 
 # ---------------------------------------------------------------------------
@@ -612,11 +625,13 @@ def cmd_restart(args, paths):
     set_vars = _parse_set_pairs(args.set)
 
     # Phase 1 — preview; hard-block active jobs; collect actionable cases.
+    outcome = Outcome()
     actionable = []  # (case, case_dir, rptr_files)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            outcome.fail()
             continue
 
         # Pre-check the run script before anything else (same rationale as
@@ -625,6 +640,7 @@ def cmd_restart(args, paths):
         if not os.path.isfile(run_script):
             print(f"  {case}: SKIP — not built ({case}.run not found). "
                   f"Run build.py make first.")
+            outcome.skip()
             continue
 
         # Read current values for CONTINUE_RUN and each var being changed
@@ -634,6 +650,7 @@ def cmd_restart(args, paths):
         status_label = _probe_status(case_dir, case)
         if status_label in ACTIVE_STATUSES:
             print(f"  {case}: [{status_label}] — skipping (job already active)")
+            outcome.skip()
             continue
 
         print(f"  {case}  [{status_label}]")
@@ -663,15 +680,16 @@ def cmd_restart(args, paths):
 
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
     if not actionable:
         print("\nNo cases to submit.")
-        return
+        return outcome.exit_code()
 
     # Phase 2 — single batch gate, then apply xmlchange + sbatch.
     if not batch_confirm("Restart (CONTINUE_RUN=FALSE) and submit", len(actionable)):
         print("Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     for case, case_dir, rptr_files in actionable:
         try:
@@ -680,6 +698,7 @@ def cmd_restart(args, paths):
                 _apply_xmlchange(case_dir, var, val)
         except RuntimeError as e:
             print(f"  {case}: ERROR: {e}")
+            outcome.fail()
             continue
 
         if rptr_files:
@@ -687,6 +706,7 @@ def cmd_restart(args, paths):
                 _reset_rpointers(case, paths, rptr_files)
             except (OSError, RuntimeError) as e:
                 print(f"  {case}: ERROR: failed to reset rpointer.*: {e}")
+                outcome.fail()
                 continue
 
         ok, detail = submit_case(case_dir, case)
@@ -694,6 +714,8 @@ def cmd_restart(args, paths):
             print(f"  {case}: submitted job {detail}")
         else:
             print(f"  {case}: ERROR: {detail}")
+            outcome.fail()
+    return outcome.exit_code()
 
 
 # ---------------------------------------------------------------------------
@@ -730,22 +752,26 @@ def cmd_submit(args, paths):
     cases = _resolve_cases(args, paths, 'submit')
 
     # Phase 1 — preview; hard-block active jobs and unbuilt cases; collect the rest.
+    outcome = Outcome()
     actionable = []  # (case, case_dir)
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            outcome.fail()
             continue
 
         run_script = os.path.join(case_dir, f'{case}.run')
         if not os.path.isfile(run_script):
             print(f"  {case}: SKIP — not built ({case}.run not found). "
                   f"Run build.py make first.")
+            outcome.skip()
             continue
 
         status_label = _probe_status(case_dir, case)
         if status_label in ACTIVE_STATUSES:
             print(f"  {case}: [{status_label}] — skipping (job already active)")
+            outcome.skip()
             continue
 
         print(f"  {case}  [{status_label}]")
@@ -754,15 +780,16 @@ def cmd_submit(args, paths):
 
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
     if not actionable:
         print("\nNo cases to submit.")
-        return
+        return outcome.exit_code()
 
     # Phase 2 — single batch gate, then sbatch.
     if not batch_confirm("Submit", len(actionable)):
         print("Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     for case, case_dir in actionable:
         ok, detail = submit_case(case_dir, case)
@@ -770,6 +797,8 @@ def cmd_submit(args, paths):
             print(f"  {case}: submitted job {detail}")
         else:
             print(f"  {case}: ERROR: {detail}")
+            outcome.fail()
+    return outcome.exit_code()
 
 
 # ---------------------------------------------------------------------------
@@ -1517,20 +1546,16 @@ def main():
         print(f"WARNING: paths not configured: {', '.join(missing_paths)}. "
               f"Set them in config_registry.yaml.", file=sys.stderr)
 
-    if args.group == 'check':
-        cmd_check(args, paths)
-
-    elif args.group == 'xml':
-        cmd_xml(args, paths)
-
-    elif args.group == 'continue':
-        cmd_continue(args, paths)
-
-    elif args.group == 'restart':
-        cmd_restart(args, paths)
-
-    elif args.group == 'submit':
-        cmd_submit(args, paths)
+    dispatch = {
+        'check':    cmd_check,
+        'xml':      cmd_xml,
+        'continue': cmd_continue,
+        'restart':  cmd_restart,
+        'submit':   cmd_submit,
+    }
+    # Every verb returns an exit code (see manage_utils EXIT_*); a read-only
+    # verb that returns None exits 0.
+    sys.exit(dispatch[args.group](args, paths) or EXIT_OK)
 
 
 if __name__ == '__main__':

@@ -150,6 +150,25 @@ Status handling within the preview:
 
 `xml --query` (no `--change`) is read-only and never gates. `batch_confirm(action, n)` in `manage_utils.py` is the shared gate helper (runmgr's former private `_batch_confirm` copy was removed); `submit_case()` (in `manage_utils.py`) is the single `sbatch` path used by all three submitting verbs — `continue`/`restart` no longer carry their own inline `subprocess.run(['sbatch', …])` block. `_apply_xmlchange` raises `RuntimeError` (caught per-case) when `./xmlchange` is missing, so a bad case dir reports an error instead of crashing the batch.
 
+## Exit codes — the interface for a wrapping script or agent
+
+Every verb in `build.py`, `runmgr.py`, and `datamgr.py` returns an exit code from one convention (`manage_utils.py`: `EXIT_*` constants + the `Outcome` tally; each `cmd_*` returns `outcome.exit_code()` and `main()` passes it to `sys.exit`). Added 2026-09-13 (review finding 3): before this, most verbs printed per-case `ERROR`/`SKIP` lines and exited 0, so a caller could not tell success from partial or total failure. The terminal output is for people; the exit code is what an agent wrapping these tools should branch on.
+
+| code | name | meaning |
+|---|---|---|
+| 0 | `EXIT_OK` | every requested case was acted on (or, in preview, was actionable) and nothing went wrong |
+| 1 | `EXIT_FAILED` | at least one per-case error (missing case dir, `xmlchange`/`sbatch`/`ncra`/compile failure, a `generate` case skipped for errors), or a fatal config/selection error (every `sys.exit("ERROR: …")`) |
+| 2 | `EXIT_USAGE` | argparse's own code for bad command-line usage |
+| 3 | `EXIT_PARTIAL` | nothing failed, but at least one requested case was **skipped by policy**: an active job hard-blocked (`RUNNING`/`RESUBMITTED`/`QUEUED`), a case not built, nothing to do for it (`bld/ not found`, no restart sets, no hist files), a duplicate declined at retire |
+| 4 | `EXIT_ABORTED` | the batch `[yes/no]` gate was declined (or EOF/interrupt) |
+
+- **Precedence** when several apply: `FAILED > ABORTED > PARTIAL > OK`. An abort after a preview that already reported an error is still 1 — the caller must look at that case either way.
+- **Preview mode uses the same rule** over what the preview found, so a dry run already tells a caller what `--execute` would face (`submit` on a `QUEUED` case previews as 3).
+- **Read-only verbs** (`check`, `report`, `xml --query`, `avg --info`, a bare `make` listing) exit 0 unless they cannot run at all.
+- **One failed case never stops the batch** — the tally counts, it does not branch. `datamgr.py`'s `_run_batch` also now catches a per-case `OSError` (reports it, counts it, continues) instead of crashing mid-batch.
+- `make --send-it`: a build failure *or* a submission failure is 1; `_cmd_send_it` returns the not-submitted count.
+- `tests/test_exit_codes.py` drives the real CLIs against a temp fixture (fake `squeue` on PATH) for each code.
+
 ### restart — rpointer.* reset for branch/hybrid cases
 
 `restart` sets `CONTINUE_RUN=FALSE` to relaunch from `RUN_REFCASE`/`RUN_REFDATE`, but CESM's component models read `run/rpointer.*` for the actual restart filenames — independent of those XML vars. A prior run segment (e.g. `continue`) advances `rpointer.*` past the reference point; the reference `.r.`/`.i.` files are still sitting untouched in `run/`, but the pointer no longer names them, and the restart fails at startup. This surfaced in real operation (2026-07-27).
@@ -443,14 +462,15 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ## Session handoff — 2026-09-13
 
-**Three findings from `codex-astra-review.md` closed** (review findings 2, 1, 4; findings 3 and 5 and the larger "experiment as unit of work" program are deliberately untouched — see the review). All fixture-verified locally; `tests/` now holds 38 tests across four files.
+**Four findings from `codex-astra-review.md` closed** (review findings 2, 1, 4, then 3). Finding 5 (SE newcase template paths) is **declined by owner decision**: SE is never used in practice and is likely to be dropped from future ExoCAM revisions — don't fix it. The larger "experiment as unit of work" program is untouched; the owner's stated direction is **increasing agent wrapping of the existing casemgr interfaces**, which is what the exit-code work serves. All fixture-verified locally; `tests/` now holds 54 tests across five files.
 
 1. **`QUEUED` status + one resolver (finding 2).** `_resolve_status()` (runmgr.py) consults the squeue snapshot for every case; a queued job whose last CaseStatus event is not `run started`/`run SUCCESSFUL` reads `QUEUED`, which is in `ACTIVE_STATUSES`. Closes a real double-submit hole: a just-submitted case read `BUILT` and `submit` did not block it. `cmd_check`'s private copy of the probe logic is gone. `tests/test_status_probe.py`.
 2. **Missing F90 template is an error (finding 1).** `_missing_template_error()` (build.py): newcase → error; clone naming any `EXO_PARAMS` → error listing them; clone naming none → warning + `inherited unchanged` comment. No more `install manually` placeholder. Practical consequence: **clone matrices that set exoplanet_mod parameters must be generated on Discover.** `tests/test_missing_template.py`.
+4. **Exit codes (finding 3).** See "Exit codes" above. `Outcome` + `EXIT_*` in manage_utils.py; every `cmd_*` returns a code; `main()` in all three tools does `sys.exit(code or 0)`. Plain `generate` now exits 1 when any case is skipped for errors (it was 0; only `--verify` failed). `make`'s abort is 4 instead of `sys.exit("Aborted.")`. `patch` also now flags `QUEUED` alongside `RESUBMITTED`. `tests/test_exit_codes.py`.
 3. **One history-selection rule (finding 4).** `select_last_monthly_hist()` + `PRIMARY_HIST_STREAM` (manage_utils.py) back both `runmgr check --energy` and `datamgr avg --last`. `datamgr avg --last N` now means the last `12*N` monthly primary-stream files (was: last N calendar-year labels over every file, so a partial year shortened the window and h1 streams leaked in). Preview shows the `YYYY-MM..YYYY-MM` span; a short record warns. `_hist_keep_years_filter` is still what `purge-hist --keep-years` uses — that one is about *years on disk*, not averaging inputs, and is unchanged. `tests/test_hist_selection.py`.
 
 ### Good starting points for next session
-- Review findings 3 (exit codes: `generate`/`submit`/`make --send-it` exit 0 after per-case errors) and 5 (SE newcase copies `configs/${CONFIG_TYPE}` which does not exist; needs a config→dir map) are verified real and still open.
+- Agent wrapping is the stated direction. The exit codes are the first structured interface; the next candidates from the review are persisting the job ID `submit_case()` already returns, streaming build output to a per-attempt log, and a `--yes`/non-interactive flag for the batch gate — none started.
 - Clone matrices silently ignore `nlev`/`cloud_scheme` (never written to `CAM_CONFIG_OPTS`); a generate-time warning like the ncdata one would close it.
 - README bare-`make` examples and the example matrix's `exo_build.py`/staged-Fortran text are stale.
 

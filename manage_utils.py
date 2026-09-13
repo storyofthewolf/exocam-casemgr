@@ -42,6 +42,69 @@ PRIMARY_HIST_STREAM = {
 # that was just submitted); without it `submit` could sbatch such a case twice.
 ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED', 'QUEUED')
 
+# ---------------------------------------------------------------------------
+# Exit codes — one convention for every verb in build.py / runmgr.py / datamgr.py
+# ---------------------------------------------------------------------------
+# The terminal output is for people; the exit code is the interface for a
+# wrapping script or agent. Before 2026-09-13 most verbs printed per-case
+# ERROR lines and exited 0, so a caller could not tell success from partial
+# or total failure. The four outcomes a caller needs to distinguish:
+#
+#   0  EXIT_OK       every requested case was acted on (or, in preview mode,
+#                    was actionable) and nothing went wrong
+#   1  EXIT_FAILED   at least one per-case error (bad case dir, xmlchange /
+#                    sbatch / ncra / compile failure), or a fatal config or
+#                    selection error (every sys.exit("ERROR: ...") is 1)
+#   2  EXIT_USAGE    argparse's own code for bad command-line usage
+#   3  EXIT_PARTIAL  nothing failed, but at least one requested case was
+#                    skipped by policy — an active job hard-blocked, a case
+#                    not built, nothing to do for it, a duplicate declined
+#   4  EXIT_ABORTED  the [yes/no] gate was declined (or EOF / interrupt)
+#
+# Precedence when several apply: FAILED > ABORTED > PARTIAL > OK. An abort
+# after a preview that already reported an error is still a failure — the
+# caller must look at that case either way. Preview mode (no --execute) uses
+# the same rule over what the preview found, so a dry run already tells a
+# caller what --execute would face. Read-only verbs (check, report, xml
+# --query, avg --info) exit 0 unless they cannot run at all.
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_USAGE = 2
+EXIT_PARTIAL = 3
+EXIT_ABORTED = 4
+
+
+class Outcome:
+    """Per-invocation tally of what happened to the requested cases.
+
+    Verbs call fail() / skip() / abort() as they go and return exit_code()
+    to main(), which passes it to sys.exit. Counting rather than branching
+    keeps the batch semantics: one failed case never stops the others.
+    """
+
+    def __init__(self):
+        self.failed = 0
+        self.skipped = 0
+        self.aborted = False
+
+    def fail(self, n=1):
+        self.failed += n
+
+    def skip(self, n=1):
+        self.skipped += n
+
+    def abort(self):
+        self.aborted = True
+
+    def exit_code(self):
+        if self.failed:
+            return EXIT_FAILED
+        if self.aborted:
+            return EXIT_ABORTED
+        if self.skipped:
+            return EXIT_PARTIAL
+        return EXIT_OK
+
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'config_registry.yaml')
 

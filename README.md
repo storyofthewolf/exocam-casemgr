@@ -124,6 +124,20 @@ step. Either way, `submit` makes no `xmlchange` calls — it runs exactly what y
 built. Use `runmgr.py continue` / `restart` instead to manage a case that has
 already run.
 
+### Exit codes
+
+Every verb exits with one of five codes, so a wrapping script can branch on the outcome without parsing the output:
+
+| code | meaning |
+|---|---|
+| 0 | every requested case was acted on (or previewed as actionable), nothing wrong |
+| 1 | at least one per-case error, or a fatal config/selection error |
+| 2 | bad command-line usage |
+| 3 | nothing failed, but some requested case was skipped by policy (active job, not built, nothing to do) |
+| 4 | the `[yes/no]` gate was declined |
+
+Precedence: 1 > 4 > 3 > 0. Preview mode (no `--execute`) reports the same code `--execute` would face. Read-only verbs (`check`, `report`, `xml --query`, `avg --info`) exit 0.
+
 ### Changing a compiled-in parameter (`build.py patch`)
 
 `exoplanet_mod.F90` parameters are Fortran `parameter` constants compiled into the

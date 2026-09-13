@@ -50,7 +50,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import compute_pstd_bar
 from manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, batch_confirm, preview_hint,
-                          ACTIVE_STATUSES, DEFAULT_CONFIG)
+                          ACTIVE_STATUSES, DEFAULT_CONFIG,
+                          Outcome, EXIT_OK, EXIT_FAILED, EXIT_ABORTED)
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {
@@ -1712,12 +1713,13 @@ def cmd_generate(args):
         if grand_verify_warned:
             summary += f" {grand_verify_warned} case(s) raised warnings."
         print(summary + " No scripts generated.")
-        if grand_verify_failed:
-            sys.exit(1)
-        return
+        return EXIT_FAILED if grand_verify_failed else EXIT_OK
 
     print(f"\nTotal: {grand_generated} script(s) generated, {grand_errors} "
           f"case(s) skipped due to errors across {len(matrix_paths)} matrix file(s).")
+    # A case skipped for errors is a failure of the request, not a note —
+    # exit 1 so a wrapping script sees it (same as --verify already did).
+    return EXIT_FAILED if grand_errors else EXIT_OK
 
 
 def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
@@ -1950,9 +1952,10 @@ def cmd_make(args):
         answer = input("Run these scripts? [yes/no]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        sys.exit("Aborted.")
+        answer = 'no'
     if answer not in ('yes', 'y'):
-        sys.exit("Aborted.")
+        print("Aborted.")
+        return EXIT_ABORTED
 
     logs_dir = os.path.join(scripts_dir, 'logs')
     os.makedirs(logs_dir, exist_ok=True)
@@ -2005,11 +2008,12 @@ def cmd_make(args):
         print(f"  build.py rebuild {' '.join(passed[:3])}"
               f"{' ...' if len(passed) > 3 else ''} --execute")
 
+    submit_failed = 0
     if getattr(args, 'send_it', False) and passed:
-        _cmd_send_it(passed, scripts_dir, all_scripts)
+        submit_failed = _cmd_send_it(passed, scripts_dir, all_scripts)
 
-    if failed:
-        sys.exit(1)
+    # Build failures and submission failures are both failures of the request.
+    return EXIT_FAILED if (failed or submit_failed) else EXIT_OK
 
 
 _SEND_IT_VERBS = [
@@ -2030,6 +2034,7 @@ def _extract_caseroot(script_path):
 
 
 def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
+    """sbatch every passed case. Returns the number that could not be submitted."""
     script_map = {
         os.path.basename(s)[:-len('_build.sh')]: s for s in all_scripts
     }
@@ -2037,25 +2042,31 @@ def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
     print(f"\n  SEND IT")
     print(bar)
     submitted = 0
+    not_submitted = 0
     for case_name in passed_cases:
         verb = random.choice(_SEND_IT_VERBS)
         script_path = script_map.get(case_name)
         if not script_path:
             print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → script not found, skipping")
+            not_submitted += 1
             continue
         caseroot_base = _extract_caseroot(script_path)
         if not caseroot_base:
             print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → CASEROOT not found in script, skipping")
+            not_submitted += 1
             continue
         caseroot = os.path.join(caseroot_base, case_name)
         ok, detail = submit_case(caseroot, case_name)
         if not ok:
-            print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → {detail}")
+            print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → {detail}")
+            not_submitted += 1
             continue
         print(f"  {verb:<{_VERB_WIDTH}}  {case_name} → job {detail}")
         submitted += 1
     print(bar)
-    print(f"  {submitted} job{'s' if submitted != 1 else ''} submitted.")
+    print(f"  {submitted} job{'s' if submitted != 1 else ''} submitted"
+          + (f", {not_submitted} NOT submitted (see ERROR lines)." if not_submitted else "."))
+    return not_submitted
 
 
 def _parse_patch_pairs(items):
@@ -2113,12 +2124,14 @@ def cmd_patch(args):
 
     from runmgr import _probe_status
 
+    outcome = Outcome()
     actions, flagged = [], []
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         exo_path = os.path.join(case_dir, EXO_MOD_RELPATH)
         if not os.path.exists(exo_path):
             print(f"  {case}: ERROR: not found: {EXO_MOD_RELPATH}")
+            outcome.fail()
             continue
 
         new_text, applied = patch_exoplanet_mod(exo_path, updates)
@@ -2126,6 +2139,7 @@ def cmd_patch(args):
         if missing:
             print(f"  {case}: ERROR: no active parameter line for: "
                   f"{', '.join(missing)}")
+            outcome.fail()
             continue
 
         status = _probe_status(case_dir, case)
@@ -2133,7 +2147,7 @@ def cmd_patch(args):
         if status in ('RUNNING', 'RUNNING?'):
             note = f'  <- {status}: job is live, recompiling swaps the binary mid-run'
             flagged.append(case)
-        elif status == 'RESUBMITTED':
+        elif status in ('RESUBMITTED', 'QUEUED'):
             note = f'  <- {status}: queued; next segment picks up the new binary'
             flagged.append(case)
 
@@ -2142,17 +2156,18 @@ def cmd_patch(args):
         actions.append((case, case_dir, exo_path, new_text))
 
     if not actions:
-        return
+        return outcome.exit_code()
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
 
     if flagged:
         print(f"\n  {len(flagged)} case(s) have an active or queued job "
               f"(see flags above).")
     if not batch_confirm(f"Patch exoplanet_mod.F90 and rebuild", len(actions)):
         print("Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     built = 0
     failed = []
@@ -2176,6 +2191,8 @@ def cmd_patch(args):
               "build error is resolved.")
     print("  NOTE: experiment matrices are NOT updated -- edit the matrix "
           "`base:` block to keep future regenerates consistent.")
+    outcome.fail(len(failed))
+    return outcome.exit_code()
 
 
 def cmd_rebuild(args):
@@ -2254,17 +2271,20 @@ def cmd_rebuild(args):
     from runmgr import _probe_status
 
     # Phase 1 -- preview; collect actionable cases.
+    outcome = Outcome()
     actionable = []  # (case, case_dir)
     flagged = []
     for case in cases:
         case_dir = os.path.join(caseroot, case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
+            outcome.fail()
             continue
 
         build_script = os.path.join(case_dir, f'{case}.build')
         if not os.path.isfile(build_script):
             print(f"  {case}: SKIP — not built ({case}.build not found).")
+            outcome.skip()
             continue
 
         # Active jobs are flagged, not blocked: rebuild does not resubmit, so
@@ -2281,10 +2301,10 @@ def cmd_rebuild(args):
 
     if not args.execute:
         preview_hint(args.execute)
-        return
+        return outcome.exit_code()
     if not actionable:
         print("\nNo cases to rebuild.")
-        return
+        return outcome.exit_code()
 
     # Phase 2 -- single batch gate, then compile.
     if flagged:
@@ -2292,7 +2312,8 @@ def cmd_rebuild(args):
               f"(see flags above).")
     if not batch_confirm("Rebuild", len(actionable)):
         print("Aborted.")
-        return
+        outcome.abort()
+        return outcome.exit_code()
 
     built = 0
     failed = []
@@ -2312,6 +2333,8 @@ def cmd_rebuild(args):
               "(CONTINUE_RUN=TRUE), or relaunch from the reference point with "
               "`runmgr.py restart`.")
         print("        See `build.py rebuild --help` for which one to use.")
+    outcome.fail(len(failed))
+    return outcome.exit_code()
 
 
 def main():
@@ -2385,14 +2408,15 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == 'generate':
-        cmd_generate(args)
-    elif args.command == 'make':
-        cmd_make(args)
-    elif args.command == 'patch':
-        cmd_patch(args)
-    elif args.command == 'rebuild':
-        cmd_rebuild(args)
+    dispatch = {
+        'generate': cmd_generate,
+        'make':     cmd_make,
+        'patch':    cmd_patch,
+        'rebuild':  cmd_rebuild,
+    }
+    # Every verb returns an exit code (see manage_utils EXIT_*); a verb that
+    # returns None (e.g. make's bare listing) exits 0.
+    sys.exit(dispatch[args.command](args) or EXIT_OK)
 
 
 if __name__ == '__main__':
