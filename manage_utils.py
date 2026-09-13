@@ -6,6 +6,7 @@ Constants, path-loading, disk helpers, and case-selection primitives used by
 both tools. No subcommand logic lives here.
 """
 
+import datetime
 import os
 import re
 import subprocess
@@ -418,12 +419,55 @@ def _require_cases(all_cases, args):
 # Job submission (shared by runmgr.py submit and build.py make --send-it)
 # ---------------------------------------------------------------------------
 
-def submit_case(case_dir, case_name):
+# Per-case submission history, written by submit_case() into the case dir.
+# One line per sbatch: "<ISO timestamp> <job_id> <verb>". CaseStatus cannot
+# serve this purpose — it is inherited verbatim by clones and never records
+# the SLURM job ID — and the queue forgets a job the moment it leaves, so
+# without the ID the tools could only *infer* what happened to a run
+# (the RUNNING? label). With it, runmgr asks sacct for SLURM's own verdict.
+JOB_LOG_NAME = 'casemgr_jobs.log'
+
+
+def record_job(case_dir, job_id, verb):
+    """Append one submission line to <case_dir>/casemgr_jobs.log.
+
+    Best effort: a case dir that cannot be written to must not turn a
+    successful sbatch into a reported failure — the job is already queued.
+    Returns True if the line was written.
+    """
+    try:
+        with open(os.path.join(case_dir, JOB_LOG_NAME), 'a') as f:
+            f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} "
+                    f"{job_id} {verb}\n")
+        return True
+    except OSError:
+        return False
+
+
+def last_job(case_dir):
+    """Return {'ts', 'job_id', 'verb'} for the most recent submission recorded
+    in <case_dir>/casemgr_jobs.log, or None if there is no record."""
+    try:
+        with open(os.path.join(case_dir, JOB_LOG_NAME)) as f:
+            lines = [l.split(None, 2) for l in f if l.strip()]
+    except OSError:
+        return None
+    lines = [l for l in lines if len(l) >= 2]
+    if not lines:
+        return None
+    ts, job_id = lines[-1][0], lines[-1][1]
+    verb = lines[-1][2].strip() if len(lines[-1]) > 2 else ''
+    return {'ts': ts, 'job_id': job_id, 'verb': verb}
+
+
+def submit_case(case_dir, case_name, verb='submit'):
     """sbatch <case_name>.run from case_dir.
 
     The single submission code path. Callers handle their own status gating,
-    XML edits, and output formatting; this only runs sbatch and reports the
-    outcome.
+    XML edits, and output formatting; this only runs sbatch, records the job
+    ID in the case's casemgr_jobs.log (see record_job), and reports the
+    outcome. `verb` names the caller for the log line (submit / continue /
+    restart / make --send-it).
 
     Returns (ok, detail):
       (True,  job_id)      on success — job_id parsed from sbatch stdout
@@ -443,4 +487,5 @@ def submit_case(case_dir, case_name):
         return False, f'sbatch failed: {result.stderr.strip()}'
     m = re.search(r'Submitted batch job (\d+)', result.stdout)
     job_id = m.group(1) if m else result.stdout.strip()
+    record_job(case_dir, job_id, verb)
     return True, job_id

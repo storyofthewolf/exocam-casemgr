@@ -56,7 +56,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manage_utils import (
     ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES, MODEL_STEM,
-    select_last_monthly_hist, Outcome, EXIT_OK,
+    select_last_monthly_hist, Outcome, EXIT_OK, last_job,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
@@ -333,7 +333,13 @@ def _resolve_status(cs, case_dir, case):
       job queued + last event 'run SUCCESSFUL' -> RESUBMITTED
       job queued + last event 'run started'    -> RUNNING (unchanged)
       job queued + any other last event        -> QUEUED  (submitted, not yet started)
-      no job     + last event 'run started'    -> WALLCLOCK (run.out timeout) or RUNNING?
+      no job     + last event 'run started'    -> the job left the queue without CESM
+                                                  writing a final event. Ask SLURM
+                                                  (sacct on the last recorded job ID,
+                                                  see _sacct_verdict): WALLCLOCK /
+                                                  CANCELLED / OOM / CRASHED. No record
+                                                  or no sacct -> the run.out heuristic:
+                                                  WALLCLOCK (timeout line) or RUNNING?
       squeue unavailable                       -> the raw CaseStatus label
     """
     status_label = cs['status']
@@ -345,9 +351,59 @@ def _resolve_status(cs, case_dir, case):
         elif not last.startswith('run started'):
             status_label = 'QUEUED'
     elif job_queued is False and last.startswith('run started'):
-        run_out_path = os.path.join(case_dir, 'run.out')
-        status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
+        verdict = _sacct_verdict(case_dir)
+        if verdict is not None:
+            status_label = verdict
+        else:
+            run_out_path = os.path.join(case_dir, 'run.out')
+            status_label = 'WALLCLOCK' if _run_out_walltimeout(run_out_path) else 'RUNNING?'
     return status_label
+
+
+# sacct State -> status label, for a job that has left the queue while
+# CaseStatus still says 'run started'. Only terminal, abnormal states map;
+# COMPLETED with no 'run SUCCESSFUL' is contradictory and stays RUNNING?.
+_SACCT_LABELS = {
+    'TIMEOUT':       'WALLCLOCK',
+    'CANCELLED':     'CANCELLED',
+    'OUT_OF_MEMORY': 'OOM',
+    'FAILED':        'CRASHED',
+    'NODE_FAIL':     'CRASHED',
+    'PREEMPTED':     'CRASHED',
+    'BOOT_FAIL':     'CRASHED',
+    'DEADLINE':      'CRASHED',
+}
+
+
+def _sacct_verdict(case_dir):
+    """SLURM's own verdict on the case's last recorded job, as a status label.
+
+    Reads the job ID submit_case() recorded in <case_dir>/casemgr_jobs.log and
+    asks `sacct -j <id>` for its State. Returns a label from _SACCT_LABELS, or
+    None when there is no record, sacct is unavailable, or the state is not
+    one of the abnormal terminal states (the caller then falls back to the
+    run.out heuristic). One sacct spawn per *ambiguous* case only — the
+    'run started but not queued' branch — so bulk previews stay cheap.
+    """
+    job = last_job(case_dir)
+    if job is None:
+        return None
+    try:
+        result = subprocess.run(
+            ['sacct', '-j', job['job_id'], '-n', '-X', '-P', '-o', 'State'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    state = result.stdout.strip().splitlines()
+    if not state:
+        return None
+    # "CANCELLED by 12345" -> CANCELLED
+    state = state[0].strip().split()[0].split('+')[0]
+    return _SACCT_LABELS.get(state)
 
 
 def _probe_status(case_dir, case):
@@ -557,7 +613,7 @@ def cmd_continue(args, paths):
             outcome.fail()
             continue
 
-        ok, detail = submit_case(case_dir, case)
+        ok, detail = submit_case(case_dir, case, verb='continue')
         if ok:
             print(f"  {case}: submitted job {detail}")
         else:
@@ -709,7 +765,7 @@ def cmd_restart(args, paths):
                 outcome.fail()
                 continue
 
-        ok, detail = submit_case(case_dir, case)
+        ok, detail = submit_case(case_dir, case, verb='restart')
         if ok:
             print(f"  {case}: submitted job {detail}")
         else:
@@ -1163,7 +1219,8 @@ def cmd_check(args, paths):
     Default output per case (single line):
       <case>  [STATUS]  (<timestamp of last CaseStatus line>)
       Status labels: RUNNING, COMPLETE, FAILED, BUILT, CLEANED, UNKNOWN,
-      NO_CASEDIR, QUEUED, RESUBMITTED, RUNNING?, WALLCLOCK
+      NO_CASEDIR, QUEUED, RESUBMITTED, RUNNING?, WALLCLOCK, CANCELLED, OOM,
+      CRASHED
       Segment history counts are not reported — CaseStatus is inherited by
       cloned cases, making cumulative counts unreliable.
 
@@ -1175,9 +1232,15 @@ def cmd_check(args, paths):
     is shown as QUEUED. If squeue is unavailable or errors, the probe is
     silently omitted and the raw CaseStatus label is shown.
 
-    WALLCLOCK: when a 'run started' case is no longer queued, run.out is checked.
-    A SLURM wall-clock kill ('CANCELLED ... DUE TO TIME LIMIT' in the last
-    run.out segment) is shown as WALLCLOCK rather than the generic RUNNING?.
+    A 'run started' case that is no longer queued left the queue without CESM
+    writing a final event. If submit/continue/restart recorded the job ID
+    (casemgr_jobs.log in the case dir), sacct is asked for SLURM's verdict:
+    TIMEOUT -> WALLCLOCK, CANCELLED -> CANCELLED, OUT_OF_MEMORY -> OOM,
+    FAILED/NODE_FAIL/... -> CRASHED. Without a record (or sacct), run.out is
+    checked for the wall-clock kill line ('CANCELLED ... DUE TO TIME LIMIT')
+    -> WALLCLOCK, else the generic RUNNING?.
+
+    --info also prints the last recorded job (id, submit time, verb).
 
     --info: additionally print per-model hist file count, year span, and size
             (atm, lnd, ice) and restart set count, led by a TOTAL line summing
@@ -1295,6 +1358,10 @@ def cmd_check(args, paths):
                 info_lines.extend(run_lines)
                 grand_total += run_total
             info_lines.insert(0, f"  TOTAL:     {fmt_size(grand_total)}  (all locations)")
+            job = last_job(os.path.join(caseroot, case)) if caseroot else None
+            if job:
+                info_lines.append(f"  last job:  {job['job_id']}  submitted {job['ts']}"
+                                  + (f"  via {job['verb']}" if job['verb'] else ""))
 
         energy_line = None
         if do_energy and archive:

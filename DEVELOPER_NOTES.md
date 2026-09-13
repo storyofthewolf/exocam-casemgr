@@ -406,6 +406,7 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 - `_hist_year(filename)` — extract year string from hist filename (e.g. `'0050'` from `case.cam.h0.0050-01.nc`)
 - `_hist_keep_years_filter(archive_path, models, keep_n)` — partition files by year, return keep/delete lists (purge-hist only)
 - `EXIT_OK/FAILED/USAGE/PARTIAL/ABORTED` + `Outcome` — the one exit-code convention; every `cmd_*` in the three tools returns `outcome.exit_code()` and `main()` does `sys.exit(code or 0)` (0 ok, 1 failed, 2 usage, 3 policy skips, 4 aborted; FAILED > ABORTED > PARTIAL > OK)
+- `JOB_LOG_NAME` / `record_job(case_dir, job_id, verb)` / `last_job(case_dir)` — per-case submission history in `<case>/casemgr_jobs.log`, written by `submit_case()`; read by `runmgr._sacct_verdict` and `check --info`
 - `select_last_monthly_hist(hist_dir, model, n_months)` — the one averaging-input rule shared by `runmgr check --energy` and `datamgr avg --last`: last N files of the component's primary monthly stream (`PRIMARY_HIST_STREAM`), avg products and other streams excluded; returns `(files, date_first, date_last)`
 
 **Restart management:**
@@ -424,7 +425,7 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output purge/move lives in `datamgr.py clean` — see above. Recompiling lives in `build.py`: **no runmgr verb runs `<case>.build`** — see `build.py rebuild`.)
 
 **`check` subcommand:**
-- Probes SLURM for queued/running jobs (one `squeue --me -h -o %j` snapshot per process, every case tested against it; `_resolve_status` is the single resolver — QUEUED / RESUBMITTED / WALLCLOCK / RUNNING?)
+- Probes SLURM for queued/running jobs (one `squeue --me -h -o %j` snapshot per process, every case tested against it; `_resolve_status` is the single resolver — QUEUED / RESUBMITTED / WALLCLOCK / RUNNING?). For a 'run started' case no longer queued, `_sacct_verdict` asks `sacct -j <last recorded job>` first: TIMEOUT→WALLCLOCK, CANCELLED→CANCELLED, OUT_OF_MEMORY→OOM, FAILED/NODE_FAIL/…→CRASHED; run.out heuristic is the fallback
 - Parses `CaseStatus` file (last non-blank line only), extracts event and timestamp
 - Optional `--info`: appends last 5 lines of `${CASE}.log` event file
 - Optional `--energy`: computes global-mean energy balance from 12 most recent cam.h0 files using ncra + netCDF4

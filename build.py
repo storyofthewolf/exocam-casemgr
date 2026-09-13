@@ -888,30 +888,90 @@ def patch_exoplanet_mod(exo_path, updates):
     return ''.join(lines_out), applied
 
 
+def _attempt_log_path(logs_dir, stem):
+    """Return (log_path, latest_link) for a new per-attempt log.
+
+    Every build attempt gets its own file, logs_dir/<stem>.<YYYYmmdd-HHMMSS>.log,
+    and logs_dir/<stem>.log is a symlink to the most recent one. Attempts are
+    never overwritten, so a failed-then-fixed build keeps both records.
+    """
+    os.makedirs(logs_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    log_path = os.path.join(logs_dir, f'{stem}.{ts}.log')
+    n = 1
+    while os.path.exists(log_path):      # two attempts in one second
+        n += 1
+        log_path = os.path.join(logs_dir, f'{stem}.{ts}-{n}.log')
+    return log_path, os.path.join(logs_dir, f'{stem}.log')
+
+
+def _point_latest(latest_link, log_path):
+    """Make latest_link a symlink to log_path (same dir, relative target).
+
+    Best effort: on a filesystem without symlinks the per-attempt file is
+    still the record; the link is a convenience.
+    """
+    try:
+        if os.path.islink(latest_link) or os.path.exists(latest_link):
+            os.remove(latest_link)
+        os.symlink(os.path.basename(log_path), latest_link)
+    except OSError:
+        pass
+
+
+def _run_streaming(cmd, cwd, log_path, env=None):
+    """Run cmd with stdout+stderr streamed straight into log_path.
+
+    The log exists and grows while the command runs, so a build in progress
+    can be tailed, a hung build shows as a file that stopped growing, and a
+    killed build leaves everything up to the kill. Buffering in memory and
+    writing afterward (the pre-2026-09-13 behavior) gave none of that: the
+    log did not exist until the script exited, and was lost if it never did.
+    Returns the exit code, or raises OSError if the command cannot launch.
+    """
+    with open(log_path, 'w') as log:
+        log.write(f"# {' '.join(cmd)}\n# cwd: {cwd}\n"
+                  f"# started: {datetime.datetime.now().isoformat(timespec='seconds')}\n")
+        log.flush()
+        proc = subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=env)
+        log.write(f"# finished: {datetime.datetime.now().isoformat(timespec='seconds')}"
+                  f"  exit {proc.returncode}\n")
+    return proc.returncode
+
+
+def _log_tail(log_path, skip_prefix='# '):
+    """Last non-comment line of a log, for the one-line failure summary."""
+    try:
+        with open(log_path) as f:
+            lines = [l.rstrip() for l in f if l.strip() and not l.startswith(skip_prefix)]
+    except OSError:
+        return 'no output'
+    return lines[-1] if lines else 'no output'
+
+
 def rebuild_case(case_dir, case_name):
     """Run ./<case_name>.build in case_dir. Returns (ok, detail).
 
     No clean_build: for parameters in a file already present under SourceMods,
     the CESM dependency scan picks up the change and recompiles dependents.
+
+    Output streams to <case_dir>/logs/casemgr_rebuild.<timestamp>.log
+    (latest: logs/casemgr_rebuild.log); `detail` names the log either way,
+    plus the last output line on failure. That directory is the case's own
+    CESM log dir, so `datamgr clean purge-logs` tidies these with the rest.
     """
     script = f'./{case_name}.build'
     if not os.path.exists(os.path.join(case_dir, f'{case_name}.build')):
         return False, f'{case_name}.build not found'
+    log_path, latest = _attempt_log_path(os.path.join(case_dir, 'logs'), 'casemgr_rebuild')
     try:
-        result = subprocess.run(
-            [script],
-            cwd=case_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        )
+        rc = _run_streaming([script], case_dir, log_path)
     except OSError as e:
         return False, f'build failed to launch: {e}'
-    if result.returncode != 0:
-        tail = (result.stdout or '').strip().splitlines()
-        tail = tail[-1] if tail else 'no output'
-        return False, f'build failed (exit {result.returncode}): {tail}'
-    return True, 'built'
+    _point_latest(latest, log_path)
+    if rc != 0:
+        return False, f'build failed (exit {rc}): {_log_tail(log_path)}  [log: {log_path}]'
+    return True, f'built  [log: {log_path}]'
 
 
 def _sed_escape_replacement(s):
@@ -1959,6 +2019,8 @@ def cmd_make(args):
 
     logs_dir = os.path.join(scripts_dir, 'logs')
     os.makedirs(logs_dir, exist_ok=True)
+    print(f"Logs: {logs_dir}/<case>.build.<timestamp>.log, streamed while each "
+          f"script runs (tail -f to watch); <case>.build.log -> latest attempt.\n")
 
     passed = []
     failed = []
@@ -1973,17 +2035,19 @@ def cmd_make(args):
         basename = os.path.basename(script_path)
         # strip _build.sh suffix to get case name
         case_name = basename[:-len('_build.sh')]
-        log_path = os.path.join(logs_dir, f"{case_name}.build.log")
+        # Per-attempt log, streamed while the script runs; <case>.build.log
+        # stays valid as a symlink to the latest attempt.
+        log_path, latest = _attempt_log_path(logs_dir, f"{case_name}.build")
         label = "Creating" if no_build else "Building"
         print(f"{label}: {case_name} ... ", end='', flush=True)
-        result = subprocess.run(
-            ['bash', script_path],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            universal_newlines=True, env=run_env
-        )
-        with open(log_path, 'w') as f:
-            f.write(result.stdout)
-        if result.returncode == 0:
+        try:
+            rc = _run_streaming(['bash', script_path], os.getcwd(), log_path, env=run_env)
+        except OSError as e:
+            print(f"FAILED to launch: {e}")
+            failed.append(case_name)
+            continue
+        _point_latest(latest, log_path)
+        if rc == 0:
             print("OK")
             passed.append(case_name)
         else:
@@ -2056,7 +2120,7 @@ def _cmd_send_it(passed_cases, scripts_dir, all_scripts):
             not_submitted += 1
             continue
         caseroot = os.path.join(caseroot_base, case_name)
-        ok, detail = submit_case(caseroot, case_name)
+        ok, detail = submit_case(caseroot, case_name, verb='make --send-it')
         if not ok:
             print(f"  {'ERROR':<{_VERB_WIDTH}}  {case_name} → {detail}")
             not_submitted += 1

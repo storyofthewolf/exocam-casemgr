@@ -101,7 +101,7 @@ The build script handles all config-specific file path updates:
 python build.py generate --list
 ```
 
-To run all generated scripts (prompts for confirmation; logs written to `build_scripts/logs/`):
+To run all generated scripts (prompts for confirmation; output streams to `build_scripts/logs/<case>.build.<timestamp>.log` while each script runs, with `<case>.build.log` a symlink to the latest attempt):
 
 ```bash
 python build.py make                                  # build only — inspect, then submit later
