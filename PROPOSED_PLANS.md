@@ -119,3 +119,155 @@ Different animal from Proposal 1 for three reasons:
 existing `cice_params` plumbing — prototype it as a separate, reviewable change.
 Proposal 2 is a good long-term goal but is gated on the IDL->Python port and must be
 emitted into the shell script, never run as an in-process side effect of `generate`.
+
+---
+
+## 2026-09-13 — `build.py prep`: derived inputs (star → solar file → albedos; template IC → ncdata)
+
+**Status:** shape agreed with owner 2026-09-13. Supersedes the 2026-06 sketch above
+(Proposal 1 + Proposal 2), which it absorbs. Not implemented.
+
+### Problem
+
+Three per-case inputs are consequences of physics the matrix already states, but
+today they are produced by hand across four repos and pasted in as filenames:
+
+| Matrix key (today) | Produced by hand with | Really a function of |
+|---|---|---|
+| `exo_solar_file` | `stellar-interpolator` → `ExoRT/tools/makeStellarSpectrum_fromSED.py` | star (Teff, [M/H], log g) + `exort_pkg` resolution |
+| `cice_params` (4 albedos) | `ExoCAM/tools/py_progs/broadband_albedo_calculator.py` | `exo_solar_file` + surface reflectance choice |
+| `ncdata` | `ExoCAM/tools/idl_progs/changepress_cesm.pro`, `changevert_cesm.pro` (IDL); partial port in `py_progs/mod_cam.i.file.py` | template IC + `pstd` (from gas bars) + `nlev` + dry/wet |
+
+The hazards are the usual ones: albedos silently out of sync with the star (a
+live example: `experiment_matrix.example.yaml` runs a K2V case on the template's
+solar albedos), a pressure/IC mismatch found only at a crash, and no record of
+how any input was made.
+
+### Principle
+
+**The matrix declares physics; casemgr derives the filenames.** Explicit
+`exo_solar_file` / `cice_params` / `ncdata` in the matrix always win — derivation
+fills gaps, never overrides. A derivation that is required but impossible is a
+generate-time **error**, never a silent fallback (same rule as
+`_missing_template_error`).
+
+### Ownership (decided)
+
+- `stellar-interpolator` owns Teff/[M/H]/log g → raw SED text. Stays standalone.
+- ExoRT owns raw SED → ExoRT-binned `.nc` (`makeStellarSpectrum_fromSED.py`).
+- ExoCAM owns IC/initial-file modification (`mod_cam.i.file.py`) and the albedo
+  calculator. **Python only — the IDL scripts are legacy** and are not called.
+- casemgr owns orchestration, naming, caching, provenance, and verification. It
+  reaches the engines through `paths.*` in `config_registry.yaml`
+  (`stellar_interpolator`, `exocam_root/tools/py_progs`, `exort_root/tools`); the
+  engines are refactored to importable functions with no cwd or hardcoded-path
+  assumptions but stay in their home repos.
+
+### Two chains
+
+**Chain A — stellar.**
+1. `star: {teff, feh, logg}` → stellar-interpolator → raw SED `.txt`.
+   `star: sun` (the default) skips this: the shipped `G2V_SUN_<res>.nc` is used,
+   exactly as `SOLAR_FILE_STEMS` resolves it today.
+2. SED + resolution from `exort_pkg` → ExoRT binner → `exo_solar_file` `.nc`.
+3. That `.nc` → albedo calculator, run twice (ice surface, snow surface) →
+   `albicei/albicev/albsnowi/albsnowv`. The calculator reads ExoRT `.nc` directly,
+   so the albedos are computed from **exactly the spectrum the model sees**.
+
+**Chain B — initial condition.**
+`ic_template` (a base `cam.i` file) + `pstd` (`compute_pstd_from_spec`) + `nlev`
++ `dry` → `mod_cam.i.file.py` → `ncdata`. The `ic_files` registry table remains
+the path for hand-crafted profiles (isothermal, eyeball, zmean) that are not
+derivable; derivation is used only when the matrix names an `ic_template`.
+
+**Gate on Chain B:** `mod_cam.i.file.py` does level changes but its surface-pressure
+rescale is commented out and `--surface_pressure` is parsed and unused. Finish it
+(flat-field and scaled-field modes, as in the IDL), then validate against the
+existing IDL-made `ic_*bar_L*_ic.nc` files — regenerate one from its template and
+diff. That comparison is the acceptance test, and it is science work, not plumbing.
+
+### New matrix keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `star` | `sun` | `sun`, or `{teff: K, feh: dex, logg: cgs}` |
+| `derive_albedos` | `true` | run Chain A step 3 when no explicit `cice_params` |
+| `ice_surface` | (TBD: `blueice`) | reflectance file for `albice*`: `blueice` \| `mixed`. A scientific choice — must be visible in the matrix, never a hidden constant. Snow always uses `snow100um`. |
+| `ic_template` | none | base `cam.i` file for Chain B; absent → `ic_files` table lookup as today |
+| `ic_dry` | `true` | zero Q/CLDLIQ/CLDICE in the derived IC |
+
+`derive_albedos: true` with `star: sun` yields solar albedos, which should
+reproduce the template `user_nl_cice` defaults (0.30/0.67/0.68/0.80). Check this
+once; it is a free consistency test of the calculator, and it means turning the
+default on does not change existing solar matrices.
+
+### Verbs and where things run
+
+- **`build.py generate`** stays pure and local. It resolves each case's derived
+  input *names* (deterministic, see naming) and emits a **required-inputs block**
+  into the build script: one comment per input recording its derivation
+  (`# derived: exo_solar_file <- star T3400 g4.5 m0.0, n68`), then an existence
+  check that `exit 1`s before `create_newcase`. It never opens the input files —
+  it cannot; they are on the HPC.
+- **`build.py prep <matrix> [NAME…|--prefix]`** (new) runs **where the data is**
+  (Discover). For each case: compute the needed inputs; if a target exists,
+  nothing is done; if not, run the chain. Idempotent by name. Preview by default
+  (`--execute` to write), listing `present` / `missing → will derive` per input.
+  Writes each product plus a sidecar manifest `<file>.prep.yaml` (inputs, tool
+  paths + git SHAs, timestamp, casemgr version).
+- **`build.py generate --verify`** reports the derived names and, on the HPC,
+  their existence via the existing `NCFILE_FIELDS` machinery.
+- **`scan.py`** reads the sidecar manifests where present so the registry carries
+  `star` and the IC recipe, and `query.py export` round-trips physics, not paths.
+- **Machine:** the IC chain needs HPC scratch; the stellar chain is cheap but its
+  BT-Settl grid is local and gitignored. Put the grid on Discover once and run all
+  of `prep` there — one machine, one set of paths.
+
+### Naming conventions (owner decision needed)
+
+Products live under a new `paths.derived_inputs` root, **not** inside the ExoCAM
+or ExoRT checkouts, in `<derived_inputs>/solar/` and `<derived_inputs>/ic/<config_type>/`.
+
+Current solar names are inconsistent (`G2V_SUN_n68.nc`, `BT_Settl_3400K_n28.nc`,
+`bt-settl_2600_logg4.5_FeH0_n68.nc`, `blackbody_3400K_n68.nc`, `K2V_n68.nc`).
+Proposal, one pattern for derived files:
+
+```
+solar:  btsettl_T<teff>_g<logg>_m<feh>_<res>.nc      e.g. btsettl_T3400_g4.5_m0.0_n68.nc
+ic:     ic_<template-tag>_<P>bar_L<nlev>[_dry]_ic.nc  e.g. ic_ctrl_1.5bar_L40_dry_ic.nc
+```
+
+- `<P>` uses `bar_to_pressure_str` (6 sig figs, trailing zeros stripped) so it
+  matches the `ic_files` table key convention. A `pstd` that is a sum of gas bars
+  (e.g. `1.000123`) names an odd file; that is honest — it is the pressure the IC
+  actually has.
+- `<template-tag>` is a short label declared beside the template in the registry
+  (`ic_templates: {ctrl: control_L51.cam.i.nc, …}`), because the product depends
+  on the template and the name must say which one.
+- Existing hand-made files keep their names; only derived products follow the
+  pattern. Renaming the ExoRT `data/solar/` tree is out of scope.
+
+### Sequencing
+
+1. Refactor engines to importable functions: `broadband_albedo_calculator.py`
+   (drop the `../spectral_albedos` cwd assumption), `mod_cam.i.file.py` (flat
+   script → function), `makeStellarSpectrum_fromSED.py` (already close). Each in
+   its own repo, each usable standalone as before.
+2. `paths.*` entries + `derived_inputs` root + naming helpers in casemgr.
+3. **Chain A end to end** + `prep` verb + required-inputs block + `--verify`
+   reporting. Fixes the live K2V drift; unblocks M-dwarf suites.
+4. Finish the pressure rescale in `mod_cam.i.file.py`; validate vs IDL products.
+5. **Chain B** plugs into the same `prep`/manifest/naming machinery as a second
+   producer.
+6. Registry round-trip (scan manifests, export `star`/`ic_template`).
+
+### Open questions
+
+- `ice_surface` default: `blueice` or `mixed`?
+- Should `make` call `prep` automatically (`make --prep`), or stay separate with
+  the script's existence guard as the safety net? Leaning separate.
+- Solar-constant normalization (`--snorm`) is a property of the star *and* the
+  orbit; today it lives in `exoplanet_mod.F90` (`exo_scon`). Confirm the binner
+  output is shape-only so `prep` never has to know the orbit.
+- Does the derived-IC template need config_type-specific handling (land/mixed
+  ICs carry surface fields the aqua template lacks)?
