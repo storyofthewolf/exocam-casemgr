@@ -19,7 +19,8 @@ Python 3.8+.
 
 | File | Purpose |
 |---|---|
-| `build.py` | Build script generator — validation, Fortran patching, shell script writer; owns every compile (`generate`/`make`/`patch`/`rebuild`) |
+| `build.py` | Build script generator — validation, Fortran patching, shell script writer; owns every compile (`generate`/`prep`/`make`/`patch`/`rebuild`) |
+| `derive.py` | Derived inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Derived inputs" |
 | `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `datamgr.py` | Data management — disk usage reporting and case retirement |
@@ -79,7 +80,57 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 | CARMA aerosols | `carma_params` dict (if `do_exo_rt_carma: true`) |
 | Volcanic forcing | `volc_params` dict (if `do_exo_simplevolc: true`) |
 
-### 3. Generate build scripts
+### 3. Prepare derived inputs (`build.py prep`) — only if the matrix asks for them
+
+**Skip this step entirely if your matrix names no `star` and no `ic_template`.** Matrices
+written before this feature are unaffected: they name their files directly and
+build exactly as they always have.
+
+Three per-case inputs are consequences of physics the matrix already states. Rather
+than making them by hand in four separate repos and pasting the filenames in, name the
+physics and let `prep` derive them:
+
+| Matrix says | casemgr derives | using |
+|---|---|---|
+| `star: {teff: 3400, feh: 0.0, logg: 4.5}` | `exo_solar_file` = `btsettl_T3400_g4.5_m0.0_n68.nc` (resolution from `exort_pkg`) | stellar-interpolator → ExoRT's SED binner |
+| `star: …` plus `derive_albedos: true`, `ice_surface: blueice` | the four `cice_params` albedos, SED-weighted for that star | ExoCAM's `broadband_albedo_calculator` |
+| `ic_template: ctrl40` plus `ic_dry: true` | `ncdata` = `ic_ctrl40_2bar_L40_dry_ic.nc` at the case's `pstd` and `nlev` | ExoCAM's `mod_ncdata` |
+
+`star: sun` uses the shipped solar spectrum and derives only the albedos. Explicit
+`exo_solar_file` / `cice_params` / `ncdata` in the matrix always win, with a warning.
+
+```bash
+python build.py generate my_runs.yaml --verify   # names every derived product; says which are not made yet
+python build.py prep my_runs.yaml                # preview: present / MISSING per product
+python build.py prep my_runs.yaml --execute      # make the missing ones
+python build.py prep my_runs.yaml --case c1 --execute     # or just one case
+```
+
+**Run `prep` on Discover**, not locally — it reads the IC templates and stellar grid and
+writes multi-MB netCDF files, all of which live there. `generate` stays local and pure:
+it only computes the product *names*.
+
+`prep` is idempotent by name. A product that already exists is left alone, so re-running
+after adding cases derives only what is new, and two cases sharing a star or a pressure
+share one product. Nothing is ever overwritten — delete a product to have it remade.
+It is not destructive, so there is no `[yes/no]` gate.
+
+Products go under `paths.derived_inputs` (`solar/`, `albedo/`, `ic/<config_type>/`), each
+with a `<file>.prep.yaml` manifest recording the recipe and the tool versions used.
+`scan.py` reads those manifests back, so `query.py export` returns `star` / `ic_template`
+rather than a product path — a matrix exported from a finished case re-derives instead of
+pinning a file. `ic_templates` in `config_registry.yaml` maps the template tags to IC files.
+
+If you skip this step, nothing silently goes wrong: `generate` writes each script with a
+STEP 0 guard that exits before `create_newcase` naming the missing product and the `prep`
+command that makes it.
+
+> **Why derivation is opt-in.** The albedo calculator's values for the Sun (blue ice
+> 0.82/0.25, snow 0.98/0.59) are not the CICE-tuned defaults the config templates ship
+> (0.67/0.30, 0.80/0.68). Deriving by default would therefore have silently changed every
+> existing solar matrix, so albedos are derived only when a matrix names a `star`.
+
+### 4. Generate build scripts
 
 ```bash
 python build.py generate my_runs.yaml
@@ -130,27 +181,6 @@ python runmgr.py submit my_case --execute             # sbatch the built case as
 step. Either way, `submit` makes no `xmlchange` calls — it runs exactly what you
 built. Use `runmgr.py continue` / `restart` instead to manage a case that has
 already run.
-
-### Prepare derived inputs (`build.py prep`)
-
-Three inputs are consequences of physics the matrix already states, and `prep` derives them instead of you making them by hand:
-
-| Matrix says | casemgr derives | from |
-|---|---|---|
-| `star: {teff: 3400, feh: 0.0, logg: 4.5}` | `exo_solar_file` = `btsettl_T3400_g4.5_m0.0_n68.nc` (resolution from `exort_pkg`) | stellar-interpolator → ExoRT's SED binner |
-| `star: …` (+ `derive_albedos: true`, `ice_surface: blueice`) | the four `cice_params` albedos, SED-weighted for that star | ExoCAM's `broadband_albedo_calculator` |
-| `ic_template: ctrl40` (+ `ic_dry: true`) | `ncdata` = `ic_ctrl40_2bar_L40_dry_ic.nc` at the case's `pstd` and `nlev` | ExoCAM's `mod_ncdata` |
-
-`star: sun` uses the shipped solar spectrum and only derives the albedos. Explicit `exo_solar_file` / `cice_params` / `ncdata` always win. A matrix that mentions none of these keys is unaffected.
-
-```bash
-python build.py generate my_runs.yaml --verify   # names each derived product; warns which are not made yet
-python build.py prep my_runs.yaml                # preview: present / MISSING per product   (run on the HPC)
-python build.py prep my_runs.yaml --execute      # make the missing ones — idempotent, never overwrites
-python build.py generate my_runs.yaml            # then build as usual
-```
-
-Products go under `paths.derived_inputs` (`solar/`, `albedo/`, `ic/<config_type>/`), each with a `<file>.prep.yaml` manifest recording the recipe and tool versions. `scan.py` reads those manifests, so `query.py export` gives you back `star` / `ic_template` rather than a product path. `ic_templates` in `config_registry.yaml` maps the template tags to IC files. Note the albedo calculator's solar values differ from the CICE-tuned template defaults, which is why derivation only happens when the matrix names a `star`.
 
 ### Exit codes
 
@@ -271,7 +301,7 @@ python query.py export my_base_case -o sweep.yaml \
 
 Then add per-case entries with only the parameters that differ from the clone source.
 
-### 4. Search the registry and export experiment matrices
+### 5. Search the registry and export experiment matrices
 
 ```bash
 # List all cases

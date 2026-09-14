@@ -25,10 +25,17 @@ Target runtime: NASA Discover (SLURM HPC). Build scripts are generated locally, 
 experiment_matrix.yaml
   + config_registry.yaml
        ↓
-  build.py
+  build.py prep              ← ONLY if the matrix names `star` / `ic_template` (derive.py).
+  │                            Derives the solar file, cice albedos and ncdata into
+  │                            paths.derived_inputs, each with a .prep.yaml manifest.
+  │                            Runs on the HPC; idempotent by name; never overwrites.
+  │                            A matrix naming neither key skips this entirely.
+       ↓
+  build.py generate          ← local + pure: names the derived products, never makes them
        ↓
   scripts/<case>_build.sh    ← self-contained shell script: create_newcase/create_clone + build
-                               (rendered exoplanet_mod.F90 embedded as inline heredoc)
+                               (rendered exoplanet_mod.F90 embedded as inline heredoc;
+                                STEP 0 guard refuses to start without its derived inputs)
 
 CASE directories on HPC
        ↓

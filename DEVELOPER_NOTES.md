@@ -82,6 +82,11 @@ and *running it* are separate steps.
 ## Quick CLI reference
 
 ```bash
+# Derived inputs (only for matrices naming star / ic_template; run on the HPC)
+python build.py prep matrix.yaml                       # preview: present / MISSING per product
+python build.py prep matrix.yaml --execute             # make the missing ones (idempotent, no overwrite)
+python build.py prep matrix.yaml --case c1 --execute   # one case; --prefix also accepted
+
 # Build scripts
 python build.py generate experiment_matrix.yaml        # generate shell scripts into build_scripts/
 python build.py --scripts-dir scripts/ generate matrix.yaml
