@@ -335,7 +335,7 @@ def write_manifest(item, extra, tools):
         'recipe': item.recipe,
         'result': extra or {},
         'tools': tools,
-        'casemgr': _git_sha(os.path.dirname(os.path.abspath(__file__))),
+        'casemgr': _git_sha(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     }
     with open(manifest_path(item.path), 'w') as f:
         yaml.safe_dump(data, f, sort_keys=False)

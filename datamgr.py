@@ -62,7 +62,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scan import inspect_case, _rows_to_ordered, find_case_dirs
-from manage_utils import (
+from utils.manage_utils import (
     ARCHIVE_MODELS, HIST_MODELS, MODEL_STEM, AVG_HIST_DEFAULT_MODELS,
     PRIMARY_HIST_STREAM, select_last_monthly_hist,
     ACTIVE_STATUSES,

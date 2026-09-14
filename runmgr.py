@@ -54,7 +54,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from manage_utils import (
+from utils.manage_utils import (
     ARCHIVE_MODELS, AVG_HIST_DEFAULT_MODELS, ACTIVE_STATUSES, MODEL_STEM,
     select_last_monthly_hist, Outcome, EXIT_OK, last_job,
     DEFAULT_CONFIG, load_paths,

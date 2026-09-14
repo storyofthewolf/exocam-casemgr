@@ -23,7 +23,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import build      # noqa: E402
-import inputs_utils   # noqa: E402
+import utils.inputs_utils as inputs_utils   # noqa: E402
 import query      # noqa: E402
 import scan       # noqa: E402
 

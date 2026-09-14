@@ -21,11 +21,10 @@ import os
 import sys
 import yaml
 
-import inputs_utils
-
 # allow running from any directory
-sys.path.insert(0, os.path.dirname(__file__))
-from parse_utils import (
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import utils.inputs_utils as inputs_utils
+from utils.parse_utils import (
     parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_user_nl_cice,
     parse_docn_som, parse_cam_config_opts, parse_run_type_fields, parse_atm_grid,
     compute_pstd_bar, pressure_str_to_bar, read_solar_nw

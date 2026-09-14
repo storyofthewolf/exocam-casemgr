@@ -106,8 +106,8 @@ class Outcome:
             return EXIT_PARTIAL
         return EXIT_OK
 
-DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              'config_registry.yaml')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CONFIG = os.path.join(REPO_ROOT, 'config_registry.yaml')
 
 # ---------------------------------------------------------------------------
 # Paths and config

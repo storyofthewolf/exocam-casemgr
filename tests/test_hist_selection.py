@@ -18,7 +18,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from manage_utils import select_last_monthly_hist
+from utils.manage_utils import select_last_monthly_hist
 
 
 def _touch(d, names):

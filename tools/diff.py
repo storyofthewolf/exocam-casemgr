@@ -22,10 +22,9 @@ import sys
 import yaml
 from collections import Counter
 
-DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              'config_registry.yaml')
-DEFAULT_CASES_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                  'active.yaml')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CONFIG = os.path.join(REPO_ROOT, 'config_registry.yaml')
+DEFAULT_CASES_YAML = os.path.join(REPO_ROOT, 'active.yaml')
 
 COMPONENTS = ['src.cam', 'src.share', 'src.drv', 'src.clm', 'src.cice']
 SKIP_FILES = {'exoplanet_mod.F90'}

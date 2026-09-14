@@ -24,7 +24,7 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-from manage_utils import (Outcome, EXIT_OK, EXIT_FAILED, EXIT_USAGE,
+from utils.manage_utils import (Outcome, EXIT_OK, EXIT_FAILED, EXIT_USAGE,
                           EXIT_PARTIAL, EXIT_ABORTED)
 
 

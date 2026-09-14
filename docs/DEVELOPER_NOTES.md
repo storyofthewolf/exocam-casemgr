@@ -142,11 +142,11 @@ python datamgr.py clean purge-logs my_case --execute
 python datamgr.py clean move-hist my_case --models atm --execute
 
 # SourceMods diff (before retiring)
-python diff.py my_case                                 # summary: MODIFIED / CASE ONLY per file
-python diff.py my_case --verbose                       # include IDENTICAL files
-python diff.py my_case --full physpkg.F90              # full diff for one file
-python diff.py case1 --case2 case2                     # case-vs-case comparison
-python diff.py case1 --case2 case2 --full physpkg.F90
+python tools/diff.py my_case                                 # summary: MODIFIED / CASE ONLY per file
+python tools/diff.py my_case --verbose                       # include IDENTICAL files
+python tools/diff.py my_case --full physpkg.F90              # full diff for one file
+python tools/diff.py case1 --case2 case2                     # case-vs-case comparison
+python tools/diff.py case1 --case2 case2 --full physpkg.F90
 ```
 
 Dependencies: `pip install pyyaml` (required); `pip install netCDF4` (optional, for solar file nw validation)
@@ -262,7 +262,7 @@ solar_file_stems:
 
 ---
 
-## parse_utils.py — parsing internals
+## utils/parse_utils.py — parsing internals
 
 All functions take explicit file paths and return dicts. No filesystem side effects — this is a hard invariant.
 
@@ -327,7 +327,7 @@ RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `ex
 
 ---
 
-## inputs_utils.py — generated inputs
+## utils/inputs_utils.py — generated inputs
 
 **Two layers.** `plan_inputs(spec, registry, paths, pstd_bar, pressure_str)` is pure: it parses `star` (`parse_star` → `'sun'` | `{teff, feh, logg, method}`), decides which products the case needs, names them, and returns `(items, effective, warnings)` — `effective` holds the `exo_solar_file`/`ncdata`/`albedo_product` generate should use where the matrix is silent. It raises `InputSpecError` for an impossible request (unknown `ic_template` tag, bad `ice_surface`, unknown `exort_pkg`, no `paths.generated_inputs`). `make_product(item, paths)` dispatches to the engines (`make_solar_file`, `make_albedos`, `make_ic_file`) — run by `prep --execute` only.
 
@@ -410,7 +410,7 @@ All `clean` subcommands: preview mode by default, `--execute` required to act. F
 
 ---
 
-## manage_utils.py — shared utilities
+## utils/manage_utils.py — shared utilities
 
 Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 
@@ -491,7 +491,7 @@ Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output p
 
 ---
 
-## diff.py — classification logic
+## tools/diff.py — classification logic
 
 **Case-vs-ExoCAM categories (SourceMods):**
 1. `IDENTICAL` — matches ExoCAM reference

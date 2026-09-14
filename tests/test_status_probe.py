@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import runmgr
-from manage_utils import ACTIVE_STATUSES
+from utils.manage_utils import ACTIVE_STATUSES
 
 
 def _cs(event):

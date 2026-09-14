@@ -20,16 +20,18 @@ Python 3.8+.
 | File | Purpose |
 |---|---|
 | `build.py` | Build script generator — validation, Fortran patching, shell script writer; owns every compile (`generate`/`prep`/`make`/`patch`/`rebuild`) |
-| `inputs_utils.py` | Generated inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Generated inputs" |
+| `utils/inputs_utils.py` | Generated inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Generated inputs" |
 | `scan.py` | CASE directory scanner → YAML registry |
-| `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
+| `utils/parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `datamgr.py` | Data management — disk usage reporting and case retirement |
-| `manage_utils.py` | Shared utility layer for `datamgr.py` and `runmgr.py` — constants, disk helpers, case selection |
+| `utils/manage_utils.py` | Shared utility layer for `datamgr.py` and `runmgr.py` — constants, disk helpers, case selection |
 | `runmgr.py` | Run and case lifecycle management — check SLURM status, submit/continue/restart run control |
 | `query.py` | Registry search and experiment matrix export |
-| `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
+| `tools/diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
 | `exp_matrices/experiment_matrix.example.yaml` | Annotated template for writing experiment matrices |
+| `docs/DEVELOPER_NOTES.md` | Internals, per-module notes, and CLI recipes |
+| `tests/` | Unit and fixture tests (`python3 -m unittest discover tests`) |
 
 Modules ending in `_utils.py` are internal layers — imported by the tools above, never run directly. Everything else is a command-line tool you invoke.
 

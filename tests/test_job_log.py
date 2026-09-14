@@ -20,9 +20,9 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-import manage_utils
+import utils.manage_utils as manage_utils
 import runmgr
-from manage_utils import record_job, last_job, submit_case, JOB_LOG_NAME
+from utils.manage_utils import record_job, last_job, submit_case, JOB_LOG_NAME
 
 
 def _fake_bin(d, name, body):

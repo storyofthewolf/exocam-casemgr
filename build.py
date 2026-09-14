@@ -47,9 +47,9 @@ except ImportError:
     sys.exit("pyyaml is required: pip install pyyaml")
 
 sys.path.insert(0, os.path.dirname(__file__))
-from parse_utils import compute_pstd_bar
-import inputs_utils
-from manage_utils import (submit_case, load_paths, discover_cases,
+from utils.parse_utils import compute_pstd_bar
+import utils.inputs_utils as inputs_utils
+from utils.manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, batch_confirm, preview_hint,
                           ACTIVE_STATUSES, DEFAULT_CONFIG,
                           Outcome, EXIT_OK, EXIT_FAILED, EXIT_ABORTED)

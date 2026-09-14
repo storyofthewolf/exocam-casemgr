@@ -34,6 +34,4 @@ exp_matrices/*
 scratch/
 
 # internal working notes — keep local, never publish
-codex-astra-review.md
-SESSION_LOG.md
-PROPOSED_PLANS.md
+notes/
