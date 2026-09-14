@@ -29,10 +29,10 @@ paths:
   long_term:    /gpfsm/dnb07/projects/p54/users/etwolf/exocam-archive
   exocam_root:  /gpfsm/dnb33/etwolf/models/ExoCAM
   exort_root:   /gpfsm/dnb33/etwolf/models/ExoRT
-  # Derived inputs (build.py prep): products of Chain A (star -> solar file ->
+  # Generated inputs (build.py prep): products of Chain A (star -> solar file ->
   # cice albedos) and Chain B (ic_template -> ncdata) live here, never inside
   # the ExoCAM/ExoRT checkouts. Subdirs solar/, albedo/, ic/<config_type>/.
-  derived_inputs: /gpfsm/dnb33/etwolf/cesm_scratch/derived_inputs
+  generated_inputs: /gpfsm/dnb33/etwolf/cesm_scratch/generated_inputs
   # stellar-interpolator checkout + its BT-Settl grid (grid/ under it by default).
   # CONFIRM these on Discover -- the grid must be copied there once (~4 GB).
   stellar_interpolator: /gpfsm/dhome/etwolf/pythonWorkspace/stellar-interpolator

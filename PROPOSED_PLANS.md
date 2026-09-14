@@ -32,8 +32,8 @@ so, where do the hooks live?
 nothing on disk**; `build.py make` runs them. This `generate`/`make` split is what
 makes the toolkit trustworthy. The rule that keeps it intact:
 
-> case-mgr should **orchestrate derivations, not embed heavyweight side effects.**
-> Small pure derivations (a few floats) may run in-process at generate time.
+> case-mgr should **orchestrate generations, not embed heavyweight side effects.**
+> Small pure generations (a few floats) may run in-process at generate time.
 > Large disk-writing operations (multi-MB IC files) should be **emitted as guarded
 > steps into the generated shell script**, to run on the HPC — not executed inside
 > the Python.
@@ -45,14 +45,14 @@ the hook lives" is really "on which machine does it run."
 ### Proposal 1 — Auto-derive `cice_params` from `exo_solar_file`  (LIKELY YES, low risk)
 
 Output is four small floats derived from a file already named in the spec, so this
-fits the "pure derivation" category.
+fits the "pure generation" category.
 
 - **Hook location:** a `_derive_cice_albedos(spec)` step called from / just after
   `resolve_case()` in `build.py`, **before** script generation. If the case has an
   `exo_solar_file` and no explicit `cice_params`, compute the 4 albedos and
   inject them into the spec; the existing `_build_nl_append_block` writes them with
   no downstream change.
-- **Override semantics:** explicit `cice_params` in the matrix wins; derivation
+- **Override semantics:** explicit `cice_params` in the matrix wins; generation
   only fills the gap.
 - **Why it's good:** today the albedos and `exo_solar_file` can silently drift out
   of sync (wrong star -> wrong albedos, no error). Deriving them makes the spec
@@ -67,10 +67,10 @@ fits the "pure derivation" category.
     path configurable (e.g. `paths.exocam_tools` in `config_registry.yaml`) and skip
     gracefully when unavailable.
   - *File availability at generate time.* If `exo_solar_file` is an HPC-only path,
-    local derivation can't run; need the `.nc` mirrored locally or defer to a
+    local generation can't run; need the `.nc` mirrored locally or defer to a
     cluster-side step.
-- **Auditability caution:** silent derivation means a wrong `exo_solar_file` yields
-  wrong albedos with no trace in the matrix. Have the derivation **echo what it
+- **Auditability caution:** silent generation means a wrong `exo_solar_file` yields
+  wrong albedos with no trace in the matrix. Have the generation **echo what it
   computed** as a comment in the build script
   (`# derived cice albedos from <solar_file>: albicei=...`), same reasoning as
   keeping the rendered `exoplanet_mod.F90` inline rather than staged.
@@ -122,16 +122,22 @@ emitted into the shell script, never run as an in-process side effect of `genera
 
 ---
 
-## 2026-09-13 — `build.py prep`: derived inputs (star → solar file → albedos; template IC → ncdata)
+## 2026-09-13 — `build.py prep`: generated inputs (star → solar file → albedos; template IC → ncdata)
+
+**Naming note (2026-09-14):** this section predates the final naming. The module
+shipped as `inputs_utils.py` (not `derive.py`), the matrix key as `make_albedos`
+(not `derive_albedos`), and the registry path as `paths.generated_inputs`. The
+"derive" vocabulary below is kept as the historical record of the proposal;
+CLAUDE.md is the record of current behavior.
 
 **Status:** IMPLEMENTED 2026-09-13 (same day), all six sequencing steps, with these
-deviations from the text below — CLAUDE.md "build.py prep — derived inputs" is now
+deviations from the text below — CLAUDE.md "build.py prep — generated inputs" is now
 the record of behavior:
 
-- `derive_albedos` defaults to true but **only acts when the matrix names `star`**
+- `make_albedos` defaults to true but **only acts when the matrix names `star`**
   (`star: sun` opts the Sun in). The consistency check proposed below failed: the
   calculator's solar values (blue ice 0.82/0.25, snow 0.98/0.59) are not the
-  CICE-tuned template defaults (0.67/0.30, 0.80/0.68). A default-on derivation
+  CICE-tuned template defaults (0.67/0.30, 0.80/0.68). A default-on generation
   would therefore have silently changed every existing solar matrix. Whether
   non-solar cases should use raw values or template × (star/sun) ratios is an
   open owner question.
@@ -162,9 +168,9 @@ how any input was made.
 
 ### Principle
 
-**The matrix declares physics; casemgr derives the filenames.** Explicit
-`exo_solar_file` / `cice_params` / `ncdata` in the matrix always win — derivation
-fills gaps, never overrides. A derivation that is required but impossible is a
+**The matrix declares physics; casemgr makes the input files and parameters.** Explicit
+`exo_solar_file` / `cice_params` / `ncdata` in the matrix always win — generation
+fills gaps, never overrides. A generation that is required but impossible is a
 generate-time **error**, never a silent fallback (same rule as
 `_missing_template_error`).
 
@@ -195,7 +201,7 @@ generate-time **error**, never a silent fallback (same rule as
 `ic_template` (a base `cam.i` file) + `pstd` (`compute_pstd_from_spec`) + `nlev`
 + `dry` → `mod_cam.i.file.py` → `ncdata`. The `ic_files` registry table remains
 the path for hand-crafted profiles (isothermal, eyeball, zmean) that are not
-derivable; derivation is used only when the matrix names an `ic_template`.
+derivable; generation is used only when the matrix names an `ic_template`.
 
 **Gate on Chain B:** `mod_cam.i.file.py` does level changes but its surface-pressure
 rescale is commented out and `--surface_pressure` is parsed and unused. Finish it
@@ -208,12 +214,12 @@ diff. That comparison is the acceptance test, and it is science work, not plumbi
 | Key | Default | Meaning |
 |---|---|---|
 | `star` | `sun` | `sun`, or `{teff: K, feh: dex, logg: cgs}` |
-| `derive_albedos` | `true` | run Chain A step 3 when no explicit `cice_params` |
+| `make_albedos` | `true` | run Chain A step 3 when no explicit `cice_params` |
 | `ice_surface` | (TBD: `blueice`) | reflectance file for `albice*`: `blueice` \| `mixed`. A scientific choice — must be visible in the matrix, never a hidden constant. Snow always uses `snow100um`. |
 | `ic_template` | none | base `cam.i` file for Chain B; absent → `ic_files` table lookup as today |
 | `ic_dry` | `true` | zero Q/CLDLIQ/CLDICE in the derived IC |
 
-`derive_albedos: true` with `star: sun` yields solar albedos, which should
+`make_albedos: true` with `star: sun` yields solar albedos, which should
 reproduce the template `user_nl_cice` defaults (0.30/0.67/0.68/0.80). Check this
 once; it is a free consistency test of the calculator, and it means turning the
 default on does not change existing solar matrices.
@@ -222,7 +228,7 @@ default on does not change existing solar matrices.
 
 - **`build.py generate`** stays pure and local. It resolves each case's derived
   input *names* (deterministic, see naming) and emits a **required-inputs block**
-  into the build script: one comment per input recording its derivation
+  into the build script: one comment per input recording its generation
   (`# derived: exo_solar_file <- star T3400 g4.5 m0.0, n68`), then an existence
   check that `exit 1`s before `create_newcase`. It never opens the input files —
   it cannot; they are on the HPC.
@@ -242,8 +248,8 @@ default on does not change existing solar matrices.
 
 ### Naming conventions (owner decision needed)
 
-Products live under a new `paths.derived_inputs` root, **not** inside the ExoCAM
-or ExoRT checkouts, in `<derived_inputs>/solar/` and `<derived_inputs>/ic/<config_type>/`.
+Products live under a new `paths.generated_inputs` root, **not** inside the ExoCAM
+or ExoRT checkouts, in `<generated_inputs>/solar/` and `<generated_inputs>/ic/<config_type>/`.
 
 Current solar names are inconsistent (`G2V_SUN_n68.nc`, `BT_Settl_3400K_n28.nc`,
 `bt-settl_2600_logg4.5_FeH0_n68.nc`, `blackbody_3400K_n68.nc`, `K2V_n68.nc`).
@@ -261,7 +267,7 @@ ic:     ic_<template-tag>_<P>bar_L<nlev>[_dry]_ic.nc  e.g. ic_ctrl_1.5bar_L40_dr
 - `<template-tag>` is a short label declared beside the template in the registry
   (`ic_templates: {ctrl: control_L51.cam.i.nc, …}`), because the product depends
   on the template and the name must say which one.
-- Existing hand-made files keep their names; only derived products follow the
+- Existing hand-made files keep their names; only generated products follow the
   pattern. Renaming the ExoRT `data/solar/` tree is out of scope.
 
 ### Sequencing
@@ -270,7 +276,7 @@ ic:     ic_<template-tag>_<P>bar_L<nlev>[_dry]_ic.nc  e.g. ic_ctrl_1.5bar_L40_dr
    (drop the `../spectral_albedos` cwd assumption), `mod_cam.i.file.py` (flat
    script → function), `makeStellarSpectrum_fromSED.py` (already close). Each in
    its own repo, each usable standalone as before.
-2. `paths.*` entries + `derived_inputs` root + naming helpers in casemgr.
+2. `paths.*` entries + `generated_inputs` root + naming helpers in casemgr.
 3. **Chain A end to end** + `prep` verb + required-inputs block + `--verify`
    reporting. Fixes the live K2V drift; unblocks M-dwarf suites.
 4. Finish the pressure rescale in `mod_cam.i.file.py`; validate vs IDL products.

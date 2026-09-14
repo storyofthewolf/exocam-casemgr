@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-derive_utils.py -- derived inputs for exocam-casemgr (`build.py prep`).
+inputs_utils.py -- ExoCAM input files and parameters made by `build.py prep`.
 
 A utility module, not a user-facing tool: the `_utils` suffix marks it as
 never invoked directly (same convention as parse_utils.py / manage_utils.py).
 Imported by build.py (planning + the prep verb) and scan.py (manifest
 read-back).
 
-The matrix declares physics; casemgr derives the filenames. Two chains:
+The matrix declares physics; casemgr makes the input files and parameters it
+implies, and names them. Two chains:
 
   Chain A (stellar)   star {teff, feh, logg}  --stellar-interpolator-->  raw SED
                       raw SED + exort_pkg     --ExoRT binner-->          exo_solar_file (.nc)
@@ -20,18 +21,18 @@ This module owns orchestration, naming, caching, provenance and verification onl
 
 Two layers, deliberately separate:
 
-  * plan_derived_inputs(spec, registry, paths)  -- PURE. Resolves what a case needs
+  * plan_inputs(spec, registry, paths)  -- PURE. Resolves what a case needs
     and what each product is called. Used by `generate` (to emit the
     required-inputs block and the effective exo_solar_file / ncdata), by
     `--verify` (to report names), and by `prep` (to decide what to build).
     Touches no engine and reads no input file, so it runs anywhere.
 
-  * derive_*(item, paths)  -- the engines. Run by `prep --execute` only, where the
+  * make_*(item, paths)    -- the engines. Run by `prep --execute` only, where the
     data lives. Each writes to a temporary sibling and renames at the end, and
     drops a `<file>.prep.yaml` manifest beside the product.
 
 Explicit exo_solar_file / cice_params / ncdata in the matrix always win;
-derivation fills gaps, never overrides.
+generation fills gaps, never overrides.
 """
 import datetime
 import os
@@ -44,7 +45,7 @@ ICE_SURFACES = ('blueice', 'mixed')
 DEFAULT_ICE_SURFACE = 'blueice'
 MANIFEST_SUFFIX = '.prep.yaml'
 
-# Subdirectories of paths.derived_inputs
+# Subdirectories of paths.generated_inputs
 SOLAR_SUBDIR = 'solar'
 SED_SUBDIR = 'solar/sed'
 ALBEDO_SUBDIR = 'albedo'
@@ -57,7 +58,7 @@ ALBEDO_SHELL_VARS = {k: k.upper() for k in ALBEDO_KEYS}
 # Comment line the build script leaves in user_nl_cice naming the albedo
 # product the values came from. Namelist parsers skip `!` lines; scan.py
 # reads this one back to recover the ice surface and the star.
-ALBEDO_PROVENANCE_PREFIX = '! casemgr derived albedos:'
+ALBEDO_PROVENANCE_PREFIX = '! casemgr generated albedos:'
 
 # ExoRT resolution tag per exort_pkg (mirrors build.SOLAR_FILE_STEMS; kept
 # here too so this module has no import of build.py).
@@ -69,11 +70,11 @@ EXORT_RES = {
 }
 
 
-class DeriveError(ValueError):
-    """A derivation that cannot be planned or run. Message is user-facing."""
+class InputSpecError(ValueError):
+    """An input spec that cannot be planned or made. Message is user-facing."""
 
 
-class DerivedInput:
+class InputProduct:
     """One product a case needs: what it is, where it goes, how it is made."""
 
     def __init__(self, kind, path, recipe, summary):
@@ -83,7 +84,7 @@ class DerivedInput:
         self.summary = summary    # one-line human description
 
     def __repr__(self):
-        return f"DerivedInput({self.kind}, {self.path})"
+        return f"InputProduct({self.kind}, {self.path})"
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +116,10 @@ def parse_star(value):
     if isinstance(value, str):
         if value.strip().lower() == 'sun':
             return 'sun'
-        raise DeriveError(f"star: expected 'sun' or a {{teff, feh, logg}} mapping, got '{value}'")
+        raise InputSpecError(f"star: expected 'sun' or a {{teff, feh, logg}} mapping, got '{value}'")
     if isinstance(value, dict):
         if 'teff' not in value:
-            raise DeriveError("star: mapping needs at least 'teff' (K)")
+            raise InputSpecError("star: mapping needs at least 'teff' (K)")
         try:
             star = {
                 'teff': float(value['teff']),
@@ -126,15 +127,15 @@ def parse_star(value):
                 'logg': float(value.get('logg', 4.5)),
             }
         except (TypeError, ValueError) as e:
-            raise DeriveError(f"star: non-numeric value ({e})")
+            raise InputSpecError(f"star: non-numeric value ({e})")
         extra = set(value) - {'teff', 'feh', 'logg', 'method'}
         if extra:
-            raise DeriveError(f"star: unknown key(s) {sorted(extra)}")
+            raise InputSpecError(f"star: unknown key(s) {sorted(extra)}")
         star['method'] = str(value.get('method', 'log'))
         if star['method'] not in ('log', 'linear'):
-            raise DeriveError("star.method must be 'log' or 'linear'")
+            raise InputSpecError("star.method must be 'log' or 'linear'")
         return star
-    raise DeriveError(f"star: unrecognized value {value!r}")
+    raise InputSpecError(f"star: unrecognized value {value!r}")
 
 
 def star_tag(star):
@@ -161,7 +162,7 @@ def ic_name(template_tag, pressure_str, nlev, dry):
 def exort_res(exort_pkg):
     pkg = (exort_pkg or '').rstrip('*')
     if pkg not in EXORT_RES:
-        raise DeriveError(f"cannot derive a solar file for exort_pkg='{exort_pkg}' "
+        raise InputSpecError(f"cannot make a solar file for exort_pkg='{exort_pkg}' "
                           f"(known: {', '.join(sorted(EXORT_RES))})")
     return EXORT_RES[pkg]
 
@@ -173,11 +174,11 @@ def sun_solar_file(exort_pkg, paths):
     return f"{paths.get('exort_root', '$EXORT')}/data/solar/G2V_SUN_{res}.nc"
 
 
-def derived_root(paths):
-    root = paths.get('derived_inputs')
+def inputs_root(paths):
+    root = paths.get('generated_inputs')
     if not root:
-        raise DeriveError("config_registry.yaml has no paths.derived_inputs -- "
-                          "set it to the directory that holds derived solar, "
+        raise InputSpecError("config_registry.yaml has no paths.generated_inputs -- "
+                          "set it to the directory that holds generated solar, "
                           "albedo and IC products")
     return root
 
@@ -191,7 +192,7 @@ def ic_template_path(tag, registry, paths):
     {exocam_root}/cesm1.2.1/initial_files/."""
     table = ic_templates(registry)
     if tag not in table:
-        raise DeriveError(f"ic_template '{tag}' is not in config_registry.yaml "
+        raise InputSpecError(f"ic_template '{tag}' is not in config_registry.yaml "
                           f"ic_templates (known: {', '.join(sorted(table)) or 'none'})")
     value = str(table[tag])
     if value.startswith('/'):
@@ -203,15 +204,15 @@ def ic_template_path(tag, registry, paths):
 # Planning (pure)
 # ---------------------------------------------------------------------------
 
-def plan_derived_inputs(spec, registry, paths, pstd_bar=None, pressure_str=None):
-    """Decide what a resolved case derives and what each product is called.
+def plan_inputs(spec, registry, paths, pstd_bar=None, pressure_str=None):
+    """Decide which input products a resolved case needs and what each is called.
 
     Returns (items, effective, warnings):
-      items     : list[DerivedInput] in dependency order (solar, albedo, ic)
+      items     : list[InputProduct] in dependency order (solar, albedo, ic)
       effective : {'exo_solar_file': path?, 'ncdata': path?, 'albedo_product': path?}
                   -- values generate should use where the matrix is silent
       warnings  : list[str]
-    Raises DeriveError for a matrix that asks for something impossible.
+    Raises InputSpecError for a matrix that asks for something impossible.
 
     pstd_bar / pressure_str are supplied by build.py (compute_pstd_from_spec /
     bar_to_pressure_str) so this module never recomputes composition.
@@ -229,16 +230,16 @@ def plan_derived_inputs(spec, registry, paths, pstd_bar=None, pressure_str=None)
         warnings.append(
             f"star is set but exo_solar_file is explicit -- the explicit file "
             f"wins ({os.path.basename(explicit_solar)}); star is used only "
-            f"to opt in to albedo derivation")
+            f"to opt in to albedo generation")
     elif star == 'sun':
         solar_path = sun_solar_file(exort_pkg, paths)
         effective['exo_solar_file'] = solar_path
     elif isinstance(star, dict):
         res = exort_res(exort_pkg)
-        root = derived_root(paths)
+        root = inputs_root(paths)
         solar_path = os.path.join(root, SOLAR_SUBDIR, solar_name(star, res))
         sed_path = os.path.join(root, SED_SUBDIR, sed_name(star))
-        items.append(DerivedInput(
+        items.append(InputProduct(
             'solar', solar_path,
             {'star': dict(star), 'resolution': res, 'sed': sed_path,
              'exort_pkg': exort_pkg},
@@ -248,32 +249,32 @@ def plan_derived_inputs(spec, registry, paths, pstd_bar=None, pressure_str=None)
         effective['exo_solar_file'] = solar_path
 
     # ---- Chain A: albedos ---------------------------------------------------
-    derive_alb = spec.get('derive_albedos', True)
-    if isinstance(derive_alb, str):
-        derive_alb = derive_alb.strip().lower() == 'true'
+    want_albedos = spec.get('make_albedos', True)
+    if isinstance(want_albedos, str):
+        want_albedos = want_albedos.strip().lower() == 'true'
     ice_surface = spec.get('ice_surface', DEFAULT_ICE_SURFACE)
     if ice_surface not in ICE_SURFACES:
-        raise DeriveError(f"ice_surface '{ice_surface}' not one of {ICE_SURFACES}")
+        raise InputSpecError(f"ice_surface '{ice_surface}' not one of {ICE_SURFACES}")
     explicit_cice = spec.get('cice_params')
-    if star is not None and derive_alb:
+    if star is not None and want_albedos:
         if explicit_cice:
-            warnings.append("star is set and derive_albedos is true, but cice_params "
-                            "is explicit -- the explicit albedos win, none derived")
+            warnings.append("star is set and make_albedos is true, but cice_params "
+                            "is explicit -- the explicit albedos win, none generated")
         elif not solar_path:
-            raise DeriveError("cannot derive albedos: no solar file (set star or exo_solar_file)")
+            raise InputSpecError("cannot make albedos: no solar file (set star or exo_solar_file)")
         else:
-            root = derived_root(paths)
+            root = inputs_root(paths)
             alb_path = os.path.join(root, ALBEDO_SUBDIR,
                                     albedo_product_name(solar_path, ice_surface))
-            items.append(DerivedInput(
+            items.append(InputProduct(
                 'albedo', alb_path,
                 {'solar_file': solar_path, 'ice_surface': ice_surface},
                 f"cice albedos <- {os.path.basename(solar_path)} "
                 f"(ice: {ice_surface}, snow: snow100um)"))
             effective['albedo_product'] = alb_path
-    elif star is None and derive_alb and 'derive_albedos' in spec:
-        warnings.append("derive_albedos is set but no 'star' key -- albedos are "
-                        "derived only when the matrix names the star (set "
+    elif star is None and want_albedos and 'make_albedos' in spec:
+        warnings.append("make_albedos is set but no 'star' key -- albedos are "
+                        "generated only when the matrix names the star (set "
                         "star: sun to opt in for the Sun)")
 
     # ---- Chain B: IC --------------------------------------------------------
@@ -281,22 +282,22 @@ def plan_derived_inputs(spec, registry, paths, pstd_bar=None, pressure_str=None)
     if tag:
         if spec.get('ncdata'):
             warnings.append("ic_template is set but ncdata is explicit -- the "
-                            "explicit ncdata wins, no IC derived")
+                            "explicit ncdata wins, no IC generated")
         elif is_clone and not spec.get('config_type'):
-            raise DeriveError("ic_template on a clone needs config_type and nlev "
+            raise InputSpecError("ic_template on a clone needs config_type and nlev "
                               "(the pressure and level count come from the matrix)")
         else:
             if pstd_bar is None or pressure_str is None or not spec.get('nlev'):
-                raise DeriveError("ic_template needs nlev and a computable pstd")
+                raise InputSpecError("ic_template needs nlev and a computable pstd")
             template = ic_template_path(str(tag), registry, paths)
             dry = spec.get('ic_dry', True)
             if isinstance(dry, str):
                 dry = dry.strip().lower() == 'true'
             config_type = spec.get('config_type', 'unknown')
-            root = derived_root(paths)
+            root = inputs_root(paths)
             ic_path = os.path.join(root, IC_SUBDIR, config_type,
                                    ic_name(str(tag), pressure_str, spec['nlev'], dry))
-            items.append(DerivedInput(
+            items.append(InputProduct(
                 'ic', ic_path,
                 {'template_tag': str(tag), 'template': template,
                  'pstd_bar': float(pstd_bar), 'nlev': int(spec['nlev']),
@@ -362,7 +363,7 @@ def _tool_dir(paths, key, default_rel=None, base_key=None):
         if base:
             d = os.path.join(base, default_rel)
     if not d or not os.path.isdir(d):
-        raise DeriveError(f"tool directory for '{key}' not found ({d or 'unset'}); "
+        raise InputSpecError(f"tool directory for '{key}' not found ({d or 'unset'}); "
                           f"set paths.{key} in config_registry.yaml")
     return d
 
@@ -373,15 +374,15 @@ def _import_from(directory, module):
     try:
         return __import__(module)
     except ImportError as e:
-        raise DeriveError(f"cannot import {module} from {directory}: {e}")
+        raise InputSpecError(f"cannot import {module} from {directory}: {e}")
 
 
-def derive_solar(item, paths, verbose=True):
+def make_solar_file(item, paths, verbose=True):
     """Chain A steps 1-2: interpolate the SED, bin it to the ExoRT grid."""
     si_dir = _tool_dir(paths, 'stellar_interpolator')
     grid_dir = paths.get('btsettl_grid') or os.path.join(si_dir, 'grid')
     if not os.path.isdir(grid_dir):
-        raise DeriveError(f"BT-Settl grid directory not found: {grid_dir} "
+        raise InputSpecError(f"BT-Settl grid directory not found: {grid_dir} "
                           f"(paths.btsettl_grid)")
     exort_tools = _tool_dir(paths, 'exort_tools', 'tools', 'exort_root')
 
@@ -405,7 +406,7 @@ def derive_solar(item, paths, verbose=True):
                 grid, star['teff'], star['feh'], star['logg'],
                 method=star.get('method', 'log'), verbose=False)
         except (ValueError, FileNotFoundError) as e:
-            raise DeriveError(f"stellar-interpolator: {e}")
+            raise InputSpecError(f"stellar-interpolator: {e}")
         tmp = sed_path + '.partial'
         interp.write_sed(tmp, wav, flux, provenance=prov)
         os.replace(tmp, sed_path)
@@ -428,7 +429,7 @@ def albedo_product_lines(values, item):
     """The shell fragment the build script sources: four variables, plus a
     comment block that makes the file self-describing."""
     lines = [
-        "# Derived CICE broadband albedos -- written by exocam-casemgr `build.py prep`",
+        "# Generated CICE broadband albedos -- written by exocam-casemgr `build.py prep`",
         f"# stellar file : {item.recipe['solar_file']}",
         f"# ice surface  : {item.recipe['ice_surface']}   (albice*)",
         f"# snow surface : snow100um                (albsnow*)",
@@ -441,13 +442,13 @@ def albedo_product_lines(values, item):
     return lines
 
 
-def derive_albedos(item, paths, verbose=True):
+def make_albedos(item, paths, verbose=True):
     """Chain A step 3: SED-weighted broadband albedos for ice and snow."""
     py_progs = _tool_dir(paths, 'exocam_py_progs', 'tools/py_progs', 'exocam_root')
     calc = _import_from(py_progs, 'broadband_albedo_calculator')
     solar = item.recipe['solar_file']
     if not os.path.isfile(solar):
-        raise DeriveError(f"solar file not found: {solar}")
+        raise InputSpecError(f"solar file not found: {solar}")
     r = calc.compute_cice_albedos(solar, ice_surface=item.recipe['ice_surface'])
     values = {k: float(r[k]) for k in ALBEDO_KEYS}
     os.makedirs(os.path.dirname(item.path), exist_ok=True)
@@ -482,13 +483,13 @@ def read_albedo_product(path):
     return vals if len(vals) == len(ALBEDO_KEYS) else None
 
 
-def derive_ic(item, paths, verbose=True):
+def make_ic_file(item, paths, verbose=True):
     """Chain B: template IC -> ncdata at the case's pressure and level count."""
     py_progs = _tool_dir(paths, 'exocam_py_progs', 'tools/py_progs', 'exocam_root')
     mod = _import_from(py_progs, 'mod_ncdata')
     r = item.recipe
     if not os.path.isfile(r['template']):
-        raise DeriveError(f"IC template not found: {r['template']}")
+        raise InputSpecError(f"IC template not found: {r['template']}")
     try:
         result = mod.modify_ncdata(r['template'], item.path, nlev=r['nlev'],
                                    pstd_bar=r['pstd_bar'], dry=r['dry'],
@@ -496,17 +497,17 @@ def derive_ic(item, paths, verbose=True):
                                    exocam_root=paths.get('exocam_root'),
                                    overwrite=True, verbose=verbose)
     except (FileNotFoundError, FileExistsError, ValueError) as e:
-        raise DeriveError(f"mod_ncdata: {e}")
+        raise InputSpecError(f"mod_ncdata: {e}")
     write_manifest(item, result,
                    {'exocam_py_progs': {'dir': py_progs, 'git': _git_sha(py_progs)}})
     return item.path
 
 
-DERIVERS = {'solar': derive_solar, 'albedo': derive_albedos, 'ic': derive_ic}
+MAKERS = {'solar': make_solar_file, 'albedo': make_albedos, 'ic': make_ic_file}
 
 
-def derive(item, paths, verbose=True):
-    return DERIVERS[item.kind](item, paths, verbose=verbose)
+def make_product(item, paths, verbose=True):
+    return MAKERS[item.kind](item, paths, verbose=verbose)
 
 
 # ---------------------------------------------------------------------------

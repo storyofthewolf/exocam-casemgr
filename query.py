@@ -202,13 +202,13 @@ _BASE_FIELD_ORDER = [
     'finidat', 'fsurdat', 'som_pop_frc_file',
     # special
     'nl_cam_params', 'carma_params', 'volc_params', 'cice_params',
-    # derived inputs (build.py prep) -- emitted by _apply_derived_export
-    'star', 'derive_albedos', 'ice_surface', 'ic_template', 'ic_dry',
+    # generated inputs (build.py prep) -- emitted by _apply_inputs_export
+    'star', 'make_albedos', 'ice_surface', 'ic_template', 'ic_dry',
 ]
 
-# Registry provenance fields (scan 'derived' group) folded into the physics
-# keys above by _apply_derived_export; never exported flat.
-_DERIVED_REGISTRY_KEYS = ('star_teff', 'star_feh', 'star_logg', 'star_method',
+# Registry provenance fields (scan 'generated_inputs' group) folded into the physics
+# keys above by _apply_inputs_export; never exported flat.
+_GENERATED_REGISTRY_KEYS = ('star_teff', 'star_feh', 'star_logg', 'star_method',
                           'ice_surface', 'albedo_product',
                           'ic_template', 'ic_dry', 'ic_pstd_bar')
 
@@ -227,7 +227,7 @@ _CLONE_BASE_FIELDS = {
 # Registry keys not forwarded to the matrix
 _SKIP_KEYS = {
     'case_name', 'casedir', 'inspect_date',
-    *_DERIVED_REGISTRY_KEYS,
+    *_GENERATED_REGISTRY_KEYS,
     'ncdata_pressure_str', 'ncdata_levels',
     'exo_n2bar', 'exo_n2bar_expr',         # N2 is implicit or set via exo_n2bar_explicit
     'exo_sday_expr',
@@ -272,18 +272,18 @@ def _row_to_base(row):
             continue
         out_key = _KEY_RENAMES.get(k, k)
         base[out_key] = v
-    _apply_derived_export(row, base)
+    _apply_inputs_export(row, base)
     return base
 
 
-def _apply_derived_export(row, base):
-    """Round-trip prep-derived inputs as the physics that made them.
+def _apply_inputs_export(row, base):
+    """Round-trip prep-generated inputs as the physics that made them.
 
     A case whose solar file / albedos / ncdata came from build.py prep (the
-    scan 'derived' fields are set from the manifests) exports `star`,
-    `ice_surface` + `derive_albedos`, and `ic_template` + `ic_dry` in place of
-    the derived filenames and values, so regenerating from the export
-    re-derives them instead of pinning a product path. Hand-made inputs (no
+    scan 'generated_inputs' fields are set from the manifests) exports `star`,
+    `ice_surface` + `make_albedos`, and `ic_template` + `ic_dry` in place of
+    the generated filenames and values, so regenerating from the export
+    re-generates them instead of pinning a product path. Hand-made inputs (no
     manifest) export as before. Mutates `base` in place, preserving key order.
     """
     star = None
@@ -308,7 +308,7 @@ def _apply_derived_export(row, base):
         if k == 'exo_scon' and star is not None:
             out['star'] = star
             if row.get('ice_surface'):
-                out['derive_albedos'] = True
+                out['make_albedos'] = True
                 out['ice_surface'] = row['ice_surface']
         if k == 'nlev' and ic_tag:
             out['ic_template'] = ic_tag
@@ -316,7 +316,7 @@ def _apply_derived_export(row, base):
     if star is not None and 'star' not in out:
         out['star'] = star
         if row.get('ice_surface'):
-            out['derive_albedos'] = True
+            out['make_albedos'] = True
             out['ice_surface'] = row['ice_surface']
     if ic_tag and 'ic_template' not in out:
         out['ic_template'] = ic_tag

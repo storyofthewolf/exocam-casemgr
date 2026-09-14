@@ -20,7 +20,7 @@ Python 3.8+.
 | File | Purpose |
 |---|---|
 | `build.py` | Build script generator — validation, Fortran patching, shell script writer; owns every compile (`generate`/`prep`/`make`/`patch`/`rebuild`) |
-| `derive_utils.py` | Derived inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Derived inputs" |
+| `inputs_utils.py` | Generated inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Generated inputs" |
 | `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `datamgr.py` | Data management — disk usage reporting and case retirement |
@@ -50,11 +50,11 @@ paths:
   long_term:    /path/to/long_term_storage
   exocam_root:  /path/to/ExoCAM
   exort_root:   /path/to/ExoRT
-  derived_inputs:       /path/to/derived_inputs        # products of `build.py prep`
+  generated_inputs:       /path/to/generated_inputs        # products of `build.py prep`
   stellar_interpolator: /path/to/stellar-interpolator  # only for star: {teff, ...} cases
 ```
 
-`ic_templates` (tag → IC file) feeds `ic_template:` in a matrix; see "Prepare derived inputs".
+`ic_templates` (tag → IC file) feeds `ic_template:` in a matrix; see "Prepare generated inputs".
 
 ### 2. Write an experiment matrix
 
@@ -73,7 +73,7 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 | Run type | `run_type` (`startup`/`branch`/`hybrid`), `run_refcase`, `run_refdate`, `brnch_retain_casename` |
 | Atmospheric composition | `exo_co2bar`, `exo_ch4bar`, `exo_h2bar`, `exo_o2bar`, `exo_c2h6bar`, `exo_nh3bar`, `exo_cobar`, `exo_n2bar_explicit` |
 | Stellar forcing | `exo_scon`, `exo_solar_file`; or `star` (`sun` / `{teff, feh, logg}`) to derive the solar file with `build.py prep` |
-| Derived inputs | `derive_albedos` (default true once `star` is set), `ice_surface` (`blueice`/`mixed`), `ic_template` (registry tag), `ic_dry` — see "Prepare derived inputs" |
+| Generated inputs | `make_albedos` (default true once `star` is set), `ice_surface` (`blueice`/`mixed`), `ic_template` (registry tag), `ic_dry` — see "Prepare generated inputs" |
 | Geophysical | `exo_surface_gravity`, `exo_planet_radius`, `exo_ndays`, `exo_porb`, `exo_sday`, `exo_eccen`, `exo_obliq` |
 | Model options | `do_exo_atmconst`, `do_exo_rt`, `do_exo_synchronous`, `do_exo_gw`, `do_exo_simplevolc` |
 | Radiation options | `exo_convect_plim`, `exo_rad_step`, `do_exo_rt_clearsky`, `do_exo_rt_spectral`, `do_exo_rt_carma` |
@@ -82,7 +82,7 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 | CARMA aerosols | `carma_params` dict (if `do_exo_rt_carma: true`) |
 | Volcanic forcing | `volc_params` dict (if `do_exo_simplevolc: true`) |
 
-### 3. Prepare derived inputs (`build.py prep`) — only if the matrix asks for them
+### 3. Prepare generated inputs (`build.py prep`) — only if the matrix asks for them
 
 **Skip this step entirely if your matrix names no `star` and no `ic_template`.** Matrices
 written before this feature are unaffected: they name their files directly and
@@ -95,14 +95,14 @@ physics and let `prep` derive them:
 | Matrix says | casemgr derives | using |
 |---|---|---|
 | `star: {teff: 3400, feh: 0.0, logg: 4.5}` | `exo_solar_file` = `btsettl_T3400_g4.5_m0.0_n68.nc` (resolution from `exort_pkg`) | stellar-interpolator → ExoRT's SED binner |
-| `star: …` plus `derive_albedos: true`, `ice_surface: blueice` | the four `cice_params` albedos, SED-weighted for that star | ExoCAM's `broadband_albedo_calculator` |
+| `star: …` plus `make_albedos: true`, `ice_surface: blueice` | the four `cice_params` albedos, SED-weighted for that star | ExoCAM's `broadband_albedo_calculator` |
 | `ic_template: ctrl40` plus `ic_dry: true` | `ncdata` = `ic_ctrl40_2bar_L40_dry_ic.nc` at the case's `pstd` and `nlev` | ExoCAM's `mod_ncdata` |
 
 `star: sun` uses the shipped solar spectrum and derives only the albedos. Explicit
 `exo_solar_file` / `cice_params` / `ncdata` in the matrix always win, with a warning.
 
 ```bash
-python build.py generate my_runs.yaml --verify   # names every derived product; says which are not made yet
+python build.py generate my_runs.yaml --verify   # names every generated product; says which are not made yet
 python build.py prep my_runs.yaml                # preview: present / MISSING per product
 python build.py prep my_runs.yaml --execute      # make the missing ones
 python build.py prep my_runs.yaml --case c1 --execute     # or just one case
@@ -117,17 +117,17 @@ after adding cases derives only what is new, and two cases sharing a star or a p
 share one product. Nothing is ever overwritten — delete a product to have it remade.
 It is not destructive, so there is no `[yes/no]` gate.
 
-Products go under `paths.derived_inputs` (`solar/`, `albedo/`, `ic/<config_type>/`), each
+Products go under `paths.generated_inputs` (`solar/`, `albedo/`, `ic/<config_type>/`), each
 with a `<file>.prep.yaml` manifest recording the recipe and the tool versions used.
 `scan.py` reads those manifests back, so `query.py export` returns `star` / `ic_template`
-rather than a product path — a matrix exported from a finished case re-derives instead of
+rather than a product path — a matrix exported from a finished case re-generates instead of
 pinning a file. `ic_templates` in `config_registry.yaml` maps the template tags to IC files.
 
 If you skip this step, nothing silently goes wrong: `generate` writes each script with a
 STEP 0 guard that exits before `create_newcase` naming the missing product and the `prep`
 command that makes it.
 
-> **Why derivation is opt-in.** The albedo calculator's values for the Sun (blue ice
+> **Why generation is opt-in.** The albedo calculator's values for the Sun (blue ice
 > 0.82/0.25, snow 0.98/0.59) are not the CICE-tuned defaults the config templates ship
 > (0.67/0.30, 0.80/0.68). Deriving by default would therefore have silently changed every
 > existing solar matrix, so albedos are derived only when a matrix names a `star`.
@@ -153,7 +153,7 @@ The build script handles all config-specific file path updates:
 - Land/mixed: `user_nl_clm` (finidat, fsurdat)
 - Aqua/mixed: `user_docn.streams.txt.som` (pop_frc file path and name)
 
-When a case names `star` or `ic_template`, the script also opens with a **STEP 0 required-inputs block**: one `# derived:` comment per input and an existence guard that exits before `create_newcase`, so a build cannot start on a missing derived product.
+When a case names `star` or `ic_template`, the script also opens with a **STEP 0 required-inputs block**: one `# derived:` comment per input and an existence guard that exits before `create_newcase`, so a build cannot start on a missing generated product.
 
 **Review the generated scripts before running.** To list available experiment matrices:
 

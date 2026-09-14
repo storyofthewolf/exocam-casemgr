@@ -21,7 +21,7 @@ import os
 import sys
 import yaml
 
-import derive_utils
+import inputs_utils
 
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
@@ -88,7 +88,7 @@ _REGISTRY_GROUPS = [
     ]),
     # Provenance of inputs made by build.py prep (from the .prep.yaml manifests
     # beside the products the case references). All None for hand-made inputs.
-    ('derived', [
+    ('generated_inputs', [
         'star_teff', 'star_feh', 'star_logg', 'star_method',
         'ice_surface', 'albedo_product',
         'ic_template', 'ic_dry', 'ic_pstd_bar',
@@ -206,8 +206,8 @@ def inspect_case(casedir):
                     f"{', '.join(cice_nl['nl_duplicates'])} — last value wins "
                     f"(CESM policy); registry reports the effective value")
 
-    # Derived-input provenance (build.py prep manifests beside the products)
-    row.update(derive_utils.provenance_fields(
+    # Generated-input provenance (build.py prep manifests beside the products)
+    row.update(inputs_utils.provenance_fields(
         solar_file=row.get('exo_solar_file'), ncdata=row.get('ncdata'),
         user_nl_cice=os.path.join(casedir, 'user_nl_cice')))
 
