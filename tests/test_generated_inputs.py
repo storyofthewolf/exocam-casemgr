@@ -272,8 +272,8 @@ class RegistryRoundTrip(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        derived = os.path.join(self.tmp, 'generated_inputs')
-        registry = {**REGISTRY, 'paths': {**REGISTRY['paths'], 'generated_inputs': derived}}
+        generated = os.path.join(self.tmp, 'generated_inputs')
+        registry = {**REGISTRY, 'paths': {**REGISTRY['paths'], 'generated_inputs': generated}}
         self.spec = base_spec(star={'teff': 3400}, ic_template='ctrl40')
         build.apply_inputs(self.spec, registry, registry['paths'])
         # fake products + manifests (no engines)
@@ -399,7 +399,7 @@ class Engines(unittest.TestCase):
         self.assertAlmostEqual(r['albsnowv'], 0.9816, places=3)
         self.assertAlmostEqual(r['albsnowi'], 0.5866, places=3)
 
-    def test_make_ic_file_and_albedo_engines_via_derive(self):
+    def test_ic_and_albedo_engines_via_make_product(self):
         with tempfile.TemporaryDirectory() as d:
             paths = {'exocam_root': EXOCAM, 'exort_root': EXORT, 'generated_inputs': d}
             reg = {'paths': paths, 'ic_templates': REGISTRY['ic_templates']}

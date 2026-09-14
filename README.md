@@ -72,7 +72,7 @@ The matrix has a `base` section (shared defaults) and a `cases` list. Each case 
 | HPC batch | `account` (SLURM charge account), `job_name` (short queue label, per-case) |
 | Run type | `run_type` (`startup`/`branch`/`hybrid`), `run_refcase`, `run_refdate`, `brnch_retain_casename` |
 | Atmospheric composition | `exo_co2bar`, `exo_ch4bar`, `exo_h2bar`, `exo_o2bar`, `exo_c2h6bar`, `exo_nh3bar`, `exo_cobar`, `exo_n2bar_explicit` |
-| Stellar forcing | `exo_scon`, `exo_solar_file`; or `star` (`sun` / `{teff, feh, logg}`) to derive the solar file with `build.py prep` |
+| Stellar forcing | `exo_scon`, `exo_solar_file`; or `star` (`sun` / `{teff, feh, logg}`) to generate the solar file with `build.py prep` |
 | Generated inputs | `make_albedos` (default true once `star` is set), `ice_surface` (`blueice`/`mixed`), `ic_template` (registry tag), `ic_dry` — see "Prepare generated inputs" |
 | Geophysical | `exo_surface_gravity`, `exo_planet_radius`, `exo_ndays`, `exo_porb`, `exo_sday`, `exo_eccen`, `exo_obliq` |
 | Model options | `do_exo_atmconst`, `do_exo_rt`, `do_exo_synchronous`, `do_exo_gw`, `do_exo_simplevolc` |
@@ -90,15 +90,15 @@ build exactly as they always have.
 
 Three per-case inputs are consequences of physics the matrix already states. Rather
 than making them by hand in four separate repos and pasting the filenames in, name the
-physics and let `prep` derive them:
+physics and let `prep` generate them:
 
-| Matrix says | casemgr derives | using |
+| Matrix says | casemgr generates | using |
 |---|---|---|
 | `star: {teff: 3400, feh: 0.0, logg: 4.5}` | `exo_solar_file` = `btsettl_T3400_g4.5_m0.0_n68.nc` (resolution from `exort_pkg`) | stellar-interpolator → ExoRT's SED binner |
 | `star: …` plus `make_albedos: true`, `ice_surface: blueice` | the four `cice_params` albedos, SED-weighted for that star | ExoCAM's `broadband_albedo_calculator` |
 | `ic_template: ctrl40` plus `ic_dry: true` | `ncdata` = `ic_ctrl40_2bar_L40_dry_ic.nc` at the case's `pstd` and `nlev` | ExoCAM's `mod_ncdata` |
 
-`star: sun` uses the shipped solar spectrum and derives only the albedos. Explicit
+`star: sun` uses the shipped solar spectrum and generates only the albedos. Explicit
 `exo_solar_file` / `cice_params` / `ncdata` in the matrix always win, with a warning.
 
 ```bash
@@ -113,7 +113,7 @@ writes multi-MB netCDF files, all of which live there. `generate` stays local an
 it only computes the product *names*.
 
 `prep` is idempotent by name. A product that already exists is left alone, so re-running
-after adding cases derives only what is new, and two cases sharing a star or a pressure
+after adding cases generates only what is new, and two cases sharing a star or a pressure
 share one product. Nothing is ever overwritten — delete a product to have it remade.
 It is not destructive, so there is no `[yes/no]` gate.
 
@@ -129,8 +129,8 @@ command that makes it.
 
 > **Why generation is opt-in.** The albedo calculator's values for the Sun (blue ice
 > 0.82/0.25, snow 0.98/0.59) are not the CICE-tuned defaults the config templates ship
-> (0.67/0.30, 0.80/0.68). Deriving by default would therefore have silently changed every
-> existing solar matrix, so albedos are derived only when a matrix names a `star`.
+> (0.67/0.30, 0.80/0.68). Generating by default would therefore have silently changed every
+> existing solar matrix, so albedos are generated only when a matrix names a `star`.
 
 ### 4. Generate build scripts
 
@@ -153,7 +153,7 @@ The build script handles all config-specific file path updates:
 - Land/mixed: `user_nl_clm` (finidat, fsurdat)
 - Aqua/mixed: `user_docn.streams.txt.som` (pop_frc file path and name)
 
-When a case names `star` or `ic_template`, the script also opens with a **STEP 0 required-inputs block**: one `# derived:` comment per input and an existence guard that exits before `create_newcase`, so a build cannot start on a missing generated product.
+When a case names `star` or `ic_template`, the script also opens with a **STEP 0 required-inputs block**: one `# generated:` comment per input and an existence guard that exits before `create_newcase`, so a build cannot start on a missing generated product.
 
 **Review the generated scripts before running.** To list available experiment matrices:
 
