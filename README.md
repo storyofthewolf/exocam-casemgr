@@ -20,7 +20,7 @@ Python 3.8+.
 | File | Purpose |
 |---|---|
 | `build.py` | Build script generator — validation, Fortran patching, shell script writer; owns every compile (`generate`/`prep`/`make`/`patch`/`rebuild`) |
-| `derive.py` | Derived inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Derived inputs" |
+| `derive_utils.py` | Derived inputs behind `build.py prep` — turns `star` / `ic_template` in a matrix into the solar file, sea-ice albedos and `ncdata`. Never called directly; see "Derived inputs" |
 | `scan.py` | CASE directory scanner → YAML registry |
 | `parse_utils.py` | Parsing primitives shared by build and inspect (no side effects) |
 | `datamgr.py` | Data management — disk usage reporting and case retirement |
@@ -30,6 +30,8 @@ Python 3.8+.
 | `diff.py` | SourceMods diff tool — compare case Fortran against ExoCAM reference source |
 | `config_registry.yaml` | Machine paths, CESM compset/res per config type, IC file table |
 | `exp_matrices/experiment_matrix.example.yaml` | Annotated template for writing experiment matrices |
+
+Modules ending in `_utils.py` are internal layers — imported by the tools above, never run directly. Everything else is a command-line tool you invoke.
 
 ---
 

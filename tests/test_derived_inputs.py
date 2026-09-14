@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for derived inputs (build.py prep / derive.py), 2026-09-13.
+Tests for derived inputs (build.py prep / derive_utils.py), 2026-09-13.
 
 Covers the pure layer (naming, star parsing, planning, the effective
 exo_solar_file/ncdata, warnings vs errors), the emitted shell (required-inputs
@@ -23,7 +23,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import build      # noqa: E402
-import derive     # noqa: E402
+import derive_utils   # noqa: E402
 import query      # noqa: E402
 import scan       # noqa: E402
 
@@ -52,44 +52,44 @@ def base_spec(**over):
 def plan(spec, registry=REGISTRY):
     paths = registry['paths']
     pstd = build.compute_pstd_from_spec(spec)
-    return derive.plan_derived_inputs(spec, registry, paths, pstd_bar=pstd,
+    return derive_utils.plan_derived_inputs(spec, registry, paths, pstd_bar=pstd,
                                       pressure_str=build.bar_to_pressure_str(pstd))
 
 
 class Naming(unittest.TestCase):
     def test_fmt_num(self):
-        self.assertEqual(derive.fmt_num(3400.0), '3400')
-        self.assertEqual(derive.fmt_num(4.5), '4.5')
-        self.assertEqual(derive.fmt_num(0.0), '0.0')
-        self.assertEqual(derive.fmt_num(-0.5), '-0.5')
-        self.assertEqual(derive.fmt_num(5.0), '5.0')
+        self.assertEqual(derive_utils.fmt_num(3400.0), '3400')
+        self.assertEqual(derive_utils.fmt_num(4.5), '4.5')
+        self.assertEqual(derive_utils.fmt_num(0.0), '0.0')
+        self.assertEqual(derive_utils.fmt_num(-0.5), '-0.5')
+        self.assertEqual(derive_utils.fmt_num(5.0), '5.0')
 
     def test_solar_and_sed_names(self):
-        star = derive.parse_star({'teff': 3400, 'feh': 0, 'logg': 4.5})
-        self.assertEqual(derive.solar_name(star, 'n68'), 'btsettl_T3400_g4.5_m0.0_n68.nc')
-        self.assertEqual(derive.sed_name(star), 'btsettl_T3400_g4.5_m0.0.txt')
+        star = derive_utils.parse_star({'teff': 3400, 'feh': 0, 'logg': 4.5})
+        self.assertEqual(derive_utils.solar_name(star, 'n68'), 'btsettl_T3400_g4.5_m0.0_n68.nc')
+        self.assertEqual(derive_utils.sed_name(star), 'btsettl_T3400_g4.5_m0.0.txt')
 
     def test_ic_name(self):
-        self.assertEqual(derive.ic_name('ctrl40', '2bar', 40, True), 'ic_ctrl40_2bar_L40_dry_ic.nc')
-        self.assertEqual(derive.ic_name('ctrl51', '0.1bar', 51, False), 'ic_ctrl51_0.1bar_L51_ic.nc')
+        self.assertEqual(derive_utils.ic_name('ctrl40', '2bar', 40, True), 'ic_ctrl40_2bar_L40_dry_ic.nc')
+        self.assertEqual(derive_utils.ic_name('ctrl51', '0.1bar', 51, False), 'ic_ctrl51_0.1bar_L51_ic.nc')
 
     def test_albedo_product_name(self):
-        self.assertEqual(derive.albedo_product_name('/x/G2V_SUN_n68.nc', 'mixed'),
+        self.assertEqual(derive_utils.albedo_product_name('/x/G2V_SUN_n68.nc', 'mixed'),
                          'G2V_SUN_n68__mixed.albedos.sh')
 
     def test_parse_star(self):
-        self.assertIsNone(derive.parse_star(None))
-        self.assertEqual(derive.parse_star('SUN'), 'sun')
-        s = derive.parse_star({'teff': 3400})
+        self.assertIsNone(derive_utils.parse_star(None))
+        self.assertEqual(derive_utils.parse_star('SUN'), 'sun')
+        s = derive_utils.parse_star({'teff': 3400})
         self.assertEqual((s['teff'], s['feh'], s['logg'], s['method']), (3400.0, 0.0, 4.5, 'log'))
-        with self.assertRaises(derive.DeriveError):
-            derive.parse_star('vega')
-        with self.assertRaises(derive.DeriveError):
-            derive.parse_star({'feh': 0.0})
-        with self.assertRaises(derive.DeriveError):
-            derive.parse_star({'teff': 3400, 'bogus': 1})
-        with self.assertRaises(derive.DeriveError):
-            derive.parse_star({'teff': 3400, 'method': 'cubic'})
+        with self.assertRaises(derive_utils.DeriveError):
+            derive_utils.parse_star('vega')
+        with self.assertRaises(derive_utils.DeriveError):
+            derive_utils.parse_star({'feh': 0.0})
+        with self.assertRaises(derive_utils.DeriveError):
+            derive_utils.parse_star({'teff': 3400, 'bogus': 1})
+        with self.assertRaises(derive_utils.DeriveError):
+            derive_utils.parse_star({'teff': 3400, 'method': 'cubic'})
 
 
 class Planning(unittest.TestCase):
@@ -148,7 +148,7 @@ class Planning(unittest.TestCase):
         self.assertTrue(any("no 'star' key" in w for w in warns))
 
     def test_unknown_template_is_an_error(self):
-        with self.assertRaises(derive.DeriveError) as cm:
+        with self.assertRaises(derive_utils.DeriveError) as cm:
             plan(base_spec(ic_template='nope'))
         self.assertIn('nope', str(cm.exception))
         self.assertIn('ctrl40', str(cm.exception))
@@ -158,17 +158,17 @@ class Planning(unittest.TestCase):
         self.assertEqual(items[0].recipe['template'], '/somewhere/else.nc')
 
     def test_bad_ice_surface_is_an_error(self):
-        with self.assertRaises(derive.DeriveError):
+        with self.assertRaises(derive_utils.DeriveError):
             plan(base_spec(star='sun', ice_surface='asphalt'))
 
     def test_unknown_exort_pkg_cannot_derive_solar(self):
-        with self.assertRaises(derive.DeriveError):
+        with self.assertRaises(derive_utils.DeriveError):
             plan(base_spec(star={'teff': 3400}, exort_pkg='custom_src'))
 
     def test_missing_derived_inputs_path_is_an_error(self):
         reg = {**REGISTRY, 'paths': {k: v for k, v in REGISTRY['paths'].items()
                                       if k != 'derived_inputs'}}
-        with self.assertRaises(derive.DeriveError) as cm:
+        with self.assertRaises(derive_utils.DeriveError) as cm:
             plan(base_spec(star={'teff': 3400}), registry=reg)
         self.assertIn('derived_inputs', str(cm.exception))
 
@@ -225,12 +225,12 @@ class EmittedShell(unittest.TestCase):
     def test_albedo_block_upserts_from_product_and_verifies(self):
         with tempfile.TemporaryDirectory() as d:
             product = os.path.join(d, 'p.albedos.sh')
-            item = derive.DerivedInput('albedo', product,
+            item = derive_utils.DerivedInput('albedo', product,
                                        {'solar_file': '/x/star.nc', 'ice_surface': 'blueice'}, 's')
             vals = {'albicev': 0.76, 'albicei': 0.195, 'albsnowv': 0.97, 'albsnowi': 0.47}
             with open(product, 'w') as f:
-                f.write('\n'.join(derive.albedo_product_lines(vals, item)) + '\n')
-            self.assertEqual(derive.read_albedo_product(product), vals)
+                f.write('\n'.join(derive_utils.albedo_product_lines(vals, item)) + '\n')
+            self.assertEqual(derive_utils.read_albedo_product(product), vals)
             nl = os.path.join(d, 'user_nl_cice')
             with open(nl, 'w') as f:
                 f.write("!! albedo settings\nalbicei = 0.30    !0.3\nalbicev = 0.67\n"
@@ -244,13 +244,13 @@ class EmittedShell(unittest.TestCase):
             self.assertIn('albsnowi = 0.470000\n', text)
             self.assertEqual(text.count('albicev ='), 2)      # one live + the commented one
             self.assertIn('!albicev = 0.1', text)              # comment preserved
-            self.assertIn(f"{derive.ALBEDO_PROVENANCE_PREFIX} {product}", text)
-            self.assertEqual(derive.albedo_product_from_nl(nl), product)
+            self.assertIn(f"{derive_utils.ALBEDO_PROVENANCE_PREFIX} {product}", text)
+            self.assertEqual(derive_utils.albedo_product_from_nl(nl), product)
             # run it twice: still exactly one line per key, one provenance line
             r = subprocess.run(['bash', '-e', '-c', script], cwd=d, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0)
             text = open(nl).read()
-            self.assertEqual(text.count(derive.ALBEDO_PROVENANCE_PREFIX), 1)
+            self.assertEqual(text.count(derive_utils.ALBEDO_PROVENANCE_PREFIX), 1)
 
     def test_albedo_block_fails_if_product_defines_nothing(self):
         with tempfile.TemporaryDirectory() as d:
@@ -281,7 +281,7 @@ class RegistryRoundTrip(unittest.TestCase):
             os.makedirs(os.path.dirname(it.path), exist_ok=True)
             with open(it.path, 'w') as f:
                 f.write('x')
-            derive.write_manifest(it, {}, {})
+            derive_utils.write_manifest(it, {}, {})
         # fake case dir
         case = os.path.join(self.tmp, 'case1')
         os.makedirs(os.path.join(case, 'SourceMods', 'src.share'))
@@ -292,7 +292,7 @@ class RegistryRoundTrip(unittest.TestCase):
         with open(os.path.join(case, 'user_nl_cam'), 'w') as f:
             f.write(f"ncdata = '{self.spec['ncdata']}'\n")
         with open(os.path.join(case, 'user_nl_cice'), 'w') as f:
-            f.write(f"{derive.ALBEDO_PROVENANCE_PREFIX} {self.spec['_albedo_product']}\n"
+            f.write(f"{derive_utils.ALBEDO_PROVENANCE_PREFIX} {self.spec['_albedo_product']}\n"
                     "albicev = 0.76\nalbicei = 0.195\nalbsnowv = 0.97\nalbsnowi = 0.47\n")
         self.case = case
 
@@ -406,11 +406,11 @@ class Engines(unittest.TestCase):
             spec = base_spec(star='sun', ic_template='ctrl40')
             build.apply_derived_inputs(spec, reg, paths)
             for it in spec['_derived']:
-                derive.derive(it, paths, verbose=False)
+                derive_utils.derive(it, paths, verbose=False)
                 self.assertTrue(os.path.isfile(it.path))
-                m = derive.read_manifest(it.path)
+                m = derive_utils.read_manifest(it.path)
                 self.assertEqual(m['kind'], it.kind)
-            alb = derive.read_albedo_product(spec['_albedo_product'])
+            alb = derive_utils.read_albedo_product(spec['_albedo_product'])
             self.assertAlmostEqual(alb['albicev'], 0.8160, places=3)
 
 

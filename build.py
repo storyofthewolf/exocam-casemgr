@@ -48,7 +48,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 from parse_utils import compute_pstd_bar
-import derive
+import derive_utils
 from manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, batch_confirm, preview_hint,
                           ACTIVE_STATUSES, DEFAULT_CONFIG,
@@ -987,7 +987,7 @@ def rebuild_case(case_dir, case_name):
 
 
 # ---------------------------------------------------------------------------
-# Derived inputs (build.py prep) -- see derive.py
+# Derived inputs (build.py prep) -- see derive_utils.py
 # ---------------------------------------------------------------------------
 
 def _effective_paths(registry, paths_override):
@@ -1002,7 +1002,7 @@ def apply_derived_inputs(spec, registry, paths):
 
     Where the matrix is silent, fills exo_solar_file / ncdata with the derived
     product paths and records the plan under spec['_derived'] (list of
-    derive.DerivedInput) and spec['_albedo_product'] (path or None), which the
+    derive_utils.DerivedInput) and spec['_albedo_product'] (path or None), which the
     script generators turn into the required-inputs block and the albedo
     upsert. Explicit matrix values are never overwritten.
 
@@ -1020,9 +1020,9 @@ def apply_derived_inputs(spec, registry, paths):
         except (TypeError, ValueError):
             pstd_bar = pressure_str = None
     try:
-        items, effective, warnings = derive.plan_derived_inputs(
+        items, effective, warnings = derive_utils.plan_derived_inputs(
             spec, registry, paths, pstd_bar=pstd_bar, pressure_str=pressure_str)
-    except derive.DeriveError as e:
+    except derive_utils.DeriveError as e:
         return [], [f"derived inputs: {e}"]
     if 'exo_solar_file' in effective and not spec.get('exo_solar_file'):
         spec['exo_solar_file'] = effective['exo_solar_file']
@@ -1071,11 +1071,11 @@ def _build_derived_albedo_block(spec, case_name):
         f'source "{product}"',
         # Provenance the scanner can read back: which product these four
         # values came from (its manifest names the star and ice surface).
-        f'if [ -f user_nl_cice ]; then sed -i -E "/^{derive.ALBEDO_PROVENANCE_PREFIX}/d" user_nl_cice; fi; '
-        f'echo "{derive.ALBEDO_PROVENANCE_PREFIX} {product}" >> user_nl_cice',
+        f'if [ -f user_nl_cice ]; then sed -i -E "/^{derive_utils.ALBEDO_PROVENANCE_PREFIX}/d" user_nl_cice; fi; '
+        f'echo "{derive_utils.ALBEDO_PROVENANCE_PREFIX} {product}" >> user_nl_cice',
     ]
-    for key in derive.ALBEDO_KEYS:
-        var = derive.ALBEDO_SHELL_VARS[key]
+    for key in derive_utils.ALBEDO_KEYS:
+        var = derive_utils.ALBEDO_SHELL_VARS[key]
         pat = f'^[[:space:]]*{key}[[:space:]]*='
         lines.append(
             f'[ -n "${{{var}:-}}" ] || {{ echo "ERROR: {case_name}: {var} not '
@@ -1083,7 +1083,7 @@ def _build_derived_albedo_block(spec, case_name):
         lines.append(
             f'if [ -f user_nl_cice ]; then sed -i -E "/{pat}/d" user_nl_cice; fi; '
             f'echo "{key} = ${{{var}}}" >> user_nl_cice')
-    for key in derive.ALBEDO_KEYS:
+    for key in derive_utils.ALBEDO_KEYS:
         pat = f'^[[:space:]]*{key}[[:space:]]*='
         lines.append(
             f'[ "$(grep -cE \'{pat}\' user_nl_cice)" -eq 1 ] || {{ echo "ERROR: '
@@ -2194,9 +2194,9 @@ def cmd_prep(args):
         print(f"\nderiving {it.kind}: {it.path}")
         print(f"  for: {', '.join(users)}")
         try:
-            derive.derive(it, paths_for[it.path], verbose=True)
+            derive_utils.derive(it, paths_for[it.path], verbose=True)
             print(f"  done: {it.path}")
-        except derive.DeriveError as e:
+        except derive_utils.DeriveError as e:
             print(f"  ERROR: {e}")
             outcome.fail()
         except Exception as e:  # an engine crashed; report, keep going

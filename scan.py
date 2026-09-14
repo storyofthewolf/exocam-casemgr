@@ -21,7 +21,7 @@ import os
 import sys
 import yaml
 
-import derive
+import derive_utils
 
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(__file__))
@@ -207,7 +207,7 @@ def inspect_case(casedir):
                     f"(CESM policy); registry reports the effective value")
 
     # Derived-input provenance (build.py prep manifests beside the products)
-    row.update(derive.provenance_fields(
+    row.update(derive_utils.provenance_fields(
         solar_file=row.get('exo_solar_file'), ncdata=row.get('ncdata'),
         user_nl_cice=os.path.join(casedir, 'user_nl_cice')))
 

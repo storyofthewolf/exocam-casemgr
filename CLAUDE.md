@@ -25,7 +25,7 @@ Target runtime: NASA Discover (SLURM HPC). Build scripts are generated locally, 
 experiment_matrix.yaml
   + config_registry.yaml
        ↓
-  build.py prep              ← ONLY if the matrix names `star` / `ic_template` (derive.py).
+  build.py prep              ← ONLY if the matrix names `star` / `ic_template` (derive_utils.py).
   │                            Derives the solar file, cice albedos and ncdata into
   │                            paths.derived_inputs, each with a .prep.yaml manifest.
   │                            Runs on the HPC; idempotent by name; never overwrites.
@@ -61,7 +61,7 @@ cases/ + rundir/ + archive/ on HPC
 ### Module roles
 
 - **`parse_utils.py`** — pure parsing primitives; no filesystem side effects (invariant)
-- **`derive.py`** — derived inputs (`build.py prep`): the matrix declares physics (`star`, `ic_template`, `ice_surface`), casemgr derives the filenames. Pure planning layer (`plan_derived_inputs` — names, recipes, the effective `exo_solar_file`/`ncdata`; runs anywhere) is kept apart from the engines (`derive_solar`/`derive_albedos`/`derive_ic` — run by `prep --execute` only, where the data lives). Engines are imported from their home repos via `paths.*` (stellar-interpolator; `ExoRT/tools/makeStellarSpectrum_fromSED.py`; `ExoCAM/tools/py_progs/broadband_albedo_calculator.py` + `mod_ncdata.py`). Products carry a `<file>.prep.yaml` manifest that `scan.py` reads back. See "build.py prep — derived inputs" below.
+- **`derive_utils.py`** — derived inputs (`build.py prep`): the matrix declares physics (`star`, `ic_template`, `ice_surface`), casemgr derives the filenames. Pure planning layer (`plan_derived_inputs` — names, recipes, the effective `exo_solar_file`/`ncdata`; runs anywhere) is kept apart from the engines (`derive_solar`/`derive_albedos`/`derive_ic` — run by `prep --execute` only, where the data lives). Engines are imported from their home repos via `paths.*` (stellar-interpolator; `ExoRT/tools/makeStellarSpectrum_fromSED.py`; `ExoCAM/tools/py_progs/broadband_albedo_calculator.py` + `mod_ncdata.py`). Products carry a `<file>.prep.yaml` manifest that `scan.py` reads back. See "build.py prep — derived inputs" below.
 - **`build.py`** — validates experiment matrix, generates self-contained shell build scripts; `prep` materializes missing derived inputs (solar file, cice albedos, ncdata) on the HPC, idempotent by name; `generate --verify` checks matrix coherency (value types + netCDF file existence) without generating; `patch` edits `exoplanet_mod.F90` in place in existing cases and rebuilds; `rebuild` recompiles existing cases after a hand-edit anywhere under `SourceMods` (compiles and stops — no submission, no XML edits). **Compilation lives here and only here** — no `runmgr.py` verb runs `<case>.build`.
 - **`scan.py`** — walks CASE directories, extracts metadata, writes grouped YAML registry
 - **`query.py`** — searches registry, exports experiment matrices
@@ -514,7 +514,7 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 - **ExoCAM/tools/py_progs**: `broadband_albedo_calculator.py` rewritten as an importable module (`compute_albedo`, `compute_cice_albedos`; reflectance spectra located relative to the file, not the cwd; CLI unchanged, numbers identical). New `mod_ncdata.py` (importable; pressure rescale finished with the IDL's flat/scaled modes; generic copy-with-substitution writer that preserves every variable and attribute; temp-then-rename). `mod_cam.i.file.py` is now a 5-line shim. README updated.
 - **ExoRT/tools**: `makeStellarSpectrum_fromSED.py` gained `make_stellar_file()` (the whole of the old `main()`, bit-identical output; `verbose`/`plot` switches). Note: the shipped `bt-settl_3000_logg4.5_FeH0_n68.nc` differs from what the current Python binner produces from the same raw file (up to 0.68 W/m² per band) — pre-existing, presumably the IDL era; not touched.
 - **stellar-interpolator**: unchanged; used as a library (`SpectralGrid.from_dir`, `interpolate`, `write_sed`).
-- **casemgr**: `derive.py` (new), `build.py` (`apply_derived_inputs`, `_build_required_inputs_block`, `_build_derived_albedo_block`, `cmd_prep`, verify warning for un-made products), `scan.py` (`derived` group), `query.py` (`_apply_derived_export`), `config_registry.yaml` (`paths.derived_inputs`, `paths.stellar_interpolator`, `ic_templates`).
+- **casemgr**: `derive_utils.py` (new), `build.py` (`apply_derived_inputs`, `_build_required_inputs_block`, `_build_derived_albedo_block`, `cmd_prep`, verify warning for un-made products), `scan.py` (`derived` group), `query.py` (`_apply_derived_export`), `config_registry.yaml` (`paths.derived_inputs`, `paths.stellar_interpolator`, `ic_templates`).
 
 **Decisions made in-session, worth knowing:**
 1. Derivation is **opt-in via `star`** (see the Key behaviors bullet): the calculator's solar albedos are not the CICE-tuned template values, so a silent default-on would have changed every solar matrix. Open question for the owner: whether M-dwarf cases should use raw calculator values (current) or template values scaled by the star/sun ratio.
