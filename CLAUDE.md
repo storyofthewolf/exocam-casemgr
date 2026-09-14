@@ -298,7 +298,7 @@ build.py prep suite.yaml --execute          # make the missing ones; idempotent 
 build.py prep suite.yaml --case c1 --execute
 ```
 
-Added 2026-09-13 (PROPOSED_PLANS.md, "build.py prep", agreed with owner). Three per-case inputs used to be made by hand across four repos and pasted in as filenames; they are consequences of physics the matrix already states, so **the matrix declares physics and casemgr makes the input files and parameters.**
+Added 2026-09-13 (PROPOSED_PLANS.md — a local-only working note, not in the repo — "build.py prep", agreed with owner). Three per-case inputs used to be made by hand across four repos and pasted in as filenames; they are consequences of physics the matrix already states, so **the matrix declares physics and casemgr makes the input files and parameters.**
 
 | Matrix key | Default | Produces | Engine (home repo) |
 |---|---|---|---|
@@ -509,7 +509,7 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ## Session handoff — 2026-09-13 (evening) — `build.py prep`
 
-**Generated inputs landed** (PROPOSED_PLANS.md "build.py prep", owner-agreed shape). Four repos touched; see the "build.py prep — generated inputs" section above for the design. `tests/test_generated_inputs.py` (31 tests, incl. engine acceptance tests that run only where `/Users/wolfe/models/ExoCAM` + `ExoRT` exist).
+**Generated inputs landed** (PROPOSED_PLANS.md, local-only, "build.py prep"; owner-agreed shape). Four repos touched; see the "build.py prep — generated inputs" section above for the design. `tests/test_generated_inputs.py` (31 tests, incl. engine acceptance tests that run only where `/Users/wolfe/models/ExoCAM` + `ExoRT` exist).
 
 - **ExoCAM/tools/py_progs**: `broadband_albedo_calculator.py` rewritten as an importable module (`compute_albedo`, `compute_cice_albedos`; reflectance spectra located relative to the file, not the cwd; CLI unchanged, numbers identical). New `mod_ncdata.py` (importable; pressure rescale finished with the IDL's flat/scaled modes; generic copy-with-substitution writer that preserves every variable and attribute; temp-then-rename). `mod_cam.i.file.py` is now a 5-line shim. README updated.
 - **ExoRT/tools**: `makeStellarSpectrum_fromSED.py` gained `make_stellar_file()` (the whole of the old `main()`, bit-identical output; `verbose`/`plot` switches). Note: the shipped `bt-settl_3000_logg4.5_FeH0_n68.nc` differs from what the current Python binner produces from the same raw file (up to 0.68 W/m² per band) — pre-existing, presumably the IDL era; not touched.
@@ -530,7 +530,7 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 
 ## Session handoff — 2026-09-13
 
-**Four findings from `codex-astra-review.md` closed** (review findings 2, 1, 4, then 3). Finding 5 (SE newcase template paths) is **declined by owner decision**: SE is never used in practice and is likely to be dropped from future ExoCAM revisions — don't fix it. The larger "experiment as unit of work" program is untouched; the owner's stated direction is **increasing agent wrapping of the existing casemgr interfaces**, which is what the exit-code work serves. All fixture-verified locally; `tests/` now holds 54 tests across five files.
+**Four findings from `codex-astra-review.md` closed** (that review is a local-only note, not in the repo) (review findings 2, 1, 4, then 3). Finding 5 (SE newcase template paths) is **declined by owner decision**: SE is never used in practice and is likely to be dropped from future ExoCAM revisions — don't fix it. The larger "experiment as unit of work" program is untouched; the owner's stated direction is **increasing agent wrapping of the existing casemgr interfaces**, which is what the exit-code work serves. All fixture-verified locally; `tests/` now holds 54 tests across five files.
 
 1. **`QUEUED` status + one resolver (finding 2).** `_resolve_status()` (runmgr.py) consults the squeue snapshot for every case; a queued job whose last CaseStatus event is not `run started`/`run SUCCESSFUL` reads `QUEUED`, which is in `ACTIVE_STATUSES`. Closes a real double-submit hole: a just-submitted case read `BUILT` and `submit` did not block it. `cmd_check`'s private copy of the probe logic is gone. `tests/test_status_probe.py`.
 2. **Missing F90 template is an error (finding 1).** `_missing_template_error()` (build.py): newcase → error; clone naming any `EXO_PARAMS` → error listing them; clone naming none → warning + `inherited unchanged` comment. No more `install manually` placeholder. Practical consequence: **clone matrices that set exoplanet_mod parameters must be generated on Discover.** `tests/test_missing_template.py`.
