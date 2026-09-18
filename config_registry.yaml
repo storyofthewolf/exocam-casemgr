@@ -32,11 +32,18 @@ paths:
   # Generated inputs (build.py prep): products of Chain A (star -> solar file ->
   # cice albedos) and Chain B (ic_template -> ncdata) live here, never inside
   # the ExoCAM/ExoRT checkouts. Subdirs solar/, albedo/, ic/<config_type>/.
-  generated_inputs: /gpfsm/dnb33/etwolf/cesm_scratch/generated_inputs
-  # stellar-interpolator checkout + its BT-Settl grid (grid/ under it by default).
-  # CONFIRM these on Discover -- the grid must be copied there once (~4 GB).
+  #
+  # p54, NOT cesm_scratch (owner decision 2026-09-18). These products are cheap
+  # to regenerate, but they are live inputs to running cases and each carries a
+  # .prep.yaml manifest recording engine git SHAs -- an archival artifact. A
+  # scratch purge mid-run would be costly; p54 is durable and holds the grid.
+  generated_inputs: /gpfsm/dnb07/projects/p54/users/etwolf/generated_inputs
+  # stellar-interpolator checkout (code only; ~300 MB, dhome has a 1 GB quota).
   stellar_interpolator: /gpfsm/dhome/etwolf/pythonWorkspace/stellar-interpolator
-  # btsettl_grid: /gpfsm/dnb33/etwolf/data/btsettl_grid      # override if not <stellar_interpolator>/grid
+  # BT-Settl grid: 3.8 GB / 332 lte*.dat.txt files, too big for dhome, so it
+  # does NOT sit under <stellar_interpolator>/grid and this override is required.
+  # SpectralGrid.from_dir globs 'lte*.dat.txt' recursively, so layout is flexible.
+  btsettl_grid: /gpfsm/dnb07/projects/p54/users/etwolf/btsettl_grid
   # exocam_py_progs / exort_tools default to <exocam_root>/tools/py_progs and
   # <exort_root>/tools; set only to point elsewhere.
 
