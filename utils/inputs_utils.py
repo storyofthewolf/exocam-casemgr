@@ -41,7 +41,20 @@ import sys
 
 import yaml
 
-ICE_SURFACES = ('blueice', 'mixed')
+# The reflectance spectrum behind albice{v,i}. Blue ice is the only legal
+# value (owner decision 2026-09-18): albice* is ALWAYS bare blue ice and
+# albsnow* is ALWAYS snow, because CICE itself computes the bare-ice and
+# snow-covered area fractions and combines them into its own mixed albedo.
+# Handing it a pre-mixed spectrum double-counts that mixing. The calculator
+# still ships a 50%Mixture.txt and exposes it via its own --mixed CLI flag;
+# this constrains what casemgr may request, not what the calculator can do.
+#
+# Kept as a tuple rather than dropped: the value is recorded in each albedo
+# product's name and .prep.yaml manifest, read back by scan.py and re-emitted
+# by query.py export, so it is the provenance record of which spectrum made
+# the numbers -- and the hook for a future third surface, should one be a
+# genuine bare-ice variant rather than a pre-mix.
+ICE_SURFACES = ('blueice',)
 DEFAULT_ICE_SURFACE = 'blueice'
 MANIFEST_SUFFIX = '.prep.yaml'
 
@@ -254,6 +267,13 @@ def plan_inputs(spec, registry, paths, pstd_bar=None, pressure_str=None):
         want_albedos = want_albedos.strip().lower() == 'true'
     ice_surface = spec.get('ice_surface', DEFAULT_ICE_SURFACE)
     if ice_surface not in ICE_SURFACES:
+        if ice_surface == 'mixed':
+            raise InputSpecError(
+                "ice_surface 'mixed' is not supported: albice* must come from "
+                "bare blue ice and albsnow* from snow. CICE computes the "
+                "bare-ice and snow-covered area fractions itself and combines "
+                "them, so a pre-mixed reflectance spectrum double-counts the "
+                "mixing. Drop the key (blueice is the default).")
         raise InputSpecError(f"ice_surface '{ice_surface}' not one of {ICE_SURFACES}")
     explicit_cice = spec.get('cice_params')
     if star is not None and want_albedos:

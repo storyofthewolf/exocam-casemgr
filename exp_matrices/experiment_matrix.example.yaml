@@ -76,7 +76,8 @@ base:
   # star: sun                                   # shipped G2V spectrum; makes albedos only
   # star: {teff: 3400, feh: 0.0, logg: 4.5}     # BT-Settl interpolation -> btsettl_T3400_g4.5_m0.0_<res>.nc
   # make_albedos: true                          # default once `star` is set
-  # ice_surface: blueice                        # blueice | mixed  (albice*); snow always snow100um
+  # ice_surface: blueice                        # only value; albice* is always bare blue ice and
+  #                                             # albsnow* always snow -- CICE mixes the fractions itself
 
   # -----------------------------------------------------------------------
   # Geophysical parameters

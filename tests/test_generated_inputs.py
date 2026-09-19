@@ -74,8 +74,8 @@ class Naming(unittest.TestCase):
         self.assertEqual(inputs_utils.ic_name('ctrl51', '0.1bar', 51, False), 'ic_ctrl51_0.1bar_L51_ic.nc')
 
     def test_albedo_product_name(self):
-        self.assertEqual(inputs_utils.albedo_product_name('/x/G2V_SUN_n68.nc', 'mixed'),
-                         'G2V_SUN_n68__mixed.albedos.sh')
+        self.assertEqual(inputs_utils.albedo_product_name('/x/G2V_SUN_n68.nc', 'blueice'),
+                         'G2V_SUN_n68__blueice.albedos.sh')
 
     def test_parse_star(self):
         self.assertIsNone(inputs_utils.parse_star(None))
@@ -113,10 +113,23 @@ class Planning(unittest.TestCase):
         self.assertEqual(warns, [])
 
     def test_star_sun_uses_shipped_solar_and_generates_albedos_only(self):
-        items, eff, _ = plan(base_spec(star='sun', ice_surface='mixed'))
+        items, eff, _ = plan(base_spec(star='sun'))
         self.assertEqual([it.kind for it in items], ['albedo'])
         self.assertEqual(eff['exo_solar_file'], '/hpc/ExoRT/data/solar/G2V_SUN_n68.nc')
-        self.assertTrue(eff['albedo_product'].endswith('G2V_SUN_n68__mixed.albedos.sh'))
+        self.assertTrue(eff['albedo_product'].endswith('G2V_SUN_n68__blueice.albedos.sh'))
+
+    def test_ice_surface_mixed_is_rejected(self):
+        # CICE combines the bare-ice and snow-covered fractions itself, so a
+        # pre-mixed reflectance spectrum double-counts the mixing.
+        with self.assertRaises(inputs_utils.InputSpecError) as cm:
+            plan(base_spec(star='sun', ice_surface='mixed'))
+        msg = str(cm.exception)
+        self.assertIn('mixed', msg)
+        self.assertIn('CICE', msg)
+
+    def test_ice_surface_unknown_is_rejected(self):
+        with self.assertRaises(inputs_utils.InputSpecError):
+            plan(base_spec(star='sun', ice_surface='greenice'))
 
     def test_resolution_follows_exort_pkg(self):
         items, eff, _ = plan(base_spec(star={'teff': 3000}, exort_pkg='n28archean'))
