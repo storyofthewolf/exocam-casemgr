@@ -90,6 +90,7 @@ ic_templates:
   ctrl48:  cam_aqua_fv/control_L48.cam.i.0048-01-01-00000.nc
   ctrl51:  cam_aqua_fv/control_L51.cam.i.nc
   land40:  cam_land_fv/control_L40_dry.cam.i.nc
+  iso51:   /gpfsm/dnb07/projects/p54/users/etwolf/climateML/icfiles/ic_1.0bar_L51_300Kiso_ic.nc   # 300 K isothermal start, as the rocky-planet emulator suites
 
 # IC file table.
 # These are the files present in cesm1.2.1/initial_files/<config_type>/
