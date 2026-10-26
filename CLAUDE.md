@@ -320,7 +320,7 @@ Added 2026-09-13 (PROPOSED_PLANS.md — a local-only working note, not in the re
 |---|---|---|---|
 | `star: sun` \| `{teff, feh, logg[, method]}` | absent = no generation | `exo_solar_file` (`btsettl_T<teff>_g<logg>_m<feh>_<res>.nc`, `<res>` from `exort_pkg`; `sun` → the shipped `G2V_SUN_<res>.nc`) | stellar-interpolator (`interpolate`, `write_sed`) → `ExoRT/tools/makeStellarSpectrum_fromSED.make_stellar_file` |
 | `make_albedos` | `true` (only acts when `star` is set) | `cice_params` via `<solar-stem>__<ice_surface>.albedos.sh` | `ExoCAM/tools/py_progs/broadband_albedo_calculator.compute_cice_albedos` |
-| `ice_surface` | `blueice` (\| `mixed`) | the reflectance used for `albice*`; snow always `snow100um` | — |
+| `ice_surface` | `blueice` (only value; `mixed` is rejected — CICE does its own area mixing, so a pre-mixed spectrum double-counts it) | the reflectance used for `albice*`; snow always `snow100um` | — |
 | `ic_template: <tag>` | absent = `ic_files` table lookup as before | `ncdata` (`ic_<tag>_<P>bar_L<nlev>[_dry]_ic.nc`) | `ExoCAM/tools/py_progs/mod_ncdata.modify_ncdata` |
 | `ic_dry` | `true` | zero Q/CLDLIQ/CLDICE in the generated IC | — |
 
@@ -332,7 +332,7 @@ Added 2026-09-13 (PROPOSED_PLANS.md — a local-only working note, not in the re
   - **`PS` flat does not discard topography**, even for land/mixed: a CAM `ncdata` file carries no `PHIS` (topography arrives via the separate `bnd_topo` boundary file — which is why `parse_utils.py` scans them as distinct keys). A flat-`PS` IC over real terrain is a spin-up transient the model re-diagnoses from its own `PHIS`, and the IDL says so in its own comment (`changepress_cesm.pro:29-30`). The `scaled` mode, present and algebraically identical in both, is the option that preserves a spatially varying template `PS`.
 - **Products live under `paths.generated_inputs`** (`solar/`, `solar/sed/`, `albedo/`, `ic/<config_type>/`), never inside the ExoCAM/ExoRT checkouts. `ic_templates` in the registry maps a short tag to a file under `initial_files/` (or an absolute path); the tag is part of the product name, so never reuse one for a different file. `<P>` uses `bar_to_pressure_str`, so a gas-sum `pstd` like `1.000123` names an honest, odd file.
 - **Registry round-trip.** `scan.py` reads the manifests beside the products a case references (`generated_inputs` group: `star_teff/feh/logg/method`, `ice_surface`, `albedo_product`, `ic_template`, `ic_dry`, `ic_pstd_bar`); `query.py export` then emits `star`/`ice_surface`+`make_albedos`/`ic_template`+`ic_dry` in place of the product paths (`_apply_inputs_export`), so a regenerated matrix re-generates rather than pins a path. Hand-made inputs (no manifest) export exactly as before. Clone exports drop the generated-input keys with everything else outside `_CLONE_BASE_FIELDS`.
-- **Discover prerequisites — done 2026-09-18.** `paths.stellar_interpolator` is `/gpfsm/dhome/etwolf/pythonWorkspace/stellar-interpolator` (code only; dhome has a 1 GB user quota). The BT-Settl grid (3.8 GB, 332 `lte*.dat.txt`) is at `/gpfsm/dnb07/projects/p54/users/etwolf/btsettl_grid`, so **`paths.btsettl_grid` is required, not optional** — the default `<stellar_interpolator>/grid` would not fit in dhome. `paths.generated_inputs` is `/gpfsm/dnb07/projects/p54/users/etwolf/generated_inputs` — p54, **not** `cesm_scratch`: the products are regenerable but are live inputs to running cases, and their `.prep.yaml` manifests are archival. ExoCAM (`49a0b23`), ExoRT (`e67fe8c`) and casemgr are current on Discover. `prep --execute` has still never been run.
+- **Discover prerequisites — done 2026-09-18.** `paths.stellar_interpolator` is `/gpfsm/dhome/etwolf/pythonWorkspace/stellar-interpolator` (code only; dhome has a 1 GB user quota). The BT-Settl grid (3.8 GB, 332 `lte*.dat.txt`) is at `/gpfsm/dnb07/projects/p54/users/etwolf/btsettl_grid`, so **`paths.btsettl_grid` is required, not optional** — the default `<stellar_interpolator>/grid` would not fit in dhome. `paths.generated_inputs` is `/gpfsm/dnb07/projects/p54/users/etwolf/generated_inputs` — p54, **not** `cesm_scratch`: the products are regenerable but are live inputs to running cases, and their `.prep.yaml` manifests are archival. ExoCAM (`49a0b23`), ExoRT (`e67fe8c`) and casemgr are current on Discover. `prep --execute` first ran for real on 2026-09-25 (products + manifests checked).
 
 ---
 
@@ -347,7 +347,7 @@ Three checks per resolved case spec (`verify_case` in `build.py`), returning `(e
 
 Existence checking assumes `--verify` runs on the HPC, where every input file should live. A var-free path whose file **or its parent directory** is absent is a hard **failure** (`file not found` / `directory not found`) — a missing dir is the common symptom of a mistyped/transposed path. The only SKIPPED (`·` note) case is a path that still contains an **unexpanded `$VAR`** (the env var isn't set, so it genuinely can't be resolved). Config-restricted fields present under the wrong `config_type` (e.g. `finidat` on an aqua config) are noted as ignored, not checked.
 
-3. **Scientific consistency** (`_verify_o2_ozone`, `_verify_ozone_convect_plim`) — O2 vs ozone, and ozone vs `exo_convect_plim`. **Warnings only.** See "Composition inheritance → `--verify` consistency warnings" above for the rules.
+3. **Scientific consistency** (`_verify_o2_ozone`, `_verify_ozone_convect_plim`) — O2 vs ozone, and ozone vs `exo_convect_plim`. **Warnings only.** See "Composition inheritance → `--verify` consistency warnings" below for the rules.
 
 Beyond these three, `validate_case` itself (so **both** plain `generate` and `--verify`) hard-fails a case where the restart interval outruns the segment length — see "REST_N ≤ STOP_N guard" below.
 
@@ -524,179 +524,22 @@ Cases scanned before `run_type` support was added will not have `run_type`, `run
 ### diff.py: non-standard ExoRT package directory paths
 `build_exort_fileset` constructs the ExoRT reference as `{exort_root}/3dmodels/src.cam.{exort_pkg}/`. Experimental branches outside this path cause RT detection to silently return `{}` — affected files appear as `CASE ONLY`. Cases with non-standard RT are flagged with `*` in `query.py search` output. Future fix: add `paths.exort_pkg_dirs` map to `config_registry.yaml`.
 
----
-
-## Session handoff — 2026-09-13 (evening) — `build.py prep`
-
-**Generated inputs landed** (PROPOSED_PLANS.md, local-only, "build.py prep"; owner-agreed shape). Four repos touched; see the "build.py prep — generated inputs" section above for the design. `tests/test_generated_inputs.py` (31 tests, incl. engine acceptance tests that run only where `/Users/wolfe/models/ExoCAM` + `ExoRT` exist).
-
-- **ExoCAM/tools/py_progs**: `broadband_albedo_calculator.py` rewritten as an importable module (`compute_albedo`, `compute_cice_albedos`; reflectance spectra located relative to the file, not the cwd; CLI unchanged, numbers identical). New `mod_ncdata.py` (importable; pressure rescale finished with the IDL's flat/scaled modes; generic copy-with-substitution writer that preserves every variable and attribute; temp-then-rename). `mod_cam.i.file.py` removed (nothing referenced it). README updated.
-- **ExoRT/tools**: `makeStellarSpectrum_fromSED.py` gained `make_stellar_file()` (the whole of the old `main()`, bit-identical output; `verbose`/`plot` switches). Note: the shipped `bt-settl_3000_logg4.5_FeH0_n68.nc` differs from what the current Python binner produces from the same raw file (up to 0.68 W/m² per band) — pre-existing, presumably the IDL era; not touched.
-- **stellar-interpolator**: unchanged; used as a library (`SpectralGrid.from_dir`, `interpolate`, `write_sed`).
-- **casemgr**: `inputs_utils.py` (new), `build.py` (`apply_inputs`, `_build_required_inputs_block`, `_build_albedo_block`, `cmd_prep`, verify warning for un-made products), `scan.py` (`generated_inputs` group), `query.py` (`_apply_inputs_export`), `config_registry.yaml` (`paths.generated_inputs`, `paths.stellar_interpolator`, `ic_templates`).
-
-**Decisions made in-session, worth knowing:**
-1. Generation is **opt-in via `star`** (see the Key behaviors bullet): the calculator's solar albedos are not the CICE-tuned template values, so a silent default-on would have changed every solar matrix. Open question for the owner: whether M-dwarf cases should use raw calculator values (current) or template values scaled by the star/sun ratio.
-2. `--verify` on an un-prepped case **warns**, not fails; `prep` preview exits 0 when only products are missing and 1 for a matrix error.
-3. The `ic_files` table shows the naming hazard the tag scheme avoids: `ic_1bar_L51_ic.nc` is actually 1.12 bar, `ic_1.2bar_L40_ic.nc` is 1.0 bar, `ic_10bar_L51_zmean_ic.nc` is 2 bar (from the PS survey). Generated names are computed from the recipe, so this cannot recur for products.
-
-### Good starting points for next session
-- **Discover setup**: confirm `paths.stellar_interpolator`, copy the BT-Settl grid, create `paths.generated_inputs`; then `prep --execute` a real M-dwarf suite and build one case end to end. The generated STEP 0 guard has only been exercised locally.
-- Decide the `ice_surface` default (`blueice` now) and the sun/ratio question above.
-- The K2V case in `experiment_matrix.example.yaml` can now be written as `star: {teff: 5000, …}` — a good first real use.
+### Legacy `ic_files` names do not state their real pressure (config_registry.yaml)
+From a PS survey: `ic_1bar_L51_ic.nc` is actually 1.12 bar, `ic_1.2bar_L40_ic.nc` is 1.0 bar, `ic_10bar_L51_zmean_ic.nc` is 2 bar. The names are table keys, not measurements — don't infer an IC's pressure from its filename. Products made by `build.py prep` are named from their recipe, so this cannot recur for them.
 
 ---
 
-## Session handoff — 2026-09-13
+## Deliberately not done — don't implement without the owner
 
-**Four findings from `codex-astra-review.md` closed** (that review is a local-only note, not in the repo) (review findings 2, 1, 4, then 3). Finding 5 (SE newcase template paths) is **declined by owner decision**: SE is never used in practice and is likely to be dropped from future ExoCAM revisions — don't fix it. The larger "experiment as unit of work" program is untouched; the owner's stated direction is **increasing agent wrapping of the existing casemgr interfaces**, which is what the exit-code work serves. All fixture-verified locally; `tests/` now holds 54 tests across five files.
+- **A non-interactive `--yes` on the batch `[yes/no]` gate.** Decided 2026-09-25: "a flag the agent can type is a gate the agent can answer." Revisit only paired with a harness-level permission rule, so approval lives in Claude Code rather than in the model's conduct. A partial implementation was written and reverted.
+- **Multi-step workflows as new verbs or a workflow layer.** Sequences of existing verbs (launch, clear-sky on/off, rebuild → continue/restart) are orchestrated by the skills (`exocam-experiment`, `exocam-rules`), not by code here. Decided 2026-09-25 for launch; reaffirmed 2026-10-25 for clear-sky. Code earns a place only for what an agent cannot do reliably by calling verbs.
+- **SE newcase template paths** (codex review finding 5). SE is never used in practice and is likely to be dropped from future ExoCAM revisions.
+- **Verifying the `.r.`/`.i.` files named by reset `rpointer.*`** — see the rpointer section.
+- **The `render_exoplanet_mod` trailing-comment whitespace wart** — fixable, but it changes generated-script bytes for every case; do it deliberately, alone, if ever.
 
-1. **`QUEUED` status + one resolver (finding 2).** `_resolve_status()` (runmgr.py) consults the squeue snapshot for every case; a queued job whose last CaseStatus event is not `run started`/`run SUCCESSFUL` reads `QUEUED`, which is in `ACTIVE_STATUSES`. Closes a real double-submit hole: a just-submitted case read `BUILT` and `submit` did not block it. `cmd_check`'s private copy of the probe logic is gone. `tests/test_status_probe.py`.
-2. **Missing F90 template is an error (finding 1).** `_missing_template_error()` (build.py): newcase → error; clone naming any `EXO_PARAMS` → error listing them; clone naming none → warning + `inherited unchanged` comment. No more `install manually` placeholder. Practical consequence: **clone matrices that set exoplanet_mod parameters must be generated on Discover.** `tests/test_missing_template.py`.
-4. **Exit codes (finding 3).** See "Exit codes" above. `Outcome` + `EXIT_*` in manage_utils.py; every `cmd_*` returns a code; `main()` in all three tools does `sys.exit(code or 0)`. Plain `generate` now exits 1 when any case is skipped for errors (it was 0; only `--verify` failed). `make`'s abort is 4 instead of `sys.exit("Aborted.")`. `patch` also now flags `QUEUED` alongside `RESUBMITTED`. `tests/test_exit_codes.py`.
-3. **One history-selection rule (finding 4).** `select_last_monthly_hist()` + `PRIMARY_HIST_STREAM` (manage_utils.py) back both `runmgr check --energy` and `datamgr avg --last`. `datamgr avg --last N` now means the last `12*N` monthly primary-stream files (was: last N calendar-year labels over every file, so a partial year shortened the window and h1 streams leaked in). Preview shows the `YYYY-MM..YYYY-MM` span; a short record warns. `_hist_keep_years_filter` is still what `purge-hist --keep-years` uses — that one is about *years on disk*, not averaging inputs, and is unchanged. `tests/test_hist_selection.py`.
+## Open items (verified 2026-10-25)
 
-5. **Job-ID persistence + sacct verdict.** See "Job-ID persistence" and the SLURM probe section. `tests/test_job_log.py`.
-6. **Streamed per-attempt build logs.** See the `make` bullet under "Key non-obvious behaviors". `tests/test_build_logs.py`.
-
-### Good starting points for next session
-- Agent wrapping is the stated direction. Exit codes, job-ID persistence, and streamed build logs are done. **The non-interactive `--yes` flag for the batch gate is deliberately on hold** — the owner is weighing per-invocation authorization (`--execute --yes`, human composes the command) against the review's per-experiment authorization (a config that pre-approves routine transitions). Do not implement either until that is decided.
-- Clone matrices silently ignore `nlev`/`cloud_scheme` (never written to `CAM_CONFIG_OPTS`); a generate-time warning like the ncdata one would close it.
-- README bare-`make` examples and the example matrix's `exo_build.py`/staged-Fortran text are stale.
-
----
-
-## Session handoff — 2026-08-26
-
-**`ncdata` was never written to the live namelist line.** Diagnosed from the HPC side (see `volcanos/description_paper/notes/casemgr_ncdata_handoff.md`), reproduced and fixed here.
-
-**The bug.** Both call sites (newcase + clone) wrote `ncdata` with
-
-```
-sed -i "s|ncdata = '.*'|ncdata = '<path>'|" user_nl_cam
-```
-
-Two independent defects: the pattern is **not anchored**, so `!ncdata = '...'` contains the substring and every commented line got rewritten; and it is **single-quote-only**, so a live line written with double quotes could not match and survived the clone verbatim. The build faithfully wrote the correct path into six dead comments and left the template's hardcoded IC live. `exovolc_ben1_control/run/atm_in` and `exovolc_ben2_control/run/atm_in` were byte-identical; all 14 ben2 cases aborted at timestep 2 in `MAPZ_MODULE`. The matrix was not at fault — it set `ncdata` correctly.
-
-**Reproduced locally before fixing:** generated `exovolc_ben2_control` from `ben2_suite1.yaml`, ran the emitted sed against a replica namelist, confirmed comments rewritten and live line untouched. A `TestOldPatternIsActuallyBroken` case in the new test file locks that fixture in, so the regression tests can't drift into passing against a fixture that no longer exercises the bug.
-
-**What changed**
-
-1. **`_nl_upsert_verified_lines(key, value, target, label)`** (build.py) — delete-then-append with an anchored key pattern, then a verify step in the generated script: exactly one live line, carrying the intended value, or `exit 1`. Used for `ncdata` (both build paths) and `finidat`/`fsurdat` (`_build_clm_update_block`, which had the identical defect in the mirror-image form: double-quote-only and unanchored).
-2. **Clone-without-`ncdata` warns at generate time.** The one remaining silent path — nothing is emitted, so nothing can fail. This is what `exovolc_hab1_control_actest` hit (the note's unresolved finding #5): it was the *first*, hand-built minimal clone matrix that set no `ncdata`, not a third code path or the `ic_file` gating misfiring. The `hungatonga`/`pinatubo`/`tambora` suites (54 cases) surface this warning too — they inherit from `cam_mixed_fv_modern_eruption` by design, but it is now visible rather than assumed.
-3. **`validate_case` rejects `ncdata`/`finidat`/`fsurdat` inside `nl_cam_params`** — the group upsert runs after the dedicated block and would silently beat it.
-4. **`exo_solar_file` sed comment-guarded** (`/^[[:space:]]*!/!`). Same latent defect class; it is a Fortran `character(...) :: ` declaration so it cannot be start-of-line anchored. Verified it still rewrites the live line and preserves the trailing `!!` comment.
-5. **`tests/test_ncdata_upsert.py`** — 13 tests, the repo's first. Covers double- and single-quoted live lines, comment preservation, duplicate collapse, absent key, prefix-key non-matching, the loud-failure path, the clm mirror, the `nl_cam_params` collision, the solar-file comment guard, and the old-pattern anchor. Run with `python3 tests/test_ncdata_upsert.py`. It shells out to real `sed`/`grep` and normalizes GNU vs BSD in-place flags, so it validates the emitted shell rather than a Python approximation.
-6. **Corrected the misleading comment in 5 matrices** (`ben1_suite1`, `ben2_suite1`, `hab1_ac_test`, `hab1_suite1`, `hab2_suite1`, under `volcanos/description_paper/experiment_yamls/`). It blamed the abort on "leaving `ncdata` unset"; the matrix *did* set it. All 12 matrices still parse.
-
-**Verified:** 118 scripts regenerated across 8 matrices, 0 errors, all pass `bash -n`. The emitted upsert block was executed against replica namelists — comments preserved, live double-quoted line replaced, exactly one live `ncdata` — and the sabotaged-write path exits 1 with an `ERROR:` line.
-
-**Not done — needs the HPC (task 4 of the note, and the audit):**
-- ~~Fix the two clone templates.~~ **Resolved 2026-08-26: the templates keep a live `ncdata` (Option A + warning), by owner decision.** The handoff note recommended commenting them out; that was considered and rejected — see the entry above. Note the note's line numbers and paths are stale: the templates were hand-edited the same day (the commented `!ncdata` candidate lines are gone, `ncdata` is now at line 9/9/10, and `cam_land_fv_eruption` was repointed from ben1 to **ben2**). Read the live files, not the note.
-- ~~Audit the generated cases.~~ **Done 2026-08-26.** Results: **14 `exovolc_ben2_*` cases confirmed carrying ben1's IC** (the 4 hand-built `_diag5/7`/`_test1/2` are correct); **`exovolc_hab1_control_actest` confirmed carrying hab2's IC**, `actest2` correct; **all 63 built mixed-fv cases (hunga 29, pinatubo 18, tambora 16) are on the correct `cam_mixed_fv_modern` IC** — the inheritance there was benign, and that branch of the audit is closed. The hab1/hab2 suites are not built yet.
-- **Regenerate + rebuild the 14 ben2 cases**, then the note's verification: `ncdata` must name ben2, and ben1/ben2 `atm_in` must now **differ**. Short 1-year `exovolc_ben2_control` before committing the full 14.
-- ben1's 14 completed runs have the correct IC by luck and do not need rerunning on this account.
-
----
-
-## Session handoff — 2026-07-27 (evening)
-
-**`rebuild` relocated to `build.py`; two bugs found by running it on a real ensemble.** Seven commits on `main` (`7390c04`..`464740d`), all pushed.
-
-1. **`7390c04` — runmgr help ergonomics.** The top-level `SUBCOMMANDS` listing was hand-maintained prose while every subparser used `help=argparse.SUPPRESS`, so nothing rendered and the list drifted (`rebuild` had an extra space, breaking the column). Each subparser got a real `help=` string; argparse now renders and aligns the listing like `build.py` does. `SAFETY` stays (argparse can't express it).
-2. **`58108f7` + `4ab9f72` — `rebuild` moved to `build.py`, then narrowed.** Owner's test: **no runmgr verb runs `<case>.build`** — compiling, not submitting, is what divides the modules (`make --send-it` already sbatches from `build.py`). It briefly gained `--send-it`; that was **removed** after the owner noted that rebuilding *without* resetting `CONTINUE_RUN` is routine, and forcing `CONTINUE_RUN=FALSE` + rpointer reset made it impossible. `rebuild` now compiles and stops.
-3. **`597fbc0` — workflow recipes in `rebuild --help`.** The two-step relaunch was only in CLAUDE.md; now three copyable recipes (continue / restart / submit) live in the help text, including the caveat that `submit` runs whatever the XML says.
-4. **`ff6b56e` — `<- not COMPLETE` preview flag removed** from `continue`/`restart`/`submit`. It restated the label beside it, gated nothing (fed only its own `print`), and fired on all 20 cases of a correct rebuild → restart pass, since `rebuild` appends `build complete` to `CaseStatus` and `_probe_status` reads only the last line.
-5. **`9bb0f30` — real bug: rpointer reset wrote to `<caseroot>/<case>/run`, which has never existed.** `RUNDIR` is its own filesystem root. Every other rundir consumer already used `paths.rundir`; this one site didn't, so **the feature could never have worked outside the fixture** — which encoded the same wrong assumption and therefore validated the bug. New `_run_dir()` is the single resolver; the plan now checks the destination too, so a missing run dir warns in the preview instead of failing under `--execute`.
-6. **`464740d` — startup cases state `rpointer.*: not needed`** instead of printing nothing. No behavior change: the skip was already correct (`CONTINUE_RUN=FALSE` + `RUN_TYPE=startup` initializes from `ncdata` at `RUN_STARTDATE` and never reads the pointers). Silence was indistinguishable from a reset skipped by mistake.
-
-**Verified on Discover:** 20-case `exovolc_hunga_` ensemble rebuilt (all 20 binaries relinked, ~29 s/case), then restarted after the rpointer fix. Case census: 62 hybrid, 29 startup, 8 branch.
-
-### Good starting points for next session
-- Owner flagged that these ergonomics may be revisited as use continues — nothing is settled by fiat.
-- The `exovolc_hunga_` ensemble was restarted successfully after the rpointer fix; that thread is closed.
-- Existing items still open: stale `build.py` module docstring; whether `datamgr.py avg` should move to `runmgr.py`; `render_exoplanet_mod` trailing-comment whitespace wart (changes generated bytes everywhere — do it alone).
-
----
-
-## Session handoff — 2026-07-11
-
-**Full review-fix cycle closed.** Two review docs in repo root (`fable-review-correctness.md`, `fable-review-design.md`, currently untracked) drove five commits on `main`, all fixture-verified locally:
-
-1. **`a08a6bc` — helper convergence.** runmgr's private `_batch_confirm`/`_resolve_cases` replaced by manage_utils `batch_confirm`/`_require_cases` (explicit names now validated against disk); `preview_hint` adopted everywhere; retire converged to a single batch confirm (per-case prompts removed, owner decision); dead `confirm()` removed; `scan --update` help now states clobber semantics.
-2. **`e7d625d` — datamgr destructive-path safety.** retire hard-blocks RUNNING/RESUBMITTED and preserve-target collisions in long-term (shutil.move would silently overwrite files / nest directories — `rest/<date>/<date>`); clean verbs soft-flag active jobs; `--keep 0`/`--keep-years 0` are honest explicit delete-alls (the old `sets[-0:]` preview claimed to keep everything while deleting all); move-hist skips (never overwrites) long-term collisions; avg gained the double gate + `ncra -O` with overwrite disclosure.
-3. **`fd8ff3f` — build.py validation.** Clone matrices no longer false-fail the IC table lookup (removed for clones; pressure from matrix-only gases is wrong by construction); clone-silent ozone exempt from `--verify` warnings (`_effective_ozone_file` → None); int-tagged params (`exo_rad_step`) render as bare integers via PARAM_TYPES dispatch (owner-confirmed; `patch --set` wrote `4.0_r8` into an integer parameter); `_sed_escape_replacement` hardening.
-4. **`35e66f9` — registry round-trip.** 8 EXO_PARAMS (`exo_mvelp`, `exo_ve`, `exo_albdif`, `exo_albdir`, `do_carma_exort`, `Tmax`, `swFluxLimit`, `lwFluxLimit`) now flow scan → registry → query export; SE aqua cases no longer misregister as `cam_aqua_fv` (`parse_atm_grid` reads ATM_GRID/GRID from env xmls). **Requires `scan.py --update` re-scan on Discover**; audit matrices previously exported from SE cases (they carry FV config_type).
-5. **`0666662` — per-case nl group deep-merge** (owner decision): `nl_cam_params`/`carma_params`/`volc_params`/`cice_params` case blocks inherit the base block and override only named inner keys; explicit `key: null` deletes an inherited key. Matrices that relied on wholesale replacement must switch to nulls.
-6. **Phase 5 minors (this commit):** runmgr xml/continue/restart previews read all env_*.xml files (build-time vars no longer preview as `?`); continue/restart skip unbuilt cases *before* any xmlchange; `--energy` temp file is mkstemp-unique (+ `ncra -O`) instead of a fixed name in shared /tmp; query.py `DEFAULT_REGISTRY` is script-dir-absolute like `RETIRED_REGISTRY`; `--info` (runmgr check + datamgr avg) reports avg bytes separately from the non-avg count/size, and avg-only dirs contribute to TOTAL.
-
-### Good starting points for next session
-- Run `scan.py --update` on Discover (populates the 8 new registry fields, corrects SE rows), then spot-check `query.py export` output.
-- Skim `exp_matrices/` for per-case nl group blocks that relied on wholesale replacement (must switch to explicit `key: null`).
-- Still open from before: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`; `render_exoplanet_mod` trailing-comment whitespace wart (fix deliberately, alone — changes generated bytes everywhere).
-
----
-
-## Session handoff — 2026-07-09
-
-**`build.py patch`, newcase namelist upsert, and composition inheritance closed.** Three commits on `main`.
-
-1. **`build.py patch` (`6a8c8cd`).** New subcommand: edits `exoplanet_mod.F90` in place in existing cases and reruns `<case>.build`. Motivated by a real incident — a batch of no-O3 cases was built with `exo_convect_plim = 4.e3` (the with-ozone value) because the matrix wasn't switched back. These are compiled-in Fortran `parameter` constants; no `xmlchange`/`user_nl` path reaches them, and `generate` would recreate the case. See the "build.py patch" section above.
-
-2. **Newcase upserts `nl_cam_params` (`eafd3ef`, bug fix).** `_build_nl_append_block` asserted "the newcase namelist never contains these entries, so plain append is correct." True for CARMA/volc keys; **false** for `prescribed_ozone_*`, which `cam_mixed_fv`'s shipped `namelist_files/user_nl_cam` carries. A matrix setting `prescribed_ozone_file` produced *two* lines for the key, and the winner depended on the namelist reader's duplicate handling. Newcase now uses `_build_nl_upsert_block`, as clone already did. `_build_nl_append_block`/`_nl_append_lines` removed (no other callers).
-
-3. **Composition inheritance closed (`b3d1da6`).** The matrix was already the arbiter for gases (newcase force-zeroes unspecified `GAS_BAR_PARAMS`) but *not* for ozone, which was inherited from the shipped namelist. A `cam_mixed_fv` matrix mentioning neither produced **no O2 and full ozone** — incoherent, and silent. Newcase now injects the zeroVMR no-ozone default unless the matrix names an ozone key. Silence uniformly means "no O2, no O3." `--verify` gained warnings for O2/ozone contradictions and the ozone/`exo_convect_plim` floor. Config templates keep their per-config defaults for users driving ExoCAM by hand; casemgr ignores them.
-
-All three changes affect **newly generated scripts only** — existing `*_build.sh` on the HPC must be regenerated.
-
-### Good starting points for next session
-- **Audit existing matrices before regenerating.** Any that relied on inheriting Earth-like ozone will now produce no-ozone cases. This is the one migration hazard introduced by `b3d1da6`.
-- **Regenerate the affected no-O3 build scripts** and confirm `prescribed_ozone_file` + `exo_convect_plim` agree in the rendered output.
-- `render_exoplanet_mod` still eats the whitespace before trailing `!!` comments (`_RE_PARAM_LINE` group 4 is `([^!\n]+)`). `patch_exoplanet_mod` fixes it locally; the `generate` path does not. Fixing it changes generated-script bytes for every case — do it deliberately, alone.
-- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py` (now more visible — ozone settings live there); whether `datamgr.py avg` should move to `runmgr.py`; `confirm()` in `manage_utils.py` is dead code.
-
----
-
-## Session handoff — 2026-07-08
-
-**`datamgr.py clean` bulk selection + batch ergonomics (datamgr.py, manage_utils.py).** The `clean` verbs' help promised `--prefix`, but it was never wired in — a real `clean purge-hist --prefix …` errored `unrecognized arguments: --prefix`. Four related changes, all UX/ergonomics (no change to what gets deleted):
-
-1. **`--prefix` on all clean verbs.** Added to `_add_destructive_args`; `_require_cases()` (manage_utils.py) now honors it with the same explicit-names-vs-`--prefix` mutual exclusion + no-`--all` guard `retire` already used. `retire`'s bespoke selection block now delegates to `_require_cases` (its duplicate `--prefix` arg removed); it still branches on `prefix_filter` for its batch-vs-per-case confirm.
-2. **`--models all`.** `_add_models_arg` accepts the literal `all`; new `_resolve_models(args, default)` expands `all` (and the omitted case) to the verb's own default set — `HIST_MODELS` for purge-hist/purge-logs/move-hist (`rest/` excluded), `AVG_HIST_DEFAULT_MODELS` for avg. Satisfies purge-hist's `--keep-years`/`--models` guard without typing the full component list.
-3. **Single batch confirm.** All five clean verbs (`purge-bld`, `purge-restarts`, `purge-hist`, `purge-logs`, `move-hist`) switched from per-case `confirm()` to the two-pass pattern retire/runmgr use: build deferred per-case closures during the preview pass, then under `--execute` ask **one** `batch_confirm()` (`Delete … for N case(s)? [yes/no]`) covering the whole set. New helpers: `_run_batch()` (datamgr.py) and `batch_confirm()` (manage_utils.py). `confirm()` is no longer used in datamgr.py (kept in manage_utils.py).
-4. **Trailing `--execute` hint.** `preview_hint()` (manage_utils.py) prints one `(preview only — rerun with --execute …)` line after the last `[preview]` block; no-op under `--execute`.
-
-All five commits are on `main` and pushed (`fb7d45c`..`b4a5d20`). Verified end-to-end against a temp-archive fixture: preview lists all cases with no prompts; `--execute`+`no` aborts leaving files intact; `--execute`+`yes` deletes the whole batch after one prompt.
-
-### Good starting points for next session
-- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`.
-- `avg`'s `--models all` expands to `AVG_HIST_DEFAULT_MODELS` (atm/lnd/ice), i.e. "all that avg targets by default" — not the full 9-component set. Revisit if a literal-all-components meaning is wanted there.
-- `confirm()` in manage_utils.py is now dead code (no caller in the package). Left in place; could be removed in a cleanup pass.
-
----
-
-## Session handoff — 2026-07-02
-
-**`build.py make` named-subset + explicit `--all` (build.py):** `make` previously only ran all scripts in `scripts-dir` or an `--prefix`-filtered subset, and a bare `make` with no filter would (after a confirmation prompt) build/submit *everything*. Two changes:
-
-1. Added `names` positional (`nargs='*'`): `build.py make foo bar_build.sh baz --send-it` runs exactly those cases, resolved against `scripts-dir` (bare names get `_build.sh` appended). Unknown names abort before anything runs. `--prefix` is ignored if `names` are given.
-2. Added `--all`: a bare `make` call (no `names`, no `--prefix`, no `--all`) now just **lists** the scripts in `scripts-dir` and exits — useful for browsing — instead of silently offering to build/submit everything. `--all` is required to intentionally run the full directory, matching the "no implicit --all" convention already used by destructive `datamgr.py`/`runmgr.py` subcommands (see "Design invariants" above, which is about those tools specifically — `make` is not destructive in the same sense but adopts the same UX guard since `--send-it` can submit many jobs at once).
-
-### Good starting points for next session
-- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`.
-
-## Session handoff — 2026-06-19
-
-Three generated-build-script bugs surfaced from a real batch (`gplfr_grp3.yaml`). All three fixes affect only **newly generated** `build_scripts/*.sh` — existing scripts on the HPC must be regenerated to benefit.
-
-**1. Namelist upsert duplicate bug (`_nl_upsert_lines`, build.py):** The clone-mode `grep "KEY" && sed -i "s|KEY = .*|...|" || echo >>` idiom appended a duplicate (e.g. cice albedos) instead of replacing, because the `&& … || …` chain falls through to the append branch on *any* non-zero `sed` exit, and the unanchored single-space pattern was brittle. Replaced with `if grep -qE "^[[:space:]]*KEY[[:space:]]*=" T; then sed -i -E ... ; else echo >> ; fi`. Append now fires only when the key is genuinely absent.
-
-**2. ncdata absolute-path mangling (build.py):** Explicit absolute `ncdata` values were double-prefixed with the config-type IC dir, producing `.../cam_aqua_fv//gpfsm/.../ic_*.nc`. New `resolve_ic_path()` helper: bare filename → prepend IC base dir; absolute/dir-bearing path → verbatim. Used by both `generate_shell_script` and `generate_clone_script`.
-
-**3. Newcase clean-slate gas composition (`render_exoplanet_mod`, build.py):** Added an `is_clone` flag. Newcase now forces every unspecified `GAS_BAR_PARAMS` gas to `0.0` (no more inherited modern-Earth `exo_o2bar=0.2095`) and always emits explicit `exo_n2bar` (`exo_n2bar_explicit` or `target − sum(specified)`). Clone preserves the source composition (unchanged behavior). `_fortran_value` bumped to 12 sig figs so the N2 fill precision survives. "Pressure and N2 handling" section above rewritten to document both paths.
-
-**Git workflow policy added** (this CLAUDE.md + global `~/.claude/CLAUDE.md`): bug fixes/docs/small changes commit directly to `main` without asking; significant features/new features/refactors → ask whether to branch first.
-
-### Good starting points for next session
-- Regenerate the `gplfr_grp3` build scripts on the HPC and verify all three fixes in the rendered output.
-- Existing handoff items still open: stale `build.py` module docstring; `nl_cam_params` recognized by `build.py` but not scanned by `scan.py`; whether `datamgr.py avg` should move to `runmgr.py`.
+- **Clone matrices silently ignore `nlev`/`cloud_scheme`** — never written to `CAM_CONFIG_OPTS` for a clone. A generate-time warning like the clone-without-`ncdata` one would close it.
+- **Stale docs:** `build.py`'s module docstring says "three subcommands" and omits `prep` and `rebuild`; README's `build.py make` examples (around line 169) show a bare `make` as building, but it only lists; `exp_matrices/experiment_matrix.example.yaml` header still describes `exo_build.py` and a staged `exoplanet_mod.F90`.
+- **M-dwarf albedos:** raw calculator values (current) vs. CICE template values scaled by the star/sun ratio — owner question, undecided.
+- **Per-case machine-readable outcomes** (e.g. `--json`) on the write verbs, so an agent sequencing verbs knows *which* cases failed without parsing text. Exit codes are batch-level.
