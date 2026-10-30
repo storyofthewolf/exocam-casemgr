@@ -66,6 +66,7 @@ EXO_PARAMS = {
     'do_exo_synchronous', 'do_exo_rt', 'do_exo_atmconst',
     'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
     'do_exo_gw', 'do_exo_simplevolc', 'do_carma_exort',
+    'do_am_fixes', 'do_am_fix_lbl',
     'Tmax', 'swFluxLimit', 'lwFluxLimit',
 }
 
@@ -107,6 +108,7 @@ PARAM_TYPES = {
     'do_exo_rt_clearsky': 'bool', 'do_exo_rt_spectral': 'bool',
     'do_exo_rt_carma': 'bool', 'do_exo_gw': 'bool', 'do_exo_simplevolc': 'bool',
     'do_carma_exort': 'bool',
+    'do_am_fixes': 'bool', 'do_am_fix_lbl': 'bool',
     # matrix run/control fields
     'nlev': 'int', 'stop_n': 'int', 'rest_n': 'int', 'resubmit': 'int',
     'ntasks': 'int',
@@ -834,6 +836,25 @@ def render_exoplanet_mod(template_path, spec, is_clone=False):
             lines_out.append(line)
 
     return ''.join(lines_out)
+
+
+def _unmatched_exo_params(template_path, spec):
+    """EXO_PARAMS the matrix names that have no active `parameter ::` line in
+    the template. render_exoplanet_mod substitutes by line match, so such a
+    key would silently do nothing -- e.g. do_am_fixes, which only the
+    cam_aqua_fv template declares (ExoCAM PR #14). The caller warns rather than
+    fails: no stock template declares do_exo_rt_carma/do_exo_simplevolc, and
+    matrices that set them false against one are harmless and must keep working.
+    """
+    declared = set()
+    with open(template_path) as f:
+        for line in f:
+            if line.lstrip().startswith('!'):
+                continue
+            m = _RE_PARAM_LINE.match(line)
+            if m:
+                declared.add(m.group(2))
+    return sorted(k for k in spec if k in EXO_PARAMS and k not in declared)
 
 
 # ---------------------------------------------------------------------------
@@ -2047,6 +2068,10 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
             template_path = None
 
         if template_path and os.path.exists(template_path):
+            unmatched = _unmatched_exo_params(template_path, spec)
+            if unmatched:
+                print(f"  WARNING: {case_name}: {', '.join(unmatched)} not declared "
+                      f"in {template_path} — the matrix setting has no effect.")
             exoplanet_mod_content = render_exoplanet_mod(template_path, spec, is_clone=is_clone)
         else:
             problem = _missing_template_error(spec, is_clone, template_path)

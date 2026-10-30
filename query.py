@@ -197,7 +197,8 @@ _BASE_FIELD_ORDER = [
     'do_exo_gw', 'do_exo_simplevolc',
     'exo_convect_plim', 'exo_rad_step',
     'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
-    'do_carma_exort', 'Tmax', 'swFluxLimit', 'lwFluxLimit',
+    'do_carma_exort', 'do_am_fixes', 'do_am_fix_lbl',
+    'Tmax', 'swFluxLimit', 'lwFluxLimit',
     # land/ocean files
     'finidat', 'fsurdat', 'som_pop_frc_file',
     # special

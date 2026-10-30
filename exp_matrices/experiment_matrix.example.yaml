@@ -100,6 +100,8 @@ base:
   do_exo_synchronous: false   # synchronous rotation mode
   do_exo_gw:          false   # gravity wave parameterization (avoid for low-P atmospheres)
   do_exo_simplevolc:  false   # simple volcanic forcing
+  # do_am_fixes:      false   # FV angular-momentum correction + fixer (Toniazzo et al. 2020; cam_aqua_fv only)
+  # do_am_fix_lbl:    false   # level-by-level AM fixer instead of global with taper (needs do_am_fixes)
 
   # -----------------------------------------------------------------------
   # Radiation options
