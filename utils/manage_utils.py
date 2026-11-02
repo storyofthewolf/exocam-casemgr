@@ -43,6 +43,19 @@ PRIMARY_HIST_STREAM = {
 # that was just submitted); without it `submit` could sbatch such a case twice.
 ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED', 'QUEUED')
 
+# Sandbox trial cases (debug, feature, sweep) are marked by name, not by
+# directory: they live in the production caseroot/rundir/archive. The marker
+# comes FIRST so no production --prefix can ever match a trial (a suffix such
+# as <parent>__dbg01 would match --prefix <parent>). Consumers: build.py
+# (source overlays and non-production model roots require it), scan.py (never
+# registers one), datamgr.py (never moves one to long-term storage).
+SANDBOX_PREFIX = 'sbx_'
+
+
+def is_sandbox_case(name):
+    """True if a case name (or a path ending in one) marks a sandbox trial."""
+    return os.path.basename(str(name).rstrip('/')).startswith(SANDBOX_PREFIX)
+
 # ---------------------------------------------------------------------------
 # Exit codes — one convention for every verb in build.py / runmgr.py / datamgr.py
 # ---------------------------------------------------------------------------

@@ -35,6 +35,13 @@ base:
   # and CAM_CONFIG_OPTS update; omit to inherit everything from the source case.
   # clone: my_completed_base_case
 
+  # Sandbox trial with a source overlay (one or two changed model files).
+  # Requires case names starting sbx_ ; see CLAUDE.md "Sandbox trials and
+  # source overlays". The directory holds BASE.yaml + src.<component>/<file>.
+  # source_overlay: ../src            # relative to this matrix file
+  # overlay_set:                      # parameter lines inside the overlay files
+  #   cldfrc_pmode: 0
+
   # Run length (xmlchange)
   # Defaults: stop_option=nyears, stop_n=20, rest_n=5 (from config_registry.yaml defaults)
   stop_option:  nyears

@@ -24,6 +24,7 @@ import yaml
 # allow running from any directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import utils.inputs_utils as inputs_utils
+from utils.manage_utils import is_sandbox_case
 from utils.parse_utils import (
     parse_exoplanet_mod, parse_user_nl_cam, parse_user_nl_clm, parse_user_nl_cice,
     parse_docn_som, parse_cam_config_opts, parse_run_type_fields, parse_atm_grid,
@@ -103,20 +104,33 @@ REGISTRY_FIELDS = [f for _, fields in _REGISTRY_GROUPS for f in fields]
 
 
 def find_case_dirs(path):
+    """CASE dirs at or one level under path. Sandbox trials (sbx_*) are never
+    returned: they live in the production caseroot but are never registered
+    (owner decision, 2026-11-01). Skips are reported on stderr."""
     if not os.path.isdir(path): 
         return []
     marker = os.path.join('SourceMods', 'src.share', 'exoplanet_mod.F90')
     if os.path.exists(os.path.join(path, marker)):
+        if is_sandbox_case(path):
+            print(f"Skipping sandbox trial (never registered): {path}", file=sys.stderr)
+            return []
         return [path]
     # treat as parent: scan one level of children
     found = []
+    skipped = 0
     try:
         for name in sorted(os.listdir(path)):
             child = os.path.join(path, name)
             if os.path.isdir(child) and os.path.exists(os.path.join(child, marker)):
+                if is_sandbox_case(name):
+                    skipped += 1
+                    continue
                 found.append(child)
     except PermissionError:
         pass
+    if skipped:
+        print(f"Skipped {skipped} sandbox trial case(s) (sbx_*) under {path}; "
+              f"they are never registered.", file=sys.stderr)
     return found
 
 

@@ -34,6 +34,7 @@ CLAUDE.md for the full rules.
 
 import argparse
 import datetime
+import hashlib
 import os
 import random
 import re
@@ -51,7 +52,8 @@ from utils.parse_utils import compute_pstd_bar
 import utils.inputs_utils as inputs_utils
 from utils.manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, batch_confirm, preview_hint,
-                          ACTIVE_STATUSES, DEFAULT_CONFIG,
+                          ACTIVE_STATUSES, DEFAULT_CONFIG, SANDBOX_PREFIX,
+                          is_sandbox_case,
                           Outcome, EXIT_OK, EXIT_FAILED, EXIT_ABORTED)
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
@@ -115,6 +117,8 @@ PARAM_TYPES = {
     'config_type': 'str', 'exort_pkg': 'str', 'mach': 'str',
     'stop_option': 'str', 'rest_option': 'str', 'clone': 'str',
     'run_type': 'str', 'run_refcase': 'str', 'run_refdate': 'str',
+    # sandbox source overlay (overlay_set is a mapping, checked in plan_overlay)
+    'source_overlay': 'str',
 }
 
 
@@ -517,6 +521,9 @@ def load_yaml(path):
 # Namelist param-group dicts stored under a single matrix key. These merge
 # one level deep in resolve_case rather than replacing wholesale.
 NL_GROUP_KEYS = ('carma_params', 'volc_params', 'nl_cam_params', 'cice_params')
+# Other mapping-valued keys with the same one-level merge: a base block can
+# set an overlay switch shared by every case and a case can set its own.
+MERGED_GROUP_KEYS = NL_GROUP_KEYS + ('overlay_set',)
 
 
 def resolve_case(base, overrides):
@@ -524,7 +531,7 @@ def resolve_case(base, overrides):
 
     Scalar keys: the per-case value replaces the base value.
 
-    Namelist param-group dicts (NL_GROUP_KEYS): merge one level deep — a
+    Param-group dicts (MERGED_GROUP_KEYS): merge one level deep — a
     per-case block overrides only the inner keys it names and inherits the
     rest of the base block. Base-specified keys are never silently dropped
     (a case naming just `nhtfrq` must not shed the base's ozone keys and
@@ -537,7 +544,7 @@ def resolve_case(base, overrides):
     """
     spec = dict(base)
     spec.update(overrides)
-    for group in NL_GROUP_KEYS:
+    for group in MERGED_GROUP_KEYS:
         base_grp = base.get(group)
         over_grp = overrides.get(group)
         if isinstance(base_grp, dict) and isinstance(over_grp, dict):
@@ -735,7 +742,37 @@ def validate_case(spec, registry):
                     f"Set exo_sday = 86400 * exo_ndays for synchronous mode."
                 )
 
+    errors.extend(_sandbox_errors(spec, registry))
+
     return errors
+
+
+def _sandbox_errors(spec, registry):
+    """Non-production code may only build into a sandbox trial case.
+
+    A source overlay, or a matrix `paths:` block pointing exocam_root /
+    exort_root anywhere but the registry's production checkouts, compiles code
+    that is not the released model. Such a case must carry the sbx_ name
+    marker, so scan.py never registers it, datamgr.py never moves it to
+    long-term storage, and no production --prefix can select it.
+    """
+    name = spec.get('name', '')
+    if is_sandbox_case(name):
+        return []
+    reasons = []
+    for key in ('source_overlay', 'overlay_set'):
+        if spec.get(key) is not None:
+            reasons.append(f"'{key}' is set")
+    override = spec.get('_paths_override') or {}
+    prod = registry.get('paths', {}) or {}
+    for key in ('exocam_root', 'exort_root'):
+        val = override.get(key)
+        if val and os.path.normpath(str(val)) != os.path.normpath(str(prod.get(key, ''))):
+            reasons.append(f"paths.{key} is {val}, not the registry's {prod.get(key)}")
+    if not reasons:
+        return []
+    return [f"case '{name}' builds non-production code ({'; '.join(reasons)}) "
+            f"— name it {SANDBOX_PREFIX}<record>_<tag> so it stays a sandbox trial"]
 
 
 def _fortran_value(name, value):
@@ -1499,6 +1536,305 @@ def _heredoc_exoplanet_mod(exoplanet_mod_content):
     return lines
 
 
+# ---------------------------------------------------------------------------
+# Source overlays (sandbox trials)
+# ---------------------------------------------------------------------------
+#
+# A trial that changes one or two model source files carries them as an
+# overlay directory beside its matrix instead of a model checkout:
+#
+#   <overlay>/BASE.yaml                 which files, and the stock file each was cut from
+#   <overlay>/src.cam/cloud_fraction.F90
+#
+#   BASE.yaml:
+#     exocam_commit: <sha>              informational: where the stock file came from
+#     files:
+#       src.cam/cloud_fraction.F90:
+#         stock_md5: <md5 of the stock file it replaces>   (null: a file new to SourceMods)
+#
+# Matrix keys: `source_overlay: <dir>` (relative to the matrix file, or
+# absolute) and `overlay_set: {param: value}`, which rewrites `parameter ::`
+# lines inside the overlay files the way EXO_PARAMS rewrite exoplanet_mod.F90
+# — so every variant lives behind one switch in one file. The rendered files
+# are embedded in the build script like exoplanet_mod.F90: nothing new is
+# pushed to the HPC and no model checkout changes. Only BASE.yaml's list is
+# copied (never a glob), so stray .orig/.diff files in the directory are inert.
+#
+# Guards: an overlay needs a sbx_ case (_sandbox_errors); every overlay_set key
+# must match exactly one active parameter line; a stale base fails at generate
+# time when the stock file is readable there, and always at build time, where
+# the script checks the md5 of the file it is about to replace.
+
+OVERLAY_BASE_FILE = 'BASE.yaml'
+OVERLAY_EOF = 'CASEMGR_OVERLAY_EOF'
+PROVENANCE_FILE = 'casemgr_provenance.yaml'
+_RE_OVERLAY_RELPATH = re.compile(r'^src\.[A-Za-z0-9_]+/[A-Za-z0-9_.\-]+$')
+
+
+def _md5_text(text):
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def _md5_file(path):
+    with open(path, 'rb') as f:
+        return hashlib.md5(f.read()).hexdigest()
+
+
+def _heredoc_normal(text):
+    """The exact bytes a quoted heredoc writes for `text`: its lines, each
+    newline-terminated. Overlay md5s are taken on this form so the build-time
+    check compares like with like."""
+    return '\n'.join(text.splitlines()) + '\n'
+
+
+def _overlay_rhs(decl, value):
+    """Fortran RHS for an overlay parameter, typed by its own declaration.
+    Returns (rhs, error)."""
+    d = decl.lower()
+    if d.lstrip().startswith('logical'):
+        why = _check_type(value, 'bool')
+        return (None, why) if why else (f".{str(value).strip().lower()}.", None)
+    if d.lstrip().startswith('integer'):
+        why = _check_type(value, 'int')
+        return (None, why) if why else (str(int(float(value))), None)
+    why = _check_type(value, 'real')
+    if why:
+        return None, why
+    return _fortran_value('_overlay_real', value), None
+
+
+def _apply_overlay_set(files, settings):
+    """Rewrite `parameter ::` lines in the overlay files.
+
+    files: {relpath: text}. Returns (new_files, errors). A key must match
+    exactly one active (uncommented) parameter line across all overlay files:
+    zero matches would be a setting that silently does nothing, two would be
+    ambiguous.
+    """
+    errors = []
+    hits = {k: [] for k in settings}
+    split = {rel: text.splitlines(keepends=True) for rel, text in files.items()}
+    for rel, lines in split.items():
+        for i, line in enumerate(lines):
+            if line.lstrip().startswith('!'):
+                continue
+            m = _RE_PARAM_LINE.match(line)
+            if m and m.group(2) in hits:
+                hits[m.group(2)].append((rel, i, m))
+    for key, value in settings.items():
+        found = hits[key]
+        if len(found) != 1:
+            where = ', '.join(f"{r}:{i + 1}" for r, i, _ in found) or 'none'
+            errors.append(f"overlay_set: {key} must match exactly one active "
+                          f"parameter line in the overlay files (found {len(found)}: {where})")
+            continue
+        rel, i, m = found[0]
+        rhs, why = _overlay_rhs(m.group(1), value)
+        if why:
+            errors.append(f"overlay_set: {key}: {why}")
+            continue
+        old_rhs = m.group(4)
+        gap = old_rhs[len(old_rhs.rstrip()):]    # spacing before a trailing comment
+        eol = '\n' if split[rel][i].endswith('\n') else ''
+        split[rel][i] = f"{m.group(1)}{key}{m.group(3)}{rhs}{gap}{m.group(5)}{eol}"
+    return {rel: ''.join(lines) for rel, lines in split.items()}, errors
+
+
+def plan_overlay(spec):
+    """Read and render a case's source overlay.
+
+    Returns (plan, errors). plan is None when the case has no overlay;
+    otherwise {'dir', 'exocam_commit', 'set', 'files': [{'rel', 'content',
+    'md5', 'stock_md5'}]} with content already rendered and heredoc-normal.
+    """
+    src = spec.get('source_overlay')
+    settings = spec.get('overlay_set')
+    if src is None:
+        if settings:
+            return None, ["overlay_set given without source_overlay"]
+        return None, []
+    if settings is not None and not isinstance(settings, dict):
+        return None, [f"overlay_set must be a mapping of parameter: value, got {settings!r}"]
+    settings = settings or {}
+
+    odir = os.path.expanduser(str(src))
+    if not os.path.isabs(odir):
+        odir = os.path.join(spec.get('_matrix_dir') or os.getcwd(), odir)
+    odir = os.path.normpath(odir)
+    base_path = os.path.join(odir, OVERLAY_BASE_FILE)
+    if not os.path.isdir(odir):
+        return None, [f"source_overlay directory not found: {odir}"]
+    if not os.path.isfile(base_path):
+        return None, [f"source_overlay has no {OVERLAY_BASE_FILE}: {base_path}"]
+    try:
+        base = load_yaml(base_path) or {}
+    except yaml.YAMLError as exc:
+        return None, [f"{base_path}: not valid YAML: {exc}"]
+    entries = base.get('files')
+    if not isinstance(entries, dict) or not entries:
+        return None, [f"{base_path}: 'files' must map each overlaid file "
+                      f"(src.<component>/<file>) to its stock_md5"]
+
+    errors, texts, stock = [], {}, {}
+    for rel, meta in entries.items():
+        rel = str(rel)
+        if not _RE_OVERLAY_RELPATH.match(rel):
+            errors.append(f"{base_path}: '{rel}' is not src.<component>/<file>")
+            continue
+        if not isinstance(meta, dict) or 'stock_md5' not in meta:
+            errors.append(f"{base_path}: '{rel}' needs stock_md5 (null for a file "
+                          f"new to SourceMods)")
+            continue
+        path = os.path.join(odir, rel)
+        if not os.path.isfile(path):
+            errors.append(f"overlay file listed in {OVERLAY_BASE_FILE} not found: {path}")
+            continue
+        with open(path) as f:
+            texts[rel] = f.read()
+        stock[rel] = meta['stock_md5']
+    if errors:
+        return None, errors
+
+    rendered, errors = _apply_overlay_set(texts, settings)
+    if errors:
+        return None, errors
+
+    files = []
+    for rel in entries:
+        content = _heredoc_normal(rendered[rel])
+        if any(line.strip() == OVERLAY_EOF for line in content.splitlines()):
+            errors.append(f"{rel}: contains the heredoc delimiter line {OVERLAY_EOF}")
+            continue
+        files.append({'rel': rel, 'content': content, 'md5': _md5_text(content),
+                      'stock_md5': stock[rel]})
+    if errors:
+        return None, errors
+    return {'dir': odir, 'exocam_commit': base.get('exocam_commit'),
+            'set': dict(settings), 'files': files}, []
+
+
+def _overlay_stale_errors(plan, sourcemods_dir):
+    """Generate-time stale-base check against the SourceMods the case will
+    start from (the ExoCAM config for a newcase, the clone source's for a
+    clone). Returns (errors, checked). Unreadable here (generating off the
+    HPC) is not an error: the build script repeats the check where it runs."""
+    if not plan or not sourcemods_dir or not os.path.isdir(sourcemods_dir):
+        return [], False
+    errors = []
+    for f in plan['files']:
+        path = os.path.join(sourcemods_dir, f['rel'])
+        if f['stock_md5'] is None:
+            if os.path.exists(path):
+                errors.append(f"overlay {f['rel']}: {OVERLAY_BASE_FILE} says it is new "
+                              f"to SourceMods, but {path} exists")
+        elif not os.path.isfile(path):
+            errors.append(f"overlay {f['rel']}: stock file missing: {path}")
+        elif _md5_file(path) != f['stock_md5']:
+            errors.append(f"overlay {f['rel']}: stale base — {path} has md5 "
+                          f"{_md5_file(path)}, the overlay was cut from {f['stock_md5']}")
+    return errors, True
+
+
+def _stock_sourcemods_dir(spec, registry, paths_override):
+    """The SourceMods a case starts from, before any overlay: the clone
+    source's for a clone, the ExoCAM config's for a newcase."""
+    paths = _effective_paths(registry, paths_override)
+    if spec.get('clone'):
+        caseroot = paths.get('caseroot', '')
+        return os.path.join(caseroot, spec['clone'], 'SourceMods') if caseroot else None
+    exocam_root = paths.get('exocam_root', '')
+    config = str(spec.get('config_type', '')).replace('_ne5', '').replace('_ne16', '')
+    if not exocam_root or not config:
+        return None
+    return os.path.join(exocam_root, 'cesm1.2.1', 'configs', config, 'SourceMods')
+
+
+def _overlay_summary(plan):
+    shown = ', '.join(f"{k}={v}" for k, v in plan['set'].items()) or 'none'
+    names = ', '.join(f['rel'] for f in plan['files'])
+    return f"overlay: {names} from {plan['dir']} (overlay_set: {shown})"
+
+
+def _heredoc_overlay(plan):
+    """Shell lines that install a rendered overlay into the case's SourceMods.
+    Run from the case directory, after SourceMods exists and before the build.
+    Each file: check the file being replaced is the stock base, write, then
+    check the written md5."""
+    if not plan:
+        return []
+    shown = ', '.join(f"{k}={v}" for k, v in plan['set'].items()) or 'none'
+    lines = [
+        "# Source overlay (sandbox trial): " + plan['dir'],
+        f"# overlay_set: {shown}",
+    ]
+    for f in plan['files']:
+        target = f"SourceMods/{f['rel']}"
+        if f['stock_md5'] is None:
+            lines += [
+                f'if [ -e {target} ]; then',
+                f'  echo "ERROR: overlay {f["rel"]} is new to SourceMods, but {target} exists"',
+                "  exit 1",
+                "fi",
+            ]
+        else:
+            lines += [
+                f'if [ "$(md5sum < {target} | cut -c1-32)" != "{f["stock_md5"]}" ]; then',
+                f'  echo "ERROR: stale overlay base: {target} is not the stock file '
+                f'the overlay was cut from (md5 {f["stock_md5"]})"',
+                "  exit 1",
+                "fi",
+            ]
+        lines.append(f"mkdir -p SourceMods/{os.path.dirname(f['rel'])}")
+        lines.append(f"cat > {target} << '{OVERLAY_EOF}'")
+        lines.extend(f['content'].splitlines())
+        lines.append(OVERLAY_EOF)
+        lines += [
+            f'[ "$(md5sum < {target} | cut -c1-32)" = "{f["md5"]}" ] || '
+            f'{{ echo "ERROR: {target} was not written as rendered"; exit 1; }}',
+        ]
+    return lines
+
+
+def _provenance_block(case_name, spec, plan, matrix_file):
+    """Shell lines writing <case>/casemgr_provenance.yaml for a sandbox trial:
+    what was asked for (static, from generate) and which model commits were
+    actually compiled (resolved at build time, where the checkouts are)."""
+    if not is_sandbox_case(case_name):
+        return []
+    doc = {
+        'case': case_name,
+        'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'matrix': os.path.abspath(matrix_file) if matrix_file else None,
+    }
+    for key in ('clone', 'run_type', 'run_refcase', 'run_refdate', 'exort_pkg'):
+        if spec.get(key) is not None:
+            doc[key] = spec[key]
+    if plan:
+        doc['overlay'] = {
+            'dir': plan['dir'],
+            'exocam_commit': plan['exocam_commit'],
+            'set': plan['set'],
+            'files': {f['rel']: {'md5': f['md5'], 'stock_md5': f['stock_md5']}
+                      for f in plan['files']},
+        }
+    body = yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+    lines = [
+        "# Provenance stamp (sandbox trial): what was asked, and the model commits compiled",
+        f"cat > {PROVENANCE_FILE} << 'CASEMGR_PROVENANCE_EOF'",
+        *body.splitlines(),
+        "CASEMGR_PROVENANCE_EOF",
+    ]
+    for var, key in (('EXOCAM', 'exocam'), ('EXORT', 'exort')):
+        lines += [
+            f'echo "{key}_root: ${{{var}}}" >> {PROVENANCE_FILE}',
+            f'echo "{key}_sha: $(git -C ${{{var}}} rev-parse HEAD 2>/dev/null || echo unknown)"'
+            f' >> {PROVENANCE_FILE}',
+            f'echo "{key}_dirty: $([ -n "$(git -C ${{{var}}} status --porcelain 2>/dev/null)" ]'
+            f' && echo true || echo false)" >> {PROVENANCE_FILE}',
+        ]
+    return lines
+
+
 def _branch_var_block(spec):
     """Return shell variable lines for branch/hybrid cases (RUN_REFCASE, RUN_REFDATE, RUN_REFDIR).
 
@@ -1672,6 +2008,8 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# STEP 3: install modified exoplanet_mod.F90 and update paths",
         "# -----------------------------------------------------------",
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
+        *_heredoc_overlay(spec.get('_overlay')),
+        *_provenance_block(case_name, spec, spec.get('_overlay'), spec.get('_matrix_file')),
         "",
         "# Set ncdata in user_nl_cam (upsert + verify)",
         *_nl_upsert_verified_lines('ncdata', ic_path, label=case_name),
@@ -1790,6 +2128,8 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
+        *_heredoc_overlay(spec.get('_overlay')),
+        *_provenance_block(case_name, spec, spec.get('_overlay'), spec.get('_matrix_file')),
         *(_build_usr_src_fix_block() if exort_pkg.endswith('*') else []),
     ]
 
@@ -1970,6 +2310,22 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
 
         spec = resolve_case(base, case_def)
         spec['_paths_override'] = paths_override
+        spec['_matrix_file'] = matrix_file
+        spec['_matrix_dir'] = os.path.dirname(os.path.abspath(matrix_file))
+
+        # Source overlay (sandbox trials): read, render overlay_set, and check
+        # the stock base wherever the starting SourceMods are readable.
+        overlay, o_errors = plan_overlay(spec)
+        o_stale, o_checked = _overlay_stale_errors(
+            overlay, _stock_sourcemods_dir(spec, registry, paths_override))
+        o_errors += o_stale
+        spec['_overlay'] = overlay
+        o_notes = []
+        if overlay:
+            o_notes.append(_overlay_summary(overlay))
+            if not o_checked:
+                o_notes.append("overlay stale-base check deferred to build time "
+                               "(stock SourceMods not readable here)")
 
         # Generated inputs: resolve star / ic_template into the effective
         # exo_solar_file / ncdata and the required-inputs plan. Runs only
@@ -1994,10 +2350,10 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
                     v_errors = validate_case(spec, registry)
                 except (ValueError, TypeError) as exc:
                     v_errors = [f"validation crashed (likely a bad value): {exc}"]
-            v_errors = d_errors + v_errors
+            v_errors = d_errors + o_errors + v_errors
             v_warnings = d_warnings + v_warnings
             v_notes = [f"generated: {it.summary} -> {it.path}"
-                       for it in spec.get('_inputs') or []] + v_notes
+                       for it in spec.get('_inputs') or []] + o_notes + v_notes
             if v_warnings:
                 verify_warned += 1
             if v_errors:
@@ -2018,7 +2374,7 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
                 print(f"  · {n}")
             continue
 
-        errors = d_errors + validate_case(spec, registry)
+        errors = d_errors + o_errors + validate_case(spec, registry)
         if errors:
             print(f"\nERROR: {case_name}")
             for e in errors:
@@ -2029,6 +2385,8 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
             print(f"  WARNING: {case_name}: {w}")
         for it in spec.get('_inputs') or []:
             print(f"  generated: {case_name}: {it.summary}")
+        for n in o_notes:
+            print(f"  {case_name}: {n}")
 
         is_clone = bool(spec.get('clone'))
 

@@ -65,7 +65,7 @@ from scan import inspect_case, _rows_to_ordered, find_case_dirs
 from utils.manage_utils import (
     ARCHIVE_MODELS, HIST_MODELS, MODEL_STEM, AVG_HIST_DEFAULT_MODELS,
     PRIMARY_HIST_STREAM, select_last_monthly_hist,
-    ACTIVE_STATUSES,
+    ACTIVE_STATUSES, is_sandbox_case,
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, _hist_keep_years_filter, hist_info_line, restart_sets,
@@ -547,6 +547,13 @@ def cmd_move_hist(args, paths):
     outcome = Outcome()
     actions = []
     for case in cases:
+        if is_sandbox_case(case):
+            # Sandbox trials never move to long-term storage (owner decision,
+            # 2026-11-01); their output stays where it ran.
+            print(f"  {case}: BLOCKED — sandbox trial (sbx_*); nothing moves "
+                  f"to long-term storage")
+            outcome.skip()
+            continue
         status = _probe_case_status(case, paths)
         if status in ACTIVE_STATUSES:
             print(f"  {case}: [{status}] — job is active; the archive may still "
@@ -995,6 +1002,14 @@ def cmd_retire_case(args, paths):
         print(f"\n{'='*60}")
         print(f"  CASE: {case}")
         print(f"{'='*60}")
+
+        # Sandbox trials never move to long-term storage: only --purge (which
+        # writes nothing there) may retire one — that is the owner's cleanup.
+        if is_sandbox_case(case) and not args.purge:
+            print(f"  BLOCKED: sandbox trial (sbx_*) — nothing moves to long-term "
+                  f"storage. Use --purge to delete it.")
+            outcome.skip()
+            continue
 
         # Hard block active jobs — same gate as the runmgr run-control verbs.
         status = _probe_case_status(case, paths)
