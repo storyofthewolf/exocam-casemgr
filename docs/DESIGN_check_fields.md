@@ -18,17 +18,27 @@ Three tools, three questions. Nothing crosses between them:
 
 **Reporting rule (closes the loophole):** every number that appears in a LOG entry, a monitor report or a journal comes from one of these three tools, and the entry names which one. No hand-rolled reductions. This goes into the `exocam-monitor` agent and the `exocam-analysis` / `exocam-rules` skills when this ships.
 
-## Replaces `--energy` and `--keep`
+## Scope of this change: `--fields` only
 
-- `--energy` → `--fields @energy`, and `-n/--energy-years N` → `--last N`. The inputs are the same, `select_last_monthly_hist`, so `--last 10` reads the same months as `datamgr avg --last 10`. `--energy` is removed. Argparse catches the old flag and prints `--energy was replaced by --fields @energy` (exit 2), so a stale skill copy gets a pointer.
-- `--keep` is removed. It was the one place `check` wrote a file; `datamgr avg --last N` writes the same product. `check` becomes read-only with no exception.
-- No `ncra` and no temp file. Each monthly file is read with netCDF4 for the requested variables only; the global mean of each month is computed and then averaged with equal weight per month, which for these linear means equals `ncra` followed by a spatial mean.
+`--fields` is added beside the existing options. **No other interface changes in this branch** (owner, 2026-11-03): `--energy`, `-n/--energy-years` and `--keep` stay exactly as they are, and no caller is updated. `--fields` is built agent-first. Applying the same treatment to other verbs is later work.
 
-## Area weighting: one rule, shared with trend
+Reading: no `ncra` and no temp file. Each monthly file is read with netCDF4 for the requested variables only. The global mean of each month is computed, then the months are averaged with equal weight, which for these linear means equals `ncra` followed by a spatial mean. Window selection reuses `select_last_monthly_hist`, so `--last 10` reads the same months as `--energy -n 10` and `datamgr avg --last 10`.
 
-Global means use trend's rule (`trend_core.build_area_weights`): cell-edge Δsin(lat) × Δlon, with edges at latitude midpoints and the poles at ±90°, normalised to 1. The current `--energy` uses cos(lat) at the grid points, which gives the polar rows of the FV grid zero weight. This change retires that rule.
+### Planned, not done: retire `--energy` and `--keep`
 
-The repos stay independent: casemgr carries its own copy of the function, and a test in each repo checks the same fixture against the same expected weights. Two implementations of one written rule, both tested, are preferred to a cross-repo import.
+Recorded here so the decision is not re-derived; to be done in a separate change once `--fields` has been used in practice:
+
+- `--energy` → `--fields @energy`, and `-n` → `--last`. A stub then prints `--energy was replaced by --fields @energy` (exit 2).
+- `--keep` removed. `datamgr avg --last N` writes the same product, and `check` becomes read-only with no exception.
+- `--energy`'s weighting differs from `--fields` (see below). Retiring it removes the second rule from casemgr.
+
+## Area weighting: the model's own `gw`
+
+Global means use the Gaussian/area weights CAM writes into every h0 file, `gw(lat)`, broadcast over longitude and normalised to 1. The weights come from the model output itself, so casemgr depends on no other repo or rule for them. On the FV grid `gw` is the cell-edge area weight, with edges at latitude midpoints and the poles at ±90°. Checked on `exocam_atlasfu_D1.cam.h0.0120-12.nc`: `gw[0]` = 0.000609 = sin(−88°) − sin(−90°).
+
+- File without `gw`: casemgr computes the same cell-edge weights from `lat` in its own code, and `provenance.weights` says which was used (`gw` | `lat-edges`).
+- The existing `--energy` keeps its cos(lat)-at-grid-points rule for now. That rule gives the FV polar rows zero weight, so `--energy` and `--fields @energy` can differ slightly. This is a known difference, resolved when `--energy` retires.
+- No cross-repo import, shared fixture or shared test. That `gw` also matches what exocam-trend computes is a fact about the grid, not a dependency.
 
 ## Field sets — `field_sets.yaml`
 
@@ -76,8 +86,7 @@ runmgr.py check --list-sets [--json]          # sets, their fields and roles, fr
  "window": {"dir": "archive", "first": "0157-01", "last": "0157-12", "files": 12, "requested": 12},
  "values": {"TS": {"mean": 417.82, "units": "K"}, "energy_top": {"mean": 26.86, "units": "W/m2"}},
  "checks": {"FUSC": {"ok": false, "test": "nonzero", "failed_files": ["0157-03"], "reason": "all-zero"}},
- "provenance": {"tool": "runmgr.py check --fields", "commit": "<git short sha>", "weights": "dsinlat-v1",
-                "fields_spec": "@monitor", "field_sets_md5": "<md5>"}}
+ "provenance": {"tool": "runmgr.py check --fields", "commit": "<git short sha>", "weights": "gw", "fields_spec": "@monitor", "field_sets_md5": "<md5>"}}
 ```
 
 - `verdict`: `pass` | `fail` | `skipped`. `skipped` (no hist files, missing netCDF4/numpy) is never a measurement. It names the cause and the fix (e.g. `export PATH="$HPC_PYTHON_BIN:$PATH"`). This removes the "a skipped `--energy` is not a measurement of zero" caveat.
@@ -97,10 +106,12 @@ exocam_atlasfu_D6  0108-01..0117-12 (120 archive)  @clearsky  FAIL
 
 Range checks (`TS:100..1000`): left out until a need arises. Per-level or regional values, series, files: trend and analysis.
 
-## Callers to update when it ships
+## Docs
 
-casemgr `CLAUDE.md` (`--energy`, `--keep` sections), `docs/DEVELOPER_NOTES.md`, `tests/test_hist_selection.py`; exocam-rules `reference/monitoring.md`, `reference/clearsky.md` §5, the `exocam-monitor` agent (plus the reporting rule); hub `CLAUDE.md` workflow table, `program/JAIME.md`, `program/USE_CASES.md`, the `exocam-experiment` skill. Global skills via skill-sync; the casemgr change via ship-tool-change (Discover checkout to the same commit, owner approval).
+This branch: casemgr `CLAUDE.md` gets a `--fields` section, and `docs/DEVELOPER_NOTES.md` its entry. Shipping goes via ship-tool-change (Discover checkout to the same commit, owner approval). Then exocam-rules `reference/clearsky.md` §5 and `reference/monitoring.md` can name `--fields`, and the reporting rule can go into the `exocam-monitor` agent.
+
+When `--energy` retires (later): casemgr `CLAUDE.md` `--energy`/`--keep` sections, `tests/test_hist_selection.py`; exocam-rules `reference/monitoring.md`; hub `CLAUDE.md` workflow table, `program/JAIME.md`, `program/USE_CASES.md`, the `exocam-experiment` skill.
 
 ## Tests
 
-Weights against the trend fixture; set resolution (include, show, bare names, unknown set); derived-expression parser (accepts `+`/`−` of names, rejects anything else); verdicts on synthetic files (all-zero, NaN, fill, missing variable, `--expect zero`); window selection identical to `datamgr avg`; JSON keys and exit codes; the `--energy` stub message.
+Weights from `gw` and the `lat`-edge fallback, which agree on a synthetic FV grid; set resolution (include, show, bare names, unknown set); derived-expression parser (accepts `+`/`−` of names, rejects anything else); verdicts on synthetic files (all-zero, NaN, fill, missing variable, `--expect zero`); window selection identical to `datamgr avg`; JSON keys and exit codes; `--energy` output unchanged.
