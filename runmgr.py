@@ -45,6 +45,7 @@ Run any subcommand with --help for its full description and options
 
 import argparse
 import glob
+import json
 import math
 import os
 import re
@@ -61,7 +62,9 @@ from utils.manage_utils import (
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
     _require_cases, batch_confirm, preview_hint,
+    EXIT_FAILED, EXIT_USAGE, EXIT_PARTIAL,
 )
+from utils import fields_check
 
 # ---------------------------------------------------------------------------
 # Subcommand: continue
@@ -1271,12 +1274,95 @@ def cmd_check(args, paths):
                Prints the absolute path as a header. Requires exactly one
                explicit case name; incompatible with --prefix.
                DIR choices: atm/hist, lnd/hist, ice/hist, ocn/hist, rest, run.
+
+    --fields SPEC: semantic spot check over one window of monthly cam.h0
+              files (docs/DESIGN_check_fields.md). SPEC is a comma list of
+              field names and @sets from field_sets.yaml, e.g. @monitor,
+              @clearsky, TS,TMQ. Reported fields print their area-weighted
+              global mean (the file's own gw weights); verified fields get a
+              verdict (present, finite, not all zero). One number per field
+              per case: no series, maps or files — use exocam-trend /
+              exocam-analysis for those. Requires explicit cases or --prefix.
+              Exit code: 0 all pass, 1 any fail, 3 skipped or short window,
+              2 usage.
+      --last N        model years in the window (12*N monthly files), default 1
+      --source S      archive (default) or run (the live run directory)
+      --expect zero   verified fields must be all zero (e.g. flag off)
+      --json          one JSON record per case on stdout, nothing else
+      --list-sets     print the defined sets (with --json: as JSON)
+      --field-sets P  use another field_sets.yaml
     """
     caseroot = paths.get('caseroot', '')
     archive  = paths.get('archive',  '')
 
     requested = getattr(args, 'cases', None) or []
     prefix_filter = getattr(args, 'prefix', None)
+
+    # ---- --fields / --list-sets: validated before anything is probed ----
+    fields_spec = getattr(args, 'fields', None)
+    as_json     = getattr(args, 'json', False)
+    sets_path   = getattr(args, 'field_sets', None) or fields_check.DEFAULT_FIELD_SETS
+    fields_only = {'--last': getattr(args, 'last', None),
+                   '--source': getattr(args, 'source', None),
+                   '--expect': getattr(args, 'expect', None)}
+
+    def _usage(msg):
+        print(f"ERROR: {msg}", file=sys.stderr)
+        return EXIT_USAGE
+
+    if getattr(args, 'list_sets', False):
+        try:
+            sets, md5 = fields_check.load_field_sets(sets_path)
+            desc = fields_check.describe_sets(sets, sets_path, md5)
+        except fields_check.FieldSpecError as e:
+            return _usage(str(e))
+        if as_json:
+            print(json.dumps(desc))
+        else:
+            print(f"field sets: {sets_path}")
+            for name, s in desc['sets'].items():
+                parts = []
+                if s['report']:
+                    parts.append(f"report {','.join(s['report'])}")
+                if s['derived']:
+                    parts.append('derived ' + '; '.join(f"{k} = {v}" for k, v in s['derived'].items()))
+                if s['verify']:
+                    parts.append(f"verify {','.join(s['verify'])}")
+                print(f"  @{name}: " + ' | '.join(parts) + f"  (shows {','.join(s['show'])})"
+                      if s['show'] else f"  @{name}: " + ' | '.join(parts))
+        return EXIT_OK
+
+    plan = None
+    if fields_spec is None:
+        given = [k for k, v in fields_only.items() if v is not None]
+        if as_json:
+            given.append('--json')
+        if getattr(args, 'field_sets', None):
+            given.append('--field-sets')
+        if given:
+            return _usage(f"{', '.join(given)} require(s) --fields.")
+    else:
+        if getattr(args, 'energy', False) or getattr(args, 'keep', False) or getattr(args, 'energy_years', None):
+            if as_json:
+                return _usage("--json cannot be combined with --energy/-n/--keep.")
+        if as_json and getattr(args, 'info', False):
+            return _usage("--json cannot be combined with --info.")
+        if getattr(args, 'dir', None) is not None:
+            return _usage("--fields cannot be combined with --dir.")
+        if not requested and not prefix_filter:
+            return _usage("--fields requires explicit case names or --prefix.")
+        if fields_only['--last'] is not None and fields_only['--last'] < 1:
+            return _usage("--last must be >= 1.")
+        try:
+            sets, sets_md5 = fields_check.load_field_sets(sets_path)
+            plan = fields_check.resolve_spec(fields_spec, sets, sets_path)
+        except fields_check.FieldSpecError as e:
+            return _usage(str(e))
+        fields_years  = fields_only['--last'] or 1
+        fields_source = fields_only['--source'] or 'archive'
+        expect_zero   = fields_only['--expect'] == 'zero'
+        if expect_zero and not plan['verify']:
+            return _usage("--expect zero applies to verified fields; the spec has none.")
 
     if requested and prefix_filter:
         sys.exit("ERROR: --prefix cannot be combined with explicit case names.")
@@ -1290,6 +1376,7 @@ def cmd_check(args, paths):
 
     all_cases = discover_cases(paths)
 
+    missing = []
     if requested:
         missing = [c for c in requested if c not in all_cases]
         if missing:
@@ -1298,12 +1385,28 @@ def cmd_check(args, paths):
     elif prefix_filter:
         cases = [c for c in all_cases if c.lower().startswith(prefix_filter.lower())]
         if not cases:
+            if plan is not None:
+                print(f"ERROR: no cases matching prefix '{prefix_filter}'.", file=sys.stderr)
+                return EXIT_FAILED
             print(f"No cases matching prefix '{prefix_filter}'.")
             return
     else:
         cases = all_cases
 
+    # --fields: a requested case that is not on disk still gets a record, so
+    # a caller reading JSON sees every name it asked about.
+    fields_records = {}
+    if plan is not None:
+        for c in missing:
+            rec = fields_check.run_fields_check(
+                c, '', fields_source, plan, fields_spec, sets_md5,
+                years=fields_years, expect_zero=expect_zero, status='NOT_FOUND')
+            fields_check._skipped(rec, 'case not found on disk')
+            fields_records[c] = rec
+
     if not cases:
+        if plan is not None:
+            return _emit_fields(requested, fields_records, plan, as_json)
         print("No cases found.")
         return
 
@@ -1387,6 +1490,15 @@ def cmd_check(args, paths):
                 if saved_path:
                     energy_line += f"\n  Saved avg: {saved_path}"
 
+        if plan is not None:
+            if fields_source == 'run':
+                hist_dir = _run_dir(case, paths)
+            else:
+                hist_dir = os.path.join(archive, case, 'atm', 'hist') if archive else ''
+            fields_records[case] = fields_check.run_fields_check(
+                case, hist_dir, fields_source, plan, fields_spec, sets_md5,
+                years=fields_years, expect_zero=expect_zero, status=status_label)
+
         results.append((case, status_label, status_ts, info_lines, energy_line))
 
     if target_dir is not None:
@@ -1447,6 +1559,9 @@ def cmd_check(args, paths):
         print(f"  {'total':60}  {fmt_size(total):>10}")
         return
 
+    if plan is not None and as_json:
+        return _emit_fields(requested or cases, fields_records, plan, True)
+
     # Columnar output: name left-justified to max_name_len, tag left-justified to 15.
     max_name_len = max(len(r[0]) for r in results)
     tag_width = 15  # fits [RESUBMITTED] (13) with room
@@ -1458,6 +1573,40 @@ def cmd_check(args, paths):
             print(line)
         if energy_line:
             print(energy_line)
+        if case in fields_records:
+            for line in fields_check.render_text(fields_records[case], plan['derived']):
+                print(line)
+
+    if plan is not None:
+        for c in missing:
+            print(f"{c:<{max_name_len}}  [NOT_FOUND]")
+            for line in fields_check.render_text(fields_records[c], plan['derived']):
+                print(line)
+        return _fields_exit_code(fields_records.values())
+
+
+def _fields_exit_code(records):
+    """0 all pass, 1 any fail, 3 any skipped or short window (casemgr EXIT_*)."""
+    records = list(records)
+    if any(r['verdict'] == 'fail' for r in records):
+        return EXIT_FAILED
+    if any(r['verdict'] == 'skipped' or r['window']['short'] for r in records):
+        return EXIT_PARTIAL
+    return EXIT_OK
+
+
+def _emit_fields(order, records, plan, as_json):
+    """Print --fields records (JSON lines, in request order) and return the exit code."""
+    for c in order:
+        if c not in records:
+            continue
+        if as_json:
+            print(json.dumps(records[c]))
+        else:
+            print(f"{c}  [{records[c].get('status') or ''}]")
+            for line in fields_check.render_text(records[c], plan['derived']):
+                print(line)
+    return _fields_exit_code(records.values())
 
 
 # ---------------------------------------------------------------------------
@@ -1517,6 +1666,25 @@ def build_parser():
                          help=('Drill down into a specific storage area for a single case: '
                                f'{", ".join(_DIR_RESOLVERS)}. '
                                'Requires exactly one case name; incompatible with --prefix.'))
+    p_check.add_argument('--fields', metavar='SPEC', default=None,
+                         help='Spot check over one window of monthly cam.h0: comma list of '
+                              'field names and @sets (field_sets.yaml), e.g. @monitor or '
+                              '@clearsky. Global means for reported fields, verdicts for '
+                              'verified ones. Exit 0 pass / 1 fail / 3 skipped or short / 2 usage')
+    p_check.add_argument('--last', type=int, default=None, metavar='N',
+                         help='With --fields: window of the last N model years (default 1)')
+    p_check.add_argument('--source', choices=['archive', 'run'], default=None,
+                         help='With --fields: read archive/<case>/atm/hist (default) or the '
+                              'live run directory')
+    p_check.add_argument('--expect', choices=['zero', 'nonzero'], default=None,
+                         help='With --fields: verified fields must be all zero (zero) or '
+                              'populated (nonzero, the default)')
+    p_check.add_argument('--json', action='store_true',
+                         help='With --fields or --list-sets: JSON on stdout, one record per case')
+    p_check.add_argument('--list-sets', dest='list_sets', action='store_true',
+                         help='List the field sets defined in field_sets.yaml')
+    p_check.add_argument('--field-sets', dest='field_sets', metavar='PATH', default=None,
+                         help='With --fields/--list-sets: use this field_sets.yaml')
 
     # ---- xml ----
     p_xml = top_sub.add_parser(

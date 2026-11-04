@@ -1,0 +1,36 @@
+# field_sets.yaml — named field sets for `runmgr.py check --fields @name`
+#
+# check --fields is a spot check over one window of monthly cam.h0 files:
+# one number per field per case, plus sanity verdicts. It never prints a
+# series, slope, map or profile (those are exocam-trend / exocam-analysis).
+# See docs/DESIGN_check_fields.md.
+#
+# Roles, per set:
+#   report:  print the area-weighted global mean over the window. The field
+#            must be 2-D (lat, lon) per month, and present and finite in
+#            every file, or the case fails.
+#   verify:  verdict only, any shape: present, finite, and not all zero
+#            in every file (or all zero in every file, under --expect zero).
+#   derived: name -> sum/difference of reported field names (only + and -;
+#            parsed, never evaluated). Same definitions as exocam-trend.
+#   show:    which reported/derived names are printed, in order
+#            (default: report then derived).
+#   include: other sets merged in first.
+#
+# Adding a set is a data change: edit this file; no code change. Run
+# `runmgr.py check --list-sets` to see what is defined.
+
+energy:
+  report:  [TS, FSNT, FLNT, FSNS, FLNS, LHFLX, SHFLX]
+  derived:
+    energy_top: FSNT - FLNT
+    energy_bot: FSNS - FLNS - LHFLX - SHFLX
+  show:    [TS, FSNT, FLNT, energy_top, energy_bot]
+
+monitor:
+  include: [energy]
+  report:  [TMQ, ICEFRAC, TGCLDLWP]
+  show:    [TS, TMQ, ICEFRAC, TGCLDLWP, energy_top, energy_bot]
+
+clearsky:
+  verify:  [FUSC, FDSC, FULC, FDLC, FSNTC, FLNTC, FSNSC, FLNSC]

@@ -1,6 +1,6 @@
 # DESIGN — `runmgr.py check --fields`
 
-Status: design agreed with the owner 2026-11-03 (hub session be2e02e3); implementing on branch `check-fields`.
+Status: implemented on branch `check-fields` (2026-11-03, hub session be2e02e3); not yet shipped to Discover. Code `utils/fields_check.py`, sets `field_sets.yaml`, tests `tests/test_fields_check.py`.
 
 ## Purpose and boundary
 
@@ -70,12 +70,14 @@ On the command line a set is named `@name`. Sets and bare names combine: `--fiel
 The callers are agents. The output is the interface; the text view is a rendering of it.
 
 ```
-runmgr.py check <cases|--prefix P> --fields SPEC [--last N] [--dir archive|run] [--expect zero] [--json]
+runmgr.py check <cases|--prefix P> --fields SPEC [--last N] [--source archive|run] [--expect zero|nonzero] [--json] [--field-sets PATH]
 runmgr.py check --list-sets [--json]          # sets, their fields and roles, from field_sets.yaml
 ```
 
 - `--last N`: model years (12·N monthly files), default 1. Fewer files than requested → PARTIAL with a warning, never silently fewer.
-- `--dir run`: read the live run directory (`_run_dir`) instead of the archive, for checks while a job runs (clearsky §5 first month).
+- `--source run`: read the live run directory (`_run_dir`) instead of the archive, for checks while a job runs (clearsky §5 first month). (Not `--dir`, which `check` already uses for its drill-down, and not `--rundir`, the global path override.)
+- Requires explicit case names or `--prefix`: `check` alone defaults to every discoverable case, too much netCDF reading for a spot check. A requested case not on disk still gets a record (`verdict: skipped`, `status: NOT_FOUND`), so a JSON caller sees every name it asked about, in request order.
+- Only the atmosphere (`cam.h0`). A `report` field must be 2-D (lat, lon); a 3-D field fails with a pointer to `verify` or trend/analysis.
 - `--expect zero`: applies to `verify` fields only; passes when they are all zero (the flag-off check).
 - `--json`: one object per case on stdout, nothing else on stdout. Human text otherwise.
 

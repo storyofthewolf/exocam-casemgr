@@ -262,6 +262,17 @@ Relaunching is therefore always a second, explicit command. `build.py rebuild --
 - Filename mirrors `datamgr avg`'s convention: with `-n N` → `<case>.cam.h0.avg_last{N}yr.nc`; bare 12-month (`--keep` without `-n`) → `<case>.cam.h0.avg_last12mo.nc`. With `-n N` the inputs are identical to `datamgr avg --last N --models atm` — both go through `select_last_monthly_hist()` (manage_utils.py), the **one** history-selection rule: the last `12*N` files of the component's primary monthly stream (`PRIMARY_HIST_STREAM`: `cam.h0`, `clm2.h0`, `cice.h`, …), avg products and every other stream (`h1`, `h2`, …) excluded. So the kept file is interchangeable with that product. Before 2026-09-13 `datamgr avg` selected the last N *calendar-year labels* over every file in `hist/`: a partial final year shortened the window to a few months, and an h1 stream was averaged in with the h0 files under the same `avg_last{N}yr` name.
 - `ncra -O` overwrites an existing avg file at the target; the kept path is printed on a `Saved avg:` line under the energy report. `_energy_balance(keep_path=…)` is the single code path — `keep_path=None` restores the temp-and-delete behavior.
 
+### --fields — semantic spot checks (agent-first)
+
+Design and boundary: `docs/DESIGN_check_fields.md`. Code: `utils/fields_check.py` (logic, returns one dict per case — the JSON record); `runmgr.py` only parses flags and prints. Sets: `field_sets.yaml` (data, not code; `check --list-sets`).
+
+- `check <cases|--prefix> --fields @monitor [--last N] [--source archive|run] [--expect zero] [--json]`. One window → one area-weighted global mean per `report` field, a verdict per `verify` field (present, finite, not all zero / all zero). No series, maps, profiles or files: those are exocam-trend / exocam-analysis.
+- **Weights are the file's own `gw`** (fallback: cell-edge weights from `lat`, `lat_edge_weights`). No import from any other exocam repo. `--energy` still uses cos(lat) at grid points, so the two can differ slightly. That is known, and goes away when `--energy` retires (planned, not done — see the DESIGN note).
+- Exit codes: 0 all pass, 1 any `fail`, 3 any `skipped` or short window, 2 usage (all usage errors go to stderr with nothing on stdout). `--json` prints only JSON lines, one per case, in request order; a requested case not on disk gets a `NOT_FOUND` / `skipped` record.
+- Derived fields (`energy_top`, `energy_bot`) are `+`/`−` of reported names, parsed by `parse_expression`, never `eval`'d. A `report` field must be 2-D (lat, lon).
+- Reads only the requested variables with netCDF4 — no `ncra`, no temp file; per-month means averaged with equal weight. Window via `select_last_monthly_hist`, the same months as `datamgr avg --last N`.
+- Verified 2026-11-03 against real output: S5 0157-12 `@energy` equals exocam-trend's values to the digits printed (TS 417.816, energy_top 26.595); D1 `@clearsky` flags 0110-12 (flag off) and passes 0120-12.
+
 ---
 
 ## RUN_REFDIR — resolving a branch/hybrid reference restart set

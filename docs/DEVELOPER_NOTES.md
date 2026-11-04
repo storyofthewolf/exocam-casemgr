@@ -129,6 +129,9 @@ python datamgr.py retire my_case --purge --execute                              
 python runmgr.py check                                 # probe SLURM, show case status
 python runmgr.py check --info                         # include CESM event log tail
 python runmgr.py check --energy                       # include energy balance (TS/FSNT/FLNT)
+python runmgr.py check case1 --fields @monitor --json  # spot check: global means + verdicts, JSON (agent-first)
+python runmgr.py check case1 --fields @clearsky --last 10  # clear-sky fields populated over the window
+python runmgr.py check --list-sets                     # field sets in field_sets.yaml
 python runmgr.py submit case1 --execute                # sbatch as-is, no xmlchange (after build.py make)
 python runmgr.py continue case1 --set STOP_N=10 --set RESUBMIT=5  # CONTINUE_RUN=TRUE + xmlchange
 python runmgr.py restart case1 --set RUN_STARTDATE=0001-01-01 --execute  # CONTINUE_RUN=FALSE + xmlchange
@@ -456,6 +459,7 @@ Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output p
 - Parses `CaseStatus` file (last non-blank line only), extracts event and timestamp
 - Optional `--info`: appends last 5 lines of `${CASE}.log` event file
 - Optional `--energy`: computes global-mean energy balance from 12 most recent cam.h0 files using ncra + netCDF4
+- Optional `--fields SPEC`: spot checks over one window (`utils/fields_check.py`, sets in `field_sets.yaml`, gw weights, JSON records, exit 0/1/3/2); see `docs/DESIGN_check_fields.md`
 - Columnar output: case name, status tag, timestamp
 
 **Energy balance computation (`_energy_balance`):**

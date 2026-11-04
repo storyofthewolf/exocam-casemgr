@@ -8,6 +8,7 @@ __pycache__
 
 *.sh
 *.yaml
+!field_sets.yaml
 
 cases.csv
 cases.yaml
