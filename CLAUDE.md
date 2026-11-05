@@ -573,7 +573,7 @@ From a PS survey: `ic_1bar_L51_ic.nc` is actually 1.12 bar, `ic_1.2bar_L40_ic.nc
 ## Deliberately not done — don't implement without the owner
 
 - **A non-interactive `--yes` on the batch `[yes/no]` gate.** Decided 2026-09-25: "a flag the agent can type is a gate the agent can answer." Revisit only paired with a harness-level permission rule, so approval lives in Claude Code rather than in the model's conduct. A partial implementation was written and reverted.
-- **Multi-step workflows as new verbs or a workflow layer.** Sequences of existing verbs (launch, clear-sky on/off, rebuild → continue/restart) are orchestrated by the skills (`exocam-experiment`, `exocam-rules`), not by code here. Decided 2026-09-25 for launch; reaffirmed 2026-10-25 for clear-sky. Code earns a place only for what an agent cannot do reliably by calling verbs.
+- **Multi-step workflows as new verbs or a workflow layer.** Sequences of existing verbs (launch, clear-sky on/off, rebuild → continue/restart) are orchestrated by the skills (`exocam-experiment`, `exocam-model-rules`), not by code here. Decided 2026-09-25 for launch; reaffirmed 2026-10-25 for clear-sky. Code earns a place only for what an agent cannot do reliably by calling verbs.
 - **SE newcase template paths** (codex review finding 5). SE is never used in practice and is likely to be dropped from future ExoCAM revisions.
 - **Verifying the `.r.`/`.i.` files named by reset `rpointer.*`** — see the rpointer section.
 - **The `render_exoplanet_mod` trailing-comment whitespace wart** — fixable, but it changes generated-script bytes for every case; do it deliberately, alone, if ever.

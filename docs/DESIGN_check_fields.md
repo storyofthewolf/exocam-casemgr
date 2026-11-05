@@ -16,7 +16,7 @@ Three tools, three questions. Nothing crosses between them:
 
 `--fields` never prints a series, slope, map or profile, and never writes a file. A month-by-month table is a series: it belongs to trend (`--rundir` while the job runs).
 
-**Reporting rule (closes the loophole):** every number that appears in a LOG entry, a monitor report or a journal comes from one of these three tools, and the entry names which one. No hand-rolled reductions. This goes into the `exocam-monitor` agent and the `exocam-analysis` / `exocam-rules` skills when this ships.
+**Reporting rule (closes the loophole):** every number that appears in a LOG entry, a monitor report or a journal comes from one of these three tools, and the entry names which one. No hand-rolled reductions. This goes into the `exocam-monitor` agent and the `exocam-output-rules` / `exocam-model-rules` skills when this ships.
 
 ## Scope of this change: `--fields` only
 
@@ -110,9 +110,9 @@ Range checks (`TS:100..1000`): left out until a need arises. Per-level or region
 
 ## Docs
 
-This branch: casemgr `CLAUDE.md` gets a `--fields` section, and `docs/DEVELOPER_NOTES.md` its entry. Shipping goes via ship-tool-change (Discover checkout to the same commit, owner approval). Then exocam-rules `reference/clearsky.md` §5 and `reference/monitoring.md` can name `--fields`, and the reporting rule can go into the `exocam-monitor` agent.
+This branch: casemgr `CLAUDE.md` gets a `--fields` section, and `docs/DEVELOPER_NOTES.md` its entry. Shipping goes via ship-tool-change (Discover checkout to the same commit, owner approval). Then exocam-model-rules `reference/clearsky.md` §5 and `reference/monitoring.md` can name `--fields`, and the reporting rule can go into the `exocam-monitor` agent.
 
-When `--energy` retires (later): casemgr `CLAUDE.md` `--energy`/`--keep` sections, `tests/test_hist_selection.py`; exocam-rules `reference/monitoring.md`; hub `CLAUDE.md` workflow table, `program/JAIME.md`, `program/USE_CASES.md`, the `exocam-experiment` skill.
+When `--energy` retires (later): casemgr `CLAUDE.md` `--energy`/`--keep` sections, `tests/test_hist_selection.py`; exocam-model-rules `reference/monitoring.md`; hub `CLAUDE.md` workflow table, `program/JAIME.md`, `program/USE_CASES.md`, the `exocam-experiment` skill.
 
 ## Tests
 

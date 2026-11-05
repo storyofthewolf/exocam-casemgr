@@ -27,8 +27,8 @@ import utils.inputs_utils as inputs_utils   # noqa: E402
 import query      # noqa: E402
 import scan       # noqa: E402
 
-EXOCAM = '/Users/wolfe/models/ExoCAM'
-EXORT = '/Users/wolfe/models/ExoRT'
+EXOCAM = os.path.expanduser('~/Research/models/ExoCAM')
+EXORT = os.path.expanduser('~/Research/models/ExoRT')
 IC_DIR = f'{EXOCAM}/cesm1.2.1/initial_files/cam_aqua_fv'
 HAVE_ENGINES = (os.path.isfile(f'{IC_DIR}/control_L40.cam.i.0009-01-01-00000.nc')
                 and os.path.isfile(f'{EXORT}/data/solar/G2V_SUN_n68.nc'))
