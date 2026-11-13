@@ -660,7 +660,7 @@ def _warn_if_stale(registry_path, retired, config_registry_path):
 # ---------------------------------------------------------------------------
 
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(allow_abbrev=False,
         prog='query.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -683,7 +683,7 @@ def build_parser():
 
     # ---- search ----
     p_search = sub.add_parser(
-        'search',
+        'search', allow_abbrev=False,
         help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -700,7 +700,7 @@ def build_parser():
 
     # ---- show ----
     p_show = sub.add_parser(
-        'show',
+        'show', allow_abbrev=False,
         help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -711,7 +711,7 @@ def build_parser():
 
     # ---- export ----
     p_export = sub.add_parser(
-        'export',
+        'export', allow_abbrev=False,
         help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

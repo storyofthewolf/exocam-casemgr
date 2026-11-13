@@ -3042,7 +3042,7 @@ def cmd_rebuild(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='ExoCAM build script generator and runner')
+    parser = argparse.ArgumentParser(allow_abbrev=False, description='ExoCAM build script generator and runner')
     parser.add_argument('--scripts-dir', default='build_scripts',
                         metavar='DIR',
                         help='Directory for generated scripts and logs (default: build_scripts/)')
@@ -3057,7 +3057,7 @@ def main():
     sub = parser.add_subparsers(dest='command', metavar='COMMAND')
     sub.required = True
 
-    p_gen = sub.add_parser('generate', help='Generate build scripts from one or more experiment matrices')
+    p_gen = sub.add_parser('generate', allow_abbrev=False, help='Generate build scripts from one or more experiment matrices')
     p_gen.add_argument('matrix', nargs='*', metavar='MATRIX',
                        help='one or more experiment_matrix.yaml files')
     p_gen.add_argument('--list', action='store_true',
@@ -3067,7 +3067,7 @@ def main():
                             'existence) without generating any scripts')
 
     p_prep = sub.add_parser(
-        'prep',
+        'prep', allow_abbrev=False,
         help='Generate missing input files/parameters (solar file, cice albedos, ncdata); run on the HPC',
         description=cmd_prep.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -3080,7 +3080,7 @@ def main():
     p_prep.add_argument('--execute', action='store_true',
                         help='Generate the missing products (default: preview only)')
 
-    p_make = sub.add_parser('make', help='Run generated *_build.sh scripts in scripts-dir')
+    p_make = sub.add_parser('make', allow_abbrev=False, help='Run generated *_build.sh scripts in scripts-dir')
     p_make.add_argument('names', nargs='*', metavar='NAME',
                         help='Explicit case names or *_build.sh filenames to run')
     p_make.add_argument('--prefix', metavar='PREFIX',
@@ -3099,7 +3099,7 @@ def main():
                              '--send-it. Requires scripts generated on/after 2026-08-23.')
 
     p_patch = sub.add_parser(
-        'patch',
+        'patch', allow_abbrev=False,
         help='Edit exoplanet_mod.F90 in existing case(s) in place and rebuild')
     p_patch.add_argument('cases', nargs='*', metavar='CASE',
                          help='Explicit case names to patch')
@@ -3112,7 +3112,7 @@ def main():
                          help='Apply the edit and rebuild (default: preview only)')
 
     p_rebuild = sub.add_parser(
-        'rebuild',
+        'rebuild', allow_abbrev=False,
         help='Recompile existing case(s) after a hand-edit under SourceMods',
         description=cmd_rebuild.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)

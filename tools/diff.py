@@ -397,7 +397,7 @@ def cmd_full(args, paths):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(allow_abbrev=False,
         prog='diff.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,

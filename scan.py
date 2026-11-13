@@ -517,7 +517,7 @@ def main():
     default_config = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'config_registry.yaml')
 
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(allow_abbrev=False,
         description='Inspect ExoCAM CASE directories and write YAML registry',
         epilog=(
             'Examples:\n'

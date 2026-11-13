@@ -1474,7 +1474,7 @@ def _resolve_models(args, default):
 # ---------------------------------------------------------------------------
 
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(allow_abbrev=False,
         prog='datamgr.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1494,7 +1494,7 @@ def build_parser():
 
     # ---- report (read-only; no --execute; empty cases = all) ----
     p_report = sub.add_parser(
-        'report',
+        'report', allow_abbrev=False,
         help=argparse.SUPPRESS,
         description=cmd_report.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1513,7 +1513,7 @@ def build_parser():
 
     # ---- clean subcommand group ----
     p_clean = sub.add_parser(
-        'clean',
+        'clean', allow_abbrev=False,
         help=argparse.SUPPRESS,
         description=CLEAN_GROUP_DESC,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1523,7 +1523,7 @@ def build_parser():
 
     # ---- clean purge-bld ----
     p_bld = clean_sub.add_parser(
-        'purge-bld',
+        'purge-bld', allow_abbrev=False,
         help='Delete build artifacts in rundir/<case>/bld/',
         description=cmd_purge_bld.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1534,7 +1534,7 @@ def build_parser():
 
     # ---- clean purge-restarts ----
     p_rest = clean_sub.add_parser(
-        'purge-restarts',
+        'purge-restarts', allow_abbrev=False,
         help='Trim old restart sets in archive/<case>/rest/; keep last N',
         description=cmd_purge_restarts.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1545,7 +1545,7 @@ def build_parser():
 
     # ---- clean purge-hist ----
     p_hist = clean_sub.add_parser(
-        'purge-hist',
+        'purge-hist', allow_abbrev=False,
         help='Delete history NetCDF files in archive/<case>/<model>/hist/',
         description=cmd_purge_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1559,7 +1559,7 @@ def build_parser():
 
     # ---- clean purge-logs ----
     p_logs = clean_sub.add_parser(
-        'purge-logs',
+        'purge-logs', allow_abbrev=False,
         help='Delete log files from archive/<case>/<model>/logs/ and $CASE/logs/',
         description=cmd_purge_logs.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1573,7 +1573,7 @@ def build_parser():
 
     # ---- clean move-hist ----
     p_mvhist = clean_sub.add_parser(
-        'move-hist',
+        'move-hist', allow_abbrev=False,
         help='Move history files to long-term storage',
         description=cmd_move_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1583,7 +1583,7 @@ def build_parser():
 
     # ---- avg ----
     p_avg = sub.add_parser(
-        'avg',
+        'avg', allow_abbrev=False,
         help=argparse.SUPPRESS,
         description=cmd_avg_hist.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1603,7 +1603,7 @@ def build_parser():
 
     # ---- retire ----
     p_arc = sub.add_parser(
-        'retire',
+        'retire', allow_abbrev=False,
         help=argparse.SUPPRESS,
         description=cmd_retire_case.__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,

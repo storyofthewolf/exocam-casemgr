@@ -1614,7 +1614,7 @@ def _emit_fields(order, records, plan, as_json):
 # ---------------------------------------------------------------------------
 
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(allow_abbrev=False,
         prog='runmgr.py',
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1634,7 +1634,7 @@ def build_parser():
 
     # ---- check ----
     p_check = top_sub.add_parser(
-        'check',
+        'check', allow_abbrev=False,
         help='Show run status for cases (CaseStatus + SLURM probe); defaults '
              'to all discoverable cases. --dir lists files in one storage area',
         description=cmd_check.__doc__,
@@ -1688,7 +1688,7 @@ def build_parser():
 
     # ---- xml ----
     p_xml = top_sub.add_parser(
-        'xml',
+        'xml', allow_abbrev=False,
         help='Query/change CESM XML variables ad hoc (no CONTINUE_RUN, no '
              'sbatch); --query VAR to inspect, --change VAR=VALUE to set',
         description=cmd_xml.__doc__,
@@ -1710,7 +1710,7 @@ def build_parser():
 
     # ---- continue ----
     p_cont = top_sub.add_parser(
-        'continue',
+        'continue', allow_abbrev=False,
         help='Set CONTINUE_RUN=TRUE and sbatch the run script; optionally '
              'apply --set VAR=VALUE xmlchange calls first',
         description=cmd_continue.__doc__,
@@ -1728,7 +1728,7 @@ def build_parser():
 
     # ---- restart ----
     p_restart = top_sub.add_parser(
-        'restart',
+        'restart', allow_abbrev=False,
         help='Set CONTINUE_RUN=FALSE, apply xmlchange calls, and sbatch; fix '
              'and rerun from scratch after a completed or failed run',
         description=cmd_restart.__doc__,
@@ -1747,7 +1747,7 @@ def build_parser():
 
     # ---- submit ----
     p_submit = top_sub.add_parser(
-        'submit',
+        'submit', allow_abbrev=False,
         help='sbatch a built case as-is (no xmlchange); the launch step after '
              '`build.py make`. Skips cases with no <case>.run',
         description=cmd_submit.__doc__,
