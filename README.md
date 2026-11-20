@@ -117,7 +117,6 @@ it only computes the product *names*.
 `prep` is idempotent by name. A product that already exists is left alone, so re-running
 after adding cases generates only what is new, and two cases sharing a star or a pressure
 share one product. Nothing is ever overwritten — delete a product to have it remade.
-It is not destructive, so there is no `[yes/no]` gate.
 
 Products go under `paths.generated_inputs` (`solar/`, `albedo/`, `ic/<config_type>/`), each
 with a `<file>.prep.yaml` manifest recording the recipe and the tool versions used.
@@ -163,13 +162,14 @@ When a case names `star` or `ic_template`, the script also opens with a **STEP 0
 python build.py generate --list
 ```
 
-To run all generated scripts (prompts for confirmation; output streams to `build_scripts/logs/<case>.build.<timestamp>.log` while each script runs, with `<case>.build.log` a symlink to the latest attempt):
+To run generated scripts, select them (names, `--prefix`, or `--all`), preview, then add `--execute`. Output streams to `build_scripts/logs/<case>.build.<timestamp>.log` while each script runs, with `<case>.build.log` a symlink to the latest attempt:
 
 ```bash
-python build.py make                                  # build only — inspect, then submit later
-python build.py make --prefix ExoCAM_thai             # filter by case name prefix
-python build.py make --send-it                        # build then submit each passed case via sbatch
-python build.py make --prefix ExoCAM_thai --send-it   # filter + build + submit
+python build.py make                                            # list the scripts; runs nothing
+python build.py make --prefix ExoCAM_thai                       # preview: what would run
+python build.py make --prefix ExoCAM_thai --execute             # build only — inspect, then submit later
+python build.py make --all --execute                            # build every script
+python build.py make --prefix ExoCAM_thai --execute --send-it   # build, then submit each passed case via sbatch
 ```
 
 `make` **builds but does not submit** — review the cases, then launch them with
@@ -196,7 +196,7 @@ Every verb exits with one of five codes, so a wrapping script can branch on the 
 | 1 | at least one per-case error, or a fatal config/selection error |
 | 2 | bad command-line usage |
 | 3 | nothing failed, but some requested case was skipped by policy (active job, not built, nothing to do) |
-| 4 | the `[yes/no]` gate was declined |
+| 4 | reserved: meant a declined `[yes/no]` gate, and no verb prompts since 2026-11 |
 
 Precedence: 1 > 4 > 3 > 0. Preview mode (no `--execute`) reports the same code `--execute` would face. Read-only verbs (`check`, `report`, `xml --query`, `avg --info`) exit 0.
 
@@ -216,8 +216,7 @@ python build.py patch case_a case_b --set do_exo_rt_clearsky=true --execute
 
 `--set VAR=VALUE` is repeatable and accepts any `EXO_PARAMS` member; values are
 type-checked against the same table `generate --verify` uses, before anything is
-touched. Preview by default; `--execute` adds one batch `[yes/no]` over the whole
-set.
+touched. Preview by default; `--execute` acts on the whole set.
 
 Notes:
 
@@ -411,7 +410,7 @@ python datamgr.py report case1 case2   # specific cases only
 
 #### Purge and move files (datamgr.py clean)
 
-All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes. There is no `--all` flag — cases must be selected explicitly, either by name or with a `--prefix` bulk filter (the two are mutually exclusive). Under `--execute` you get a **single** confirmation covering the whole set (not one prompt per case).
+All destructive subcommands are **non-destructive by default**. `--execute` is required to make any changes. There is no `--all` flag — cases must be selected explicitly, either by name or with a `--prefix` bulk filter (the two are mutually exclusive). `--execute` is the confirmation: it acts on the whole set without asking again, so read the preview first.
 
 ```bash
 # Preview what each command would do (safe default — nothing is changed)
@@ -422,7 +421,7 @@ python datamgr.py clean purge-hist --prefix exovolc --models all   # bulk: every
 python datamgr.py clean purge-logs my_case
 python datamgr.py clean move-hist my_case --models atm
 
-# Add --execute to actually perform the action (one yes/no confirmation for the whole batch)
+# Add --execute to actually perform the action (no further prompt)
 python datamgr.py clean purge-bld my_case --execute
 python datamgr.py clean purge-restarts my_case --keep 1 --execute
 python datamgr.py clean move-hist my_case --models atm --execute
@@ -461,7 +460,7 @@ python datamgr.py avg my_case --last 10 --execute     # average last 10 timestep
 | Preserve artifacts | `--keep-*` flags | `case.yaml` (implicit) + selected files |
 | Complete erasure | `--purge` | **Nothing** — no record written |
 
-`--keep-config`, `--keep-years N`, and `--keep-restarts` may be freely combined. `--purge` is mutually exclusive with all three. Avg files (filenames containing `"avg"`) are always moved to long-term unconditionally (except under `--purge`). All `retire --execute` invocations prompt for confirmation.
+`--keep-config`, `--keep-years N`, and `--keep-restarts` may be freely combined. `--purge` is mutually exclusive with all three. Avg files (filenames containing `"avg"`) are always moved to long-term unconditionally (except under `--purge`). If long-term storage already holds a record for a case, that case is skipped; `--replace-existing` deletes the existing record first and retires into a clean one.
 
 ```bash
 # Preview (no --execute — always safe to run first)
@@ -476,7 +475,7 @@ python datamgr.py retire my_case --keep-config --execute
 # Tier 2: save config files, 1 year of history, and most recent restart
 python datamgr.py retire my_case --keep-config --keep-years 1 --keep-restarts --execute
 
-# Tier 3: complete erasure (prominent warning shown before confirmation)
+# Tier 3: complete erasure (prominent warning shown in the preview and again under --execute)
 python datamgr.py retire my_case --purge --execute
 ```
 

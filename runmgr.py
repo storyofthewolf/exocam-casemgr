@@ -24,20 +24,21 @@ SAFETY
   hand-edit under SourceMods, use `build.py rebuild`, then relaunch from here
   (submit / continue / restart).
 
-  Double-gate ergonomics (matching build.py make): these verbs first print a
-  per-case preview, then --execute prints ONE batch [yes/no] confirmation
-  before acting on the whole set. RUNNING/RESUBMITTED/QUEUED cases are
-  hard-blocked (dropped from the set); every other status proceeds, with its label shown
+  Preview, then --execute (the same rule as every acting verb in the
+  package): without --execute these verbs print a per-case preview and change
+  nothing; with it they act on the whole set without asking again — the flag
+  is the confirmation. RUNNING/RESUBMITTED/QUEUED cases are hard-blocked
+  (dropped from the set); every other status proceeds, with its label shown
   per case. The label is reported, not judged — BUILT, FAILED, and WALLCLOCK
-  are all ordinary inputs to these verbs — and the single batch confirm is
-  the decision point.
+  are all ordinary inputs to these verbs — and the decision to pass --execute
+  after reading the preview is the decision point.
 
   REST_N/STOP_N: continue/restart --set and xml --change print a WARNING (not
   a block) when the pending edit would leave the restart interval longer than
   the run — the segment then ends before a restart is written, leaving an
   incomplete fileset that crashes the next CONTINUE_RUN=TRUE. build.py enforces
-  this as a hard error at generate time; here it is advisory, and the single
-  batch [yes/no] decides.
+  this as a hard error at generate time; here it is advisory, and whether to
+  pass --execute decides.
 
 Run any subcommand with --help for its full description and options
 (e.g. `python runmgr.py restart --help`).
@@ -61,7 +62,7 @@ from utils.manage_utils import (
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
-    _require_cases, batch_confirm, preview_hint,
+    _require_cases, announce_batch, preview_hint,
     EXIT_FAILED, EXIT_USAGE, EXIT_PARTIAL,
 )
 from utils import fields_check
@@ -265,8 +266,8 @@ def _rest_stop_warning(case_dir, pending):
 
     The run-time counterpart to build.py's _verify_rest_stop guard, but a
     WARNING rather than a hard block: at this point the case already exists and
-    the user may be deliberately staging an odd pair, so this reports and lets
-    the single batch [yes/no] decide.
+    the user may be deliberately staging an odd pair, so this reports in the
+    preview and lets the choice to pass --execute decide.
 
     Unlike the build-time check, the four values are per-case live XML state
     rather than a matrix, so a --set touching only REST_N must be judged against
@@ -439,8 +440,8 @@ def cmd_xml(args, paths):
     --query is always read-only. --change defaults to preview; pass --execute
     to apply. On --change --execute, the per-case preview (which flags any
     RUNNING/RESUBMITTED cases whose XML edits only take effect next segment) is
-    followed by a single batch [yes/no] before any change is applied — the same
-    double-gate ergonomics as the other run-control verbs. Query mode never gates.
+    printed, then every change is applied — the same preview-then-execute rule
+    as the other run-control verbs. Query mode never changes anything.
 
     Changing REST_N/STOP_N (or their _OPTION units) into a pair where the
     restart interval outruns the run prints a WARNING in the preview — not a
@@ -501,11 +502,8 @@ def cmd_xml(args, paths):
         print("\nNo cases to change.")
         return outcome.exit_code()
 
-    # Phase 2 — single batch gate, then apply.
-    if not batch_confirm("Apply XML changes to", len(actionable)):
-        print("Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    # Phase 2 — announce the batch, then apply.
+    announce_batch("Apply XML changes to", len(actionable))
 
     for case, case_dir in actionable:
         try:
@@ -536,15 +534,15 @@ def cmd_continue(args, paths):
 
     The label is reported, not judged: BUILT (e.g. after `build.py rebuild`),
     FAILED, and WALLCLOCK are all ordinary inputs to this verb, so no status
-    is singled out as surprising. The single batch [yes/no] is the decision
-    point.
+    is singled out as surprising. Passing --execute after
+    the preview is the decision point.
 
     Cases with no <case>.run are skipped before any xmlchange is applied —
     a case sbatch cannot launch is never modified.
 
-    The per-case preview is followed by a single batch [yes/no] before any job
-    is submitted (the same double-gate as build.py make). Without --execute,
-    prints the preview and exits. Requires explicit case names or --prefix —
+    Without --execute, prints the per-case preview and exits. With it, the
+    preview is printed and every job is submitted without asking again (the
+    same preview-then-execute rule as build.py make). Requires explicit case names or --prefix —
     no --all flag.
     """
     caseroot = paths.get('caseroot', '')
@@ -600,11 +598,8 @@ def cmd_continue(args, paths):
         print("\nNo cases to submit.")
         return outcome.exit_code()
 
-    # Phase 2 — single batch gate, then apply xmlchange + sbatch.
-    if not batch_confirm("Continue (CONTINUE_RUN=TRUE) and submit", len(actionable)):
-        print("Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    # Phase 2 — announce the batch, then apply xmlchange + sbatch.
+    announce_batch("Continue (CONTINUE_RUN=TRUE) and submit", len(actionable))
 
     for case, case_dir in actionable:
         try:
@@ -665,15 +660,15 @@ def cmd_restart(args, paths):
     The label is reported, not judged. BUILT is the normal state after
     `build.py rebuild` (which appends 'build complete' to CaseStatus, so a
     previously COMPLETE case reads BUILT afterward), and FAILED/WALLCLOCK are
-    exactly the states this verb exists to relaunch. The single batch [yes/no]
-    is the decision point.
+    exactly the states this verb exists to relaunch. Passing --execute after
+    the preview is the decision point.
 
     Cases with no <case>.run are skipped before any xmlchange is applied —
     a case sbatch cannot launch is never modified.
 
-    The per-case preview is followed by a single batch [yes/no] before any job
-    is submitted (the same double-gate as build.py make). Without --execute,
-    prints the preview and exits. Requires explicit case names or --prefix —
+    Without --execute, prints the per-case preview and exits. With it, the
+    preview is printed and every job is submitted without asking again (the
+    same preview-then-execute rule as build.py make). Requires explicit case names or --prefix —
     no --all flag.
     """
     caseroot = paths.get('caseroot', '')
@@ -744,11 +739,8 @@ def cmd_restart(args, paths):
         print("\nNo cases to submit.")
         return outcome.exit_code()
 
-    # Phase 2 — single batch gate, then apply xmlchange + sbatch.
-    if not batch_confirm("Restart (CONTINUE_RUN=FALSE) and submit", len(actionable)):
-        print("Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    # Phase 2 — announce the batch, then apply xmlchange + sbatch.
+    announce_batch("Restart (CONTINUE_RUN=FALSE) and submit", len(actionable))
 
     for case, case_dir, rptr_files in actionable:
         try:
@@ -796,12 +788,12 @@ def cmd_submit(args, paths):
 
     The label is reported, not judged: BUILT is the normal post-make state,
     COMPLETE covers re-launch and clones that inherit the source's CaseStatus,
-    and the rest are shown as-is. The single batch [yes/no] is the decision
-    point.
+    and the rest are shown as-is. Passing --execute after
+    the preview is the decision point.
 
-    The per-case preview is followed by a single batch [yes/no] before any job
-    is submitted (the same double-gate as build.py make). Without --execute,
-    prints the preview and exits. Requires explicit case names or --prefix —
+    Without --execute, prints the per-case preview and exits. With it, the
+    preview is printed and every job is submitted without asking again (the
+    same preview-then-execute rule as build.py make). Requires explicit case names or --prefix —
     no --all flag.
     """
     caseroot = paths.get('caseroot', '')
@@ -844,11 +836,8 @@ def cmd_submit(args, paths):
         print("\nNo cases to submit.")
         return outcome.exit_code()
 
-    # Phase 2 — single batch gate, then sbatch.
-    if not batch_confirm("Submit", len(actionable)):
-        print("Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    # Phase 2 — announce the batch, then sbatch.
+    announce_batch("Submit", len(actionable))
 
     for case, case_dir in actionable:
         ok, detail = submit_case(case_dir, case)

@@ -6,7 +6,8 @@ verbs that return it).
 The gap these lock down (review finding 3, 2026-09-13): most verbs printed
 per-case ERROR / SKIP lines and exited 0, so a wrapping script or agent could
 not tell success from partial or total failure. Convention (manage_utils):
-0 ok, 1 failed, 2 usage (argparse), 3 partial (policy skips), 4 aborted;
+0 ok, 1 failed, 2 usage (argparse), 3 partial (policy skips), 4 aborted
+(reserved: no verb prompts since 2026-11, so none produces it);
 precedence FAILED > ABORTED > PARTIAL > OK.
 
 The subprocess tests drive the real CLIs against a temp caseroot/archive and
@@ -107,15 +108,14 @@ class CliCase(unittest.TestCase):
         self.assertEqual(code, EXIT_PARTIAL, out)
         self.assertIn('[QUEUED]', out)
 
-    def test_submit_declined_is_aborted(self):
-        code, out = self.run_cli('runmgr.py', 'submit', 'mycase', '--execute', stdin='no\n')
-        self.assertEqual(code, EXIT_ABORTED, out)
-
-    def test_submit_sbatch_missing_is_failed(self):
-        # 'yes' at the gate, but no sbatch on PATH -> per-case ERROR -> 1
-        code, out = self.run_cli('runmgr.py', 'submit', 'mycase', '--execute', stdin='yes\n')
+    def test_submit_execute_asks_nothing(self):
+        # --execute is the confirmation: with stdin empty (as under hpc-run,
+        # where it is /dev/null) the verb still acts. No sbatch on PATH, so
+        # the act is a per-case ERROR -> 1, which proves it got that far.
+        code, out = self.run_cli('runmgr.py', 'submit', 'mycase', '--execute')
         self.assertEqual(code, EXIT_FAILED, out)
         self.assertIn('sbatch not found', out)
+        self.assertNotIn('[yes/no]', out)
 
     def test_unknown_case_is_failed(self):
         code, out = self.run_cli('runmgr.py', 'submit', 'nope')
@@ -133,15 +133,82 @@ class CliCase(unittest.TestCase):
         code, out = self.run_cli('datamgr.py', 'clean', 'purge-bld', 'mycase')
         self.assertEqual(code, EXIT_PARTIAL, out)
 
-    def test_avg_declined_is_aborted(self):
+    def test_avg_preview_ok(self):
         open(os.path.join(self.archive, 'mycase', 'atm', 'hist', 'mycase.cam.h0.0001-01.nc'), 'w').close()
         code, out = self.run_cli('datamgr.py', 'avg', 'mycase', '--last', '1',
-                                 '--models', 'atm', '--execute', stdin='no\n')
-        self.assertEqual(code, EXIT_ABORTED, out)
+                                 '--models', 'atm')
+        self.assertEqual(code, EXIT_OK, out)
+        self.assertIn('--execute', out)
+
+    def _long_term_record(self):
+        lt = os.path.join(self.tmp.name, 'long_term')
+        os.makedirs(os.path.join(lt, 'mycase'))
+        marker = os.path.join(lt, 'mycase', 'case.yaml')
+        open(marker, 'w').close()
+        return lt, marker
+
+    def test_retire_duplicate_is_skipped_without_flag(self):
+        # Was a per-case [yes/no]; now a duplicate long-term record is skipped
+        # unless --replace-existing is in the command line.
+        lt, marker = self._long_term_record()
+        code, out = self.run_cli('datamgr.py', '--long-term', lt, 'retire', 'mycase', '--execute')
+        self.assertEqual(code, EXIT_PARTIAL, out)
+        self.assertIn('--replace-existing', out)
+        self.assertTrue(os.path.exists(marker))
+        self.assertTrue(os.path.isdir(os.path.join(self.caseroot, 'mycase')))
+
+    def test_retire_replace_existing_previews(self):
+        lt, marker = self._long_term_record()
+        code, out = self.run_cli('datamgr.py', '--long-term', lt, 'retire', 'mycase',
+                                 '--replace-existing')
+        self.assertEqual(code, EXIT_OK, out)
+        self.assertIn('will be deleted', out)
+        self.assertTrue(os.path.exists(marker))     # preview touches nothing
+
 
     def test_avg_no_files_is_partial(self):
         code, out = self.run_cli('datamgr.py', 'avg', 'mycase', '--last', '1', '--models', 'atm')
         self.assertEqual(code, EXIT_PARTIAL, out)
+
+
+class MakeCase(unittest.TestCase):
+    """build.py make previews unless --execute, and never prompts."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scripts = os.path.join(self.tmp.name, 'scripts')
+        os.makedirs(self.scripts)
+        self.marker = os.path.join(self.tmp.name, 'ran')
+        with open(os.path.join(self.scripts, 'mycase_build.sh'), 'w') as f:
+            f.write(f'#!/bin/sh\ntouch {self.marker}\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def make(self, *argv):
+        cmd = [sys.executable, os.path.join(REPO, 'build.py'),
+               '--scripts-dir', self.scripts, 'make', 'mycase'] + list(argv)
+        proc = subprocess.run(cmd, cwd=REPO, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              universal_newlines=True)
+        return proc.returncode, proc.stdout
+
+    def test_preview_runs_nothing(self):
+        code, out = self.make()
+        self.assertEqual(code, EXIT_OK, out)
+        self.assertIn('preview only', out)
+        self.assertFalse(os.path.exists(self.marker))
+
+    def test_send_it_preview_says_it_would_submit(self):
+        code, out = self.make('--send-it')
+        self.assertEqual(code, EXIT_OK, out)
+        self.assertIn('and submit each case', out)
+        self.assertFalse(os.path.exists(self.marker))
+
+    def test_execute_runs_without_a_prompt(self):
+        code, out = self.make('--execute')
+        self.assertTrue(os.path.exists(self.marker), out)
+        self.assertNotIn('[yes/no]', out)
 
 
 if __name__ == '__main__':

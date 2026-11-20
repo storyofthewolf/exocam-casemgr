@@ -15,7 +15,8 @@ ExoCAM case build tool. Three subcommands:
 
   make      Run generated *_build.sh scripts from scripts-dir: explicit NAME
             args, --prefix, or --all (a bare `make` just lists the scripts).
-            Builds but does not submit; --send-it also sbatches each case
+            Preview by default; --execute runs them. Builds but does not
+            submit; --send-it also sbatches each case
             (submission otherwise belongs to runmgr.py submit). --no-build
             stops short of <case>.build, leaving the case set up but
             uncompiled so SourceMods can be hand-edited first.
@@ -24,7 +25,10 @@ ExoCAM case build tool. Three subcommands:
             rerun <case>.build — the only way to change a compiled-in Fortran
             parameter without recreating the case (generate would destroy the
             run via create_newcase/create_clone). Preview by default;
-            --execute gates a single batch [yes/no].
+            --execute acts.
+
+Every acting verb previews by default and acts on --execute without asking
+again: the flag is the confirmation (no [yes/no] prompts since 2026-11).
 
 For a newcase the experiment matrix is the sole arbiter of atmospheric
 composition: unspecified gases render as 0.0 and silence on ozone injects the
@@ -51,10 +55,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from utils.parse_utils import compute_pstd_bar
 import utils.inputs_utils as inputs_utils
 from utils.manage_utils import (submit_case, load_paths, discover_cases,
-                          _require_cases, batch_confirm, preview_hint,
+                          _require_cases, announce_batch, preview_hint,
                           ACTIVE_STATUSES, DEFAULT_CONFIG, SANDBOX_PREFIX,
                           is_sandbox_case,
-                          Outcome, EXIT_OK, EXIT_FAILED, EXIT_ABORTED)
+                          Outcome, EXIT_OK, EXIT_FAILED)
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
 EXO_PARAMS = {
@@ -2641,21 +2645,23 @@ def cmd_make(args):
                      + "\n  ".join(stale)
                      + "\nRegenerate them with `build.py generate`.")
 
+    send_it = getattr(args, 'send_it', False)
     print("Scripts to run:")
     for s in all_scripts:
         print(f"  {os.path.basename(s)}")
     if no_build:
         print("\n--no-build: cases will be created and configured but NOT compiled.")
+    if send_it:
+        print("\n--send-it: each case that builds is then submitted with sbatch.")
     print()
 
-    try:
-        answer = input("Run these scripts? [yes/no]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        answer = 'no'
-    if answer not in ('yes', 'y'):
-        print("Aborted.")
-        return EXIT_ABORTED
+    # Preview unless --execute: it is the confirmation (no [yes/no] prompt
+    # since 2026-11, the same rule as every other acting verb).
+    if not args.execute:
+        print("(preview only — rerun with --execute to run these scripts"
+              + (" and submit each case" if send_it else "") + ")")
+        return EXIT_OK
+    print(f"Running {len(all_scripts)} script(s) (--execute).")
 
     logs_dir = os.path.join(scripts_dir, 'logs')
     os.makedirs(logs_dir, exist_ok=True)
@@ -2868,10 +2874,7 @@ def cmd_patch(args):
     if flagged:
         print(f"\n  {len(flagged)} case(s) have an active or queued job "
               f"(see flags above).")
-    if not batch_confirm(f"Patch exoplanet_mod.F90 and rebuild", len(actions)):
-        print("Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    announce_batch(f"Patch exoplanet_mod.F90 and rebuild", len(actions))
 
     built = 0
     failed = []
@@ -2956,9 +2959,9 @@ def cmd_rebuild(args):
 
     Cases with no <case>.build are skipped before anything is touched.
 
-    The per-case preview is followed by a single batch [yes/no] before any
-    case is rebuilt (the same double-gate as patch/make). Without --execute,
-    prints the preview and exits. Requires explicit case names or --prefix —
+    Without --execute, prints the per-case preview and exits. With it, every
+    case is rebuilt without asking again (the same preview-then-execute rule
+    as patch/make). Requires explicit case names or --prefix —
     no --all flag.
 
     A failed compile is reported per-case; the rest of the batch continues.
@@ -3010,14 +3013,11 @@ def cmd_rebuild(args):
         print("\nNo cases to rebuild.")
         return outcome.exit_code()
 
-    # Phase 2 -- single batch gate, then compile.
+    # Phase 2 -- announce the batch, then compile.
     if flagged:
         print(f"\n  {len(flagged)} case(s) have an active or queued job "
               f"(see flags above).")
-    if not batch_confirm("Rebuild", len(actionable)):
-        print("Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    announce_batch("Rebuild", len(actionable))
 
     built = 0
     failed = []
@@ -3089,8 +3089,12 @@ def main():
     p_make.add_argument('--all', action='store_true',
                         help='Run every *_build.sh script in scripts-dir; required if no NAME '
                              'or --prefix is given (a bare call with none of these just lists scripts)')
+    p_make.add_argument('--execute', action='store_true',
+                        help='Run the selected scripts. Without it, make lists what it would '
+                             'run and changes nothing.')
     p_make.add_argument('--send-it', action='store_true',
-                        help='Submit each successfully built case via sbatch after building')
+                        help='Submit each successfully built case via sbatch after building '
+                             '(with --execute; without it, the preview says so)')
     p_make.add_argument('--no-build', action='store_true',
                         help='Run every step of the build script EXCEPT the final <case>.build: '
                              'the case is created, configured and cesm_setup\'d but left '

@@ -73,7 +73,9 @@ def is_sandbox_case(name):
 #   3  EXIT_PARTIAL  nothing failed, but at least one requested case was
 #                    skipped by policy — an active job hard-blocked, a case
 #                    not built, nothing to do for it, a duplicate declined
-#   4  EXIT_ABORTED  the [yes/no] gate was declined (or EOF / interrupt)
+#   4  EXIT_ABORTED  no longer produced: it meant a declined [yes/no] gate,
+#                    and the gates were removed (2026-11). Kept reserved so
+#                    a caller that checks for 4 still parses.
 #
 # Precedence when several apply: FAILED > ABORTED > PARTIAL > OK. An abort
 # after a preview that already reported an error is still a failure — the
@@ -375,25 +377,18 @@ def preview_hint(execute):
         print("\n  (preview only — rerun with --execute to perform these actions)")
 
 
-def batch_confirm(action, n):
-    """Single batch [yes/no] gate covering a whole case set.
+def announce_batch(action, n):
+    """Say what --execute is about to do to the whole case set, then return.
 
-    The caller prints all per-case previews first, then calls this once before
-    acting on the entire batch — one confirmation instead of one per case.
-    `action` is a verb phrase; rendered as "<action> N case(s)? [yes/no]:".
-    Returns True to proceed. EOF/interrupt is treated as 'no'.
-
-    Only the literal word 'yes' proceeds — a bare 'y' does not. This gate
-    fronts irreversible operations (retire --purge erases cases outright), and
-    the prompt advertises [yes/no]; requiring the full word keeps a reflexive
-    single keystroke from arming it.
+    The caller prints every per-case preview first, then calls this once
+    before acting. There is no [yes/no] prompt: --execute IS the
+    confirmation. The prompt was removed (2026-11) because a caller with no
+    terminal -- an agent through hpc-tether, whose stdin is /dev/null -- could
+    only pass it by piping `yes` in, which confirmed nothing. Every caller now
+    gets the same two steps: run without --execute to preview, then rerun
+    with it. `action` is a verb phrase: "<action> N case(s) (--execute)".
     """
-    try:
-        answer = input(f"\n  {action} {n} case(s)? [yes/no]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return False
-    return answer == 'yes'
+    print(f"\n  {action} {n} case(s) (--execute).")
 
 
 # ---------------------------------------------------------------------------

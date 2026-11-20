@@ -41,7 +41,7 @@ SAFETY
   Bare invocation without case names will exit with an error.
 
   retire --purge is complete erasure and writes nothing to long-term.
-  Prominent warnings are shown in both preview and at the confirmation prompt.
+  Prominent warnings are shown in the preview and again under --execute.
   --purge is mutually exclusive with all --keep-* flags.
 
   report is read-only and safe to run bare — no case names means all cases.
@@ -69,7 +69,7 @@ from utils.manage_utils import (
     DEFAULT_CONFIG, load_paths,
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, _hist_keep_years_filter, hist_info_line, restart_sets,
-    preview_hint, batch_confirm, _require_cases,
+    preview_hint, announce_batch, _require_cases,
     Outcome, EXIT_OK,
 )
 
@@ -168,8 +168,8 @@ def _run_batch(actions, confirm_phrase, execute, outcome=None):
 
     `actions` is the list of zero-arg callables built during the preview pass
     (each prints its own result). Ergonomics match retire / the runmgr
-    run-control verbs: preview by default, and under --execute a *single* batch
-    [yes/no] covering the whole set — not one prompt per case.
+    run-control verbs: preview by default; --execute acts on the whole set
+    without asking again.
 
     `outcome` is the caller's Outcome tally (skips it counted during the
     preview); this adds the abort and any per-case OSError, and returns the
@@ -183,10 +183,7 @@ def _run_batch(actions, confirm_phrase, execute, outcome=None):
     if not execute:
         preview_hint(execute)
         return outcome.exit_code()
-    if not batch_confirm(confirm_phrase, len(actions)):
-        print("  Aborted.")
-        outcome.abort()
-        return outcome.exit_code()
+    announce_batch(confirm_phrase, len(actions))
     for do in actions:
         try:
             do()
@@ -931,19 +928,19 @@ def cmd_retire_case(args, paths):
     SAFEGUARDS:
       - --execute required; default is preview only.
       - Explicit case names required; no --all flag.
-      - After all per-case plans are printed, a single batch yes/no
-        confirmation covers all selected cases (explicit names or --prefix)
-        before any action is taken — the package-standard double gate.
+      - All per-case plans and a batch summary (combined footprint, --purge
+        warning) are printed in the preview, which is what to review before
+        passing --execute; --execute then acts without asking again.
       - RUNNING/RESUBMITTED cases (CaseStatus + SLURM probe) are hard-blocked:
         retiring would delete the run out from under an active job.
       - Duplicate guard: if long_term/<case> already exists (a prior
         retirement record — normally the product of a workflow mis-step,
         since a case should never live in both active and retired space),
-        each duplicated case gets its own [yes/no] prompt under --execute.
-        yes = the ENTIRE existing record (case.yaml, config, preserved data)
-        is deleted first, so this retire fully replaces it — no old/new
-        mixing, no shutil.move nesting. no = the case is skipped so the
-        duplication can be resolved outside exocam-casemgr.
+        the case is skipped so the duplication can be resolved outside
+        exocam-casemgr — unless --replace-existing is given, in which case
+        the ENTIRE existing record (case.yaml, config, preserved data) is
+        deleted first, so this retire fully replaces it — no old/new
+        mixing, no shutil.move nesting.
 
     Examples:
       retire mycase --execute
@@ -961,7 +958,8 @@ def cmd_retire_case(args, paths):
 
       retire --prefix hazyCHAMPS_case23 --purge --execute
           Retire all cases whose name starts with hazyCHAMPS_case23.
-          One yes/no confirmation covers the full matched batch.
+          Run it without --execute first: the preview lists the full
+          matched batch.
 
     WARNING: deletions are permanent.
     """
@@ -990,9 +988,9 @@ def cmd_retire_case(args, paths):
     if not cases:
         return
 
-    # Build and print all plans first, then one batch confirm covering the
-    # whole set — the same two-pass double gate as the clean verbs and the
-    # runmgr run-control verbs. plans[case] caches the built plan so the
+    # Build and print all plans first, then (under --execute) act on the
+    # whole set — the same two-pass flow as the clean verbs and the runmgr
+    # run-control verbs. plans[case] caches the built plan so the
     # execute pass doesn't rebuild.
     plans = {}
     outcome = Outcome()
@@ -1039,35 +1037,28 @@ def cmd_retire_case(args, paths):
         # retirement record. In normal operation a case never lives in both
         # active and retired space, so a duplicate is the product of a
         # workflow mis-step, and the subsequent retire is usually the
-        # deliberate one. Ask per case rather than hard-blocking: yes deletes
-        # the ENTIRE existing record (case.yaml, config, preserved data —
-        # everything) before this retire acts, so old and new content never
-        # mix (shutil.move onto existing paths would silently overwrite
-        # files or nest directories); no skips the case so the duplication
-        # can be resolved outside exocam-casemgr.
+        # deliberate one. It is never replaced silently: --replace-existing
+        # deletes the ENTIRE existing record (case.yaml, config, preserved
+        # data — everything) before this retire acts, so old and new content
+        # never mix (shutil.move onto existing paths would silently overwrite
+        # files or nest directories). Without it the case is skipped, in the
+        # preview and under --execute alike, so the duplication can be
+        # resolved outside exocam-casemgr. (This was a per-case [yes/no]
+        # prompt until 2026-11; a flag is visible in the command line, where
+        # an approval can see it.)
         overwrite_lt = False
         if os.path.isdir(lt_case_dir):
             print(f"  DUPLICATE: a long-term record already exists: {lt_case_dir}")
-            if not args.execute:
-                print(f"  Under --execute you will be asked whether to REPLACE it "
-                      f"(yes deletes the entire existing record first).")
+            if getattr(args, 'replace_existing', False):
+                overwrite_lt = True
+                print(f"  --replace-existing: {lt_case_dir} "
+                      f"{'will be' if not args.execute else 'is'} deleted "
+                      f"(case.yaml, config, data — everything) before retiring.")
             else:
-                try:
-                    answer = input(
-                        f"  Replace ENTIRE existing long-term record for {case} "
-                        f"(case.yaml, config, data — everything)? [yes/no]: "
-                    ).strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    answer = 'no'
-                if answer == 'yes':
-                    overwrite_lt = True
-                    print(f"  {lt_case_dir} will be deleted before retiring.")
-                else:
-                    print(f"  {case}: skipped — resolve the existing long-term "
-                          f"record by hand, then re-run retire.")
-                    outcome.skip()
-                    continue
+                print(f"  {case}: skipped — resolve the existing long-term record "
+                      f"by hand, or pass --replace-existing to delete it first.")
+                outcome.skip()
+                continue
 
         sz = case_sizes(case, paths)
         total_on_disk = sum(sz[k] for k in ('casedir', 'bld', 'run', 'hist', 'logs', 'rest'))
@@ -1189,15 +1180,14 @@ def cmd_retire_case(args, paths):
             overwrite_lt=overwrite_lt,
         )
 
-    if not args.execute:
-        preview_hint(args.execute)
-        return outcome.exit_code()
     if not plans:
+        if not args.execute:
+            preview_hint(args.execute)
         return outcome.exit_code()
 
-    # Single batch gate covering all selected cases (explicit names or
-    # --prefix). batch_confirm requires the literal 'yes' and treats
-    # EOF/interrupt as no.
+    # Batch summary over all selected cases (explicit names or --prefix).
+    # Printed in the preview too: the preview is what gets reviewed before
+    # --execute, and --execute acts without asking again.
     combined_bytes = sum(p['total_on_disk'] for p in plans.values())
     print(f"\n{'='*60}")
     print(f"  BATCH: {len(plans)} case(s) selected")
@@ -1205,11 +1195,11 @@ def cmd_retire_case(args, paths):
     if args.purge:
         print(f"\n  *** WARNING: --purge — COMPLETE ERASURE ***")
         print(f"  *** Nothing will be written to long-term. This is irreversible.")
-    action = 'PURGE — complete erasure of' if args.purge else 'Retire'
-    if not batch_confirm(action, len(plans)):
-        print("  Aborted.")
-        outcome.abort()
+    if not args.execute:
+        preview_hint(args.execute)
         return outcome.exit_code()
+    action = 'PURGE — complete erasure of' if args.purge else 'Retire'
+    announce_batch(action, len(plans))
 
     # Pass 2: execute using cached plans.
     for case in list(plans.keys()):
@@ -1323,8 +1313,8 @@ def cmd_avg_hist(args, paths):
                          averaged, with a warning. Output is written into the
                          same hist/ directory as the inputs. An existing avg output file
                          is OVERWRITTEN (ncra -O) — the preview flags this.
-                         Under --execute a single batch [yes/no] covers all
-                         selected cases before any ncra runs.
+                         Preview by default; --execute runs ncra for all
+                         selected cases.
 
     Output filename format:
       <case>.<model_stem>.h0.avg_last{N}yr.nc
@@ -1624,6 +1614,10 @@ def build_parser():
     p_arc.add_argument('--keep-restarts', action='store_true', dest='keep_restarts',
                        help='Move the most recent restart set to long-term (case.yaml always '
                             'written). Combinable with --keep-config and --keep-years.')
+    p_arc.add_argument('--replace-existing', action='store_true', dest='replace_existing',
+                       help='If long-term already holds a record for a case, DELETE that '
+                            'entire record (case.yaml, config, data) before retiring. '
+                            'Without it such a case is skipped.')
     p_arc.add_argument('--registry', metavar='FILE', default=None,
                        help=f'Path to active.yaml for case.yaml export '
                             f'(default: {DEFAULT_RETIRE_REGISTRY})')

@@ -91,8 +91,8 @@ python build.py prep matrix.yaml --case c1 --execute   # one case; --prefix also
 python build.py generate experiment_matrix.yaml        # generate shell scripts into build_scripts/
 python build.py --scripts-dir scripts/ generate matrix.yaml
 python build.py generate --list                        # list experiment matrices
-python build.py make                                   # run all *_build.sh (with confirmation)
-python build.py make --prefix ExoCAM_thai              # run only matching scripts
+python build.py make --all --execute                   # run all *_build.sh (no --execute = preview)
+python build.py make --prefix ExoCAM_thai --execute    # run only matching scripts
 python build.py patch --prefix noO3 --set exo_convect_plim=5.0 --execute  # edit exoplanet_mod.F90 + rebuild
 python build.py rebuild --prefix grp3 --execute        # recompile existing cases after a SourceMods hand-edit
 
@@ -294,9 +294,9 @@ All functions take explicit file paths and return dicts. No filesystem side effe
 
 **Subcommands:** `generate`, `prep`, `make`, `patch`, `rebuild`. **Every compile in the toolchain enters through this module** — no `runmgr.py` verb runs `<case>.build`.
 
-**`prep` subcommand** (`cmd_prep`, added 2026-09-13) — materializes the generated inputs a matrix needs (see `inputs_utils.py` below). Selection: `MATRIX...`, `--case NAME` (repeatable), `--prefix`. Preview by default (present / MISSING per product, exit 0 unless a case is a matrix error); `--execute` makes the missing products in dependency order (solar → albedo → ic), one engine call each, without a `[yes/no]` gate (not destructive: never overwrites). Shares `_matrix_context()` with the generate path. `apply_inputs(spec, registry, paths)` is the hook both `generate` and `prep` call after `resolve_case`: it fills `spec['exo_solar_file']`/`spec['ncdata']` where the matrix is silent and records `spec['_inputs']` (list of `inputs_utils.InputProduct`) + `spec['_albedo_product']`, which `_build_required_inputs_block` (STEP 0 guard) and `_build_albedo_block` (source product → upsert `user_nl_cice` → verify → provenance comment) render. `verify_case` treats a planned-but-unmade product as a warning.
+**`prep` subcommand** (`cmd_prep`, added 2026-09-13) — materializes the generated inputs a matrix needs (see `inputs_utils.py` below). Selection: `MATRIX...`, `--case NAME` (repeatable), `--prefix`. Preview by default (present / MISSING per product, exit 0 unless a case is a matrix error); `--execute` makes the missing products in dependency order (solar → albedo → ic), one engine call each (not destructive: never overwrites). Shares `_matrix_context()` with the generate path. `apply_inputs(spec, registry, paths)` is the hook both `generate` and `prep` call after `resolve_case`: it fills `spec['exo_solar_file']`/`spec['ncdata']` where the matrix is silent and records `spec['_inputs']` (list of `inputs_utils.InputProduct`) + `spec['_albedo_product']`, which `_build_required_inputs_block` (STEP 0 guard) and `_build_albedo_block` (source product → upsert `user_nl_cice` → verify → provenance comment) render. `verify_case` treats a planned-but-unmade product as a warning.
 
-**`rebuild` subcommand** (`cmd_rebuild`, added 2026-07-27) — recompiles `./<case>.build` across existing cases after a hand-edit anywhere under `SourceMods`. Compiles and stops: no `sbatch`, no `xmlchange`, no `rpointer.*` touch, and no `--send-it` (that flag is exclusive to `make`, where folding build+submit is safe because a fresh case has no run state to preserve). Flags `RUNNING`/`RESUBMITTED`/`QUEUED` without blocking (`patch` policy — safe because nothing is resubmitted). Selection via `_require_cases()`; preview by default, `--execute` adds one batch `[yes/no]`. Only cross-module import is `runmgr._probe_status` for the status column.
+**`rebuild` subcommand** (`cmd_rebuild`, added 2026-07-27) — recompiles `./<case>.build` across existing cases after a hand-edit anywhere under `SourceMods`. Compiles and stops: no `sbatch`, no `xmlchange`, no `rpointer.*` touch, and no `--send-it` (that flag is exclusive to `make`, where folding build+submit is safe because a fresh case has no run state to preserve). Flags `RUNNING`/`RESUBMITTED`/`QUEUED` without blocking (`patch` policy — safe because nothing is resubmitted). Selection via `_require_cases()`; preview by default, `--execute` acts. Only cross-module import is `runmgr._probe_status` for the status column.
 
 **`patch` vs `rebuild`** — the split is *scope of the source edit*, not whether a compile happens. `patch` automates the edit for `exoplanet_mod.F90` alone (whose `parameter` constants change often enough to justify a `--set` interface); `rebuild` is the general escape hatch for any other `SourceMods` file, which you edit by hand. Extending `patch` to arbitrary source edits would be more arduous than editing the file directly.
 
@@ -389,7 +389,7 @@ Sets `config_saved` (bool) on every row by checking whether `SourceMods/` exists
 |---|---|
 | `retire my_case --execute` | Writes `case.yaml` tombstone to long-term, then deletes everything from scratch |
 | `retire my_case --keep-config --keep-years N --keep-restarts --execute` | `case.yaml` written implicitly; SourceMods/user_*/env_* copied; N most recent hist years moved; most recent restart moved. Flags freely combinable. |
-| `retire my_case --purge --execute` | Complete erasure. Nothing written to long-term. Prominent `*** WARNING ***` shown in preview and at confirmation prompt. Mutually exclusive with all `--keep-*` flags. |
+| `retire my_case --purge --execute` | Complete erasure. Nothing written to long-term. Prominent `*** WARNING ***` shown in the preview and again under `--execute`. Mutually exclusive with all `--keep-*` flags. |
 
 Avg files (filenames containing `"avg"`) are always moved to long-term unconditionally, except under `--purge`.
 
@@ -407,7 +407,7 @@ Avg files (filenames containing `"avg"`) are always moved to long-term unconditi
 - `clean purge-logs` — delete logs from `archive/<case>/<model>/logs/` and `caseroot/<case>/logs/`
 - `clean move-hist` — move history files to long-term storage
 
-All `clean` subcommands: preview mode by default, `--execute` required to act. Finer-grained than `retire` (which acts on a whole case); all take explicit case names **or** a `--prefix` bulk filter (mutually exclusive; enforced by `_require_cases`). Under `--execute` they print every case's preview, then ask a **single batch `[yes/no]`** covering the whole set (not one prompt per case) — driven by `_run_batch()` over `batch_confirm()`. In preview mode a single `preview_hint()` reminder prints after the last `[preview]` block.
+All `clean` subcommands: preview mode by default, `--execute` required to act. Finer-grained than `retire` (which acts on a whole case); all take explicit case names **or** a `--prefix` bulk filter (mutually exclusive; enforced by `_require_cases`). Under `--execute` they print every case's preview, then act on the whole set without asking again (no `[yes/no]` since 2026-11; `--execute` is the confirmation) — driven by `_run_batch()`, which prints one `announce_batch()` line first. In preview mode a single `preview_hint()` reminder prints after the last `[preview]` block.
 
 `--models` (on `purge-hist`, `purge-logs`, `move-hist`) accepts component names or the literal `all`, which expands to the verb's default component set (`HIST_MODELS` — `rest/` excluded). `purge-hist` additionally requires `--keep-years N` or `--models` (a guard against nuking all history by omission); `--models all` satisfies it.
 
@@ -443,8 +443,7 @@ Extracted from `manage.py` to support both `datamgr.py` and `runmgr.py`.
 - `restart_sets(case, paths)` — list restart sets as `(date_str, path)` tuples, sorted
 
 **Safety helpers:**
-- `confirm(prompt, execute)` — per-case gate: show preview or prompt for yes/no. Still exported; no longer used by `datamgr.py` clean verbs (they use `batch_confirm` instead).
-- `batch_confirm(action, n)` — single `[yes/no]` gate over a whole case set (`"<action> N case(s)? [yes/no]"`); EOF/interrupt → no. The clean-verb counterpart to runmgr's `_batch_confirm`.
+- `announce_batch(action, n)` — prints `"<action> N case(s) (--execute)."` once before an `--execute` acts on a whole case set. Asks nothing: it replaced the `batch_confirm()` `[yes/no]` gate (and the older per-case `confirm()`) in 2026-11; see CLAUDE.md "Run-control gating".
 - `preview_hint(execute)` — print one `(preview only — rerun with --execute …)` reminder; no-op under `--execute`.
 - `_require_cases(all_cases, args)` — resolve cases from explicit `args.cases` **or** an `args.prefix` bulk filter (mutually exclusive; errors if neither given — no `--all` flag for destructive ops). Shared by every `datamgr.py` destructive verb including all `clean` verbs and `retire`.
 
@@ -475,14 +474,14 @@ Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output p
 - Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
 - Example: `--set STOP_N=10 --set RESUBMIT=5`
 - Status gating: RUNNING/RESUBMITTED/QUEUED → hard block (dropped from the set); everything else proceeds with its status label shown. The label is reported, not judged — `BUILT` (normal after `build.py rebuild`), `FAILED`, and `WALLCLOCK` are all ordinary inputs
-- Preview mode by default; `--execute` then asks one batch `[yes/no]` covering the whole set
+- Preview mode by default; `--execute` acts on the whole set (no prompt)
 
 **`restart` subcommand:**
 - Sets `CONTINUE_RUN=FALSE` and sbatches the run script (for rerunning from scratch)
 - Use `--set VAR=VALUE` (repeatable) to apply arbitrary `xmlchange` calls before submitting
 - Example: `--set RUN_STARTDATE=0001-01-01 --set RESUBMIT=9`
 - Status gating: identical to `continue` (see above)
-- Preview mode by default; `--execute` then asks one batch `[yes/no]` covering the whole set
+- Preview mode by default; `--execute` acts on the whole set (no prompt)
 - **branch/hybrid only:** resets `rpointer.*` in the run dir from the reference restart set — see below
 
 **rpointer reset (`_rpointer_reset_plan` / `_reset_rpointers` / `_find_refdir` / `_run_dir`):**
