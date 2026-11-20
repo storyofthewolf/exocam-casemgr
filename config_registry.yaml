@@ -70,10 +70,14 @@ cesm_config:
     xmlchange:
       LND_DOMAIN_PATH: "${EXOCAM}/cesm1.2.1/initial_files/cam_land_fv"
       LND_DOMAIN_FILE: "domain.lnd.fv4x5_landplanet.nc"
+      RTM_MODE:        "NULL"    # river routing off (README)
+      ROF_GRID:        "null"    # no river routing grid
   cam_mixed_fv:
     res:      f45_g37
     compset:  E2000C4
     phys:     cam4
+    xmlchange:
+      RTM_MODE: "NULL"           # river routing off (README)
   cam_aqua_se_ne5:
     res:      ne5np4_ne5np4
     compset:  E2000C4AQI

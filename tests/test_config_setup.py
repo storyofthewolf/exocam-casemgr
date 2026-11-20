@@ -78,6 +78,15 @@ class ConfigXmlchange(unittest.TestCase):
         # before cesm_setup
         self.assertLess(script.index('LND_DOMAIN_FILE'), script.index('./cesm_setup'))
 
+    def test_river_routing_off_for_land_and_mixed(self):
+        land = render('cam_land_fv')
+        self.assertIn('./xmlchange RTM_MODE="NULL"', land)
+        self.assertIn('./xmlchange ROF_GRID="null"', land)
+        mixed = render('cam_mixed_fv')
+        self.assertIn('./xmlchange RTM_MODE="NULL"', mixed)
+        self.assertNotIn('ROF_GRID', mixed)
+        self.assertNotIn('LND_DOMAIN', mixed)
+
     def test_aqua_newcase_sets_no_land_domain(self):
         self.assertNotIn('LND_DOMAIN', render('cam_aqua_fv'))
 
