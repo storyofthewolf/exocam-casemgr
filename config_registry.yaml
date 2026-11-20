@@ -64,6 +64,12 @@ cesm_config:
     res:      f45_f45
     compset:  L2000
     phys:     cam4
+    # xmlchange lines every newcase of this type gets after CAM_CONFIG_OPTS
+    # (configs/<type>/README). ${EXOCAM} is the build script's shell variable.
+    # Quote values: a bare NULL/null/off/on in YAML is not a string.
+    xmlchange:
+      LND_DOMAIN_PATH: "${EXOCAM}/cesm1.2.1/initial_files/cam_land_fv"
+      LND_DOMAIN_FILE: "domain.lnd.fv4x5_landplanet.nc"
   cam_mixed_fv:
     res:      f45_g37
     compset:  E2000C4
@@ -94,7 +100,8 @@ ic_templates:
 
 # IC file table.
 # These are the files present in cesm1.2.1/initial_files/<config_type>/
-# Filename only — prepend {paths.exocam_root}/cesm1.2.1/initial_files/<config_type>/
+# A bare filename is placed under {paths.exocam_root}/cesm1.2.1/initial_files/<config_type>/;
+# '<other_config>/<file>' resolves under initial_files/ (borrowing another config's IC).
 # Add entries as you add IC files to the repo.
 
 ic_files:
@@ -163,9 +170,11 @@ ic_files:
       51: ic_10bar_L51_zmean_dry_ic.nc
 
   cam_mixed_fv:
-    # mixed config uses cam_aqua_fv ICs for atmosphere; add here if different
+    # mixed borrows the cam_aqua_fv atmosphere ICs, which live only in
+    # initial_files/cam_aqua_fv/. An entry with a directory component resolves
+    # under initial_files/ (as ic_templates do), so name the folder.
     "1bar":
-      51: control_L51.cam.i.nc
+      51: cam_aqua_fv/control_L51.cam.i.nc
 
   cam_aqua_se_ne5:
     "1bar":

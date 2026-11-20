@@ -435,6 +435,40 @@ def _verify_ozone_convect_plim(spec):
     return []
 
 
+# Non-condensable gases that absorb in the thermal IR (H2 through CIA). O2 is
+# left out: an N2-O2 atmosphere with nothing else is still radiatively bare.
+ABSORBER_GAS_PARAMS = (
+    'exo_co2bar', 'exo_ch4bar', 'exo_c2h6bar', 'exo_nh3bar', 'exo_cobar',
+    'exo_h2bar',
+)
+
+
+def _verify_no_absorber(spec):
+    """Warn when a newcase has no non-condensable absorbing gas.
+
+    The matrix is the sole arbiter of composition (render_exoplanet_mod zeroes
+    every gas the matrix does not name), so a matrix silent on gases builds an
+    N2 atmosphere with only water vapour for a greenhouse -- not the configs'
+    shipped 400 ppm CO2 / 1.7 ppm CH4. That may be intended; it is also an easy
+    way to get a much colder planet than expected, or to put the radiation
+    into a regime it was never run in. Clones are skipped: they inherit
+    unspecified gases from the source.
+    """
+    if spec.get('clone'):
+        return []
+    for key in ABSORBER_GAS_PARAMS:
+        try:
+            if float(spec.get(key, 0.0)) > 0.0:
+                return []
+        except (TypeError, ValueError):
+            return []  # a bad type is already reported by the type check
+    return ["composition: no CO2, CH4, C2H6, NH3, CO or H2 -- the atmosphere is "
+            "N2 (+ any O2) with only H2O as a greenhouse gas. The config "
+            "templates' 400 ppm CO2 / 1.7 ppm CH4 are not inherited; set "
+            "exo_co2bar/exo_ch4bar in the matrix if you want them. Verify this "
+            "is intended."]
+
+
 def verify_case(spec, registry, paths):
     """Coherency check for a single resolved case spec.
 
@@ -445,8 +479,9 @@ def verify_case(spec, registry, paths):
          live, so a var-free path whose file (or directory) is absent is a hard
          FAILURE. Only paths that still contain an unexpanded $VAR (env var not
          set) are SKIPPED — those genuinely can't be checked.
-      3. Consistency warnings: O2 vs ozone, and ozone vs exo_convect_plim.
-         These are questions, not verdicts — they never fail a case.
+      3. Consistency warnings: O2 vs ozone, ozone vs exo_convect_plim, and a
+         newcase with no absorbing gas at all. These are questions, not
+         verdicts — they never fail a case.
 
     Returns (errors, warnings, notes): all lists of strings. errors are hard
     failures; warnings flag combinations to justify; notes are informational
@@ -495,6 +530,33 @@ def verify_case(spec, registry, paths):
             else:
                 errors.append(f"nc: {field}: file not found: {local}")
 
+    # 2b. Newcase inputs the matrix does not name: the IC from the ic_files
+    # table, and a config's domain file (cesm_config.<type>.xmlchange). The
+    # loop above only sees matrix fields, so a bad table entry -- cam_mixed_fv
+    # looking for its IC in the wrong folder until 2026-11-20 -- passed.
+    if not spec.get('clone'):
+        derived = []
+        if not spec.get('ncdata'):
+            try:
+                ic_file, _ = find_ic_file(spec, registry)
+                derived.append(('ncdata (ic_files table)',
+                                resolve_ic_path(ic_file, config_type, paths)))
+            except (ValueError, KeyError, TypeError):
+                pass  # validate_case reports a missing table entry
+        xml = (registry.get('cesm_config', {}).get(config_type, {})
+               .get('xmlchange') or {})
+        for key, fname in xml.items():
+            if key.endswith('_DOMAIN_FILE') and key[:-4] + 'PATH' in xml:
+                ddir = str(xml[key[:-4] + 'PATH']).replace(
+                    '${EXOCAM}', paths.get('exocam_root', '$EXOCAM'))
+                derived.append((key, f"{ddir}/{fname}"))
+        for label, raw in derived:
+            local, resolvable = _expand_local_path(raw)
+            if not resolvable:
+                notes.append(f"nc: {label}: SKIPPED (unresolved path, runs on HPC): {raw}")
+            elif not os.path.isfile(local):
+                errors.append(f"nc: {label}: file not found: {local}")
+
     # 3. Scientific consistency warnings (never fail the case)
     nl_cam = spec.get('nl_cam_params') or {}
     if (not spec.get('clone')
@@ -506,6 +568,7 @@ def verify_case(spec, registry, paths):
             "will force the zeroVMR no-ozone default for both")
     warnings.extend(_verify_o2_ozone(spec))
     warnings.extend(_verify_ozone_convect_plim(spec))
+    warnings.extend(_verify_no_absorber(spec))
 
     return errors, warnings, notes
 
@@ -607,15 +670,24 @@ def resolve_ic_path(ic_file, config_type, paths):
     """
     Resolve an IC file reference to a full ncdata path.
 
-    A bare filename (from the registry ic_files table) is placed under the
-    config-type IC directory. An explicit ncdata value that is already an
-    absolute path (or contains a directory component) is used verbatim —
-    prepending the base dir would mangle it into a double path.
+    - absolute, or starting with a `$VAR` or `~`: used verbatim.
+    - relative with a directory component (`cam_aqua_fv/control_L51.cam.i.nc`):
+      under `{exocam_root}/cesm1.2.1/initial_files/`, the same convention as
+      `ic_templates`. This is how one config borrows another's IC — cam_mixed_fv
+      uses the aqua atmosphere ICs, which live only in initial_files/cam_aqua_fv/.
+    - a bare filename: under `initial_files/<config_type>/`.
+
+    Before 2026-11-20 any path with a '/' was used verbatim, so a relative
+    `<config>/<file>` entry reached the namelist as a relative path; and the
+    cam_mixed_fv table entry, a bare filename, was looked for in
+    initial_files/cam_mixed_fv/, where it does not exist.
     """
-    if ic_file.startswith('/') or '/' in ic_file:
+    if ic_file.startswith(('/', '$', '~')):
         return ic_file
-    return (f"{paths.get('exocam_root', '$EXOCAM')}/cesm1.2.1/initial_files"
-            f"/{config_type}/{ic_file}")
+    base = f"{paths.get('exocam_root', '$EXOCAM')}/cesm1.2.1/initial_files"
+    if '/' in ic_file:
+        return f"{base}/{ic_file}"
+    return f"{base}/{config_type}/{ic_file}"
 
 
 def find_ic_file(spec, registry):
@@ -882,8 +954,8 @@ def render_exoplanet_mod(template_path, spec, is_clone=False):
 def _unmatched_exo_params(template_path, spec):
     """EXO_PARAMS the matrix names that have no active `parameter ::` line in
     the template. render_exoplanet_mod substitutes by line match, so such a
-    key would silently do nothing -- e.g. do_am_fixes, which only the
-    cam_aqua_fv template declares (ExoCAM PR #14). The caller warns rather than
+    key would silently do nothing -- e.g. do_am_fixes (ExoCAM PR #14), which
+    the FV templates declare but cam_aqua_se does not. The caller warns rather than
     fails: no stock template declares do_exo_rt_carma/do_exo_simplevolc, and
     matrices that set them false against one are harmless and must keep working.
     """
@@ -1911,6 +1983,28 @@ def _build_branch_post_setup(spec, paths):
     ]
 
 
+def _build_config_xml_block(cfg, config_type):
+    """xmlchange lines a config type needs on every newcase, from
+    `cesm_config.<type>.xmlchange` in config_registry.yaml.
+
+    These are the settings each ExoCAM config README lists after
+    create_newcase -- for cam_land_fv the landplanet land domain
+    (LND_DOMAIN_PATH/LND_DOMAIN_FILE). Without it a land case keeps the stock
+    Earth land map (1466 land cells) while the landplanet restart covers all
+    3312, and the run dies at startup (found 2026-11-20). Values may use the
+    script's shell variables (${EXOCAM}, ${EXORT}); they are double-quoted so
+    the shell expands them before xmlchange sees them. Newcase only: a clone
+    inherits the source case's XML.
+    """
+    items = cfg.get('xmlchange') or {}
+    if not items:
+        return []
+    lines = [f"# {config_type} settings (config_registry.yaml cesm_config.{config_type}.xmlchange)"]
+    for key, val in items.items():
+        lines.append(f'./xmlchange {key}="{val}"')
+    return lines
+
+
 def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_mod_content):
     """Write <outdir>/<case_name>_build.sh. Return the script path."""
     paths = dict(registry.get('paths', {}))
@@ -2051,6 +2145,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
          f"\"-nlev {nlev} -phys {phys}"
          + (f" {cloud_opts}" if cloud_opts else "")
          + f" -usr_src ${{EXORT}}/3dmodels/src.cam.{exort_pkg}\""),
+        *_build_config_xml_block(cfg, config_type),
         "",
         *_build_branch_pre_setup(spec),
         "# -----------------------------------------------------------",
