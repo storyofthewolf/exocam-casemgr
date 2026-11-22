@@ -886,6 +886,36 @@ GAS_BAR_PARAMS = (
 )
 
 
+_GENERATED_TEMPLATES = {}
+
+
+def _config_exoplanet_template(configs_dir, config):
+    """Path of the exoplanet_mod.F90 a newcase of `config` starts from.
+
+    ExoCAM 2.0 layout: a config with a user_nl_exo file has no exoplanet_mod.F90
+    of its own; ExoCAM's cesm1.2.1/exoplanet/gen_exoplanet_mod.py builds it from
+    the shared template plus that file. Run it once per config and hand back
+    the result, so render_exoplanet_mod applies the matrix on top exactly as it
+    does to a 1.x config's file. Any other config: its own file, as before.
+    """
+    legacy = os.path.join(configs_dir, config, 'SourceMods', 'src.share', 'exoplanet_mod.F90')
+    gen = os.path.join(os.path.dirname(configs_dir), 'exoplanet', 'gen_exoplanet_mod.py')
+    if not (os.path.isfile(os.path.join(configs_dir, config, 'user_nl_exo'))
+            and os.path.isfile(gen)):
+        return legacy
+    key = (gen, config)
+    if key not in _GENERATED_TEMPLATES:
+        import tempfile
+        fd, out = tempfile.mkstemp(prefix=f'exoplanet_mod.{config}.', suffix='.F90')
+        os.close(fd)
+        r = subprocess.run([sys.executable, gen, config, '--out', out],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f"ERROR: {gen} {config} failed:\n{r.stderr.strip()}")
+        _GENERATED_TEMPLATES[key] = out
+    return _GENERATED_TEMPLATES[key]
+
+
 def render_exoplanet_mod(template_path, spec, is_clone=False):
     """
     Read exoplanet_mod.F90 template, substitute values from spec.
@@ -2546,10 +2576,7 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
                 caseroot, clone_of, 'SourceMods', 'src.share', 'exoplanet_mod.F90'
             ) if caseroot and clone_of else None
         elif template_base and src_config:
-            template_path = os.path.join(
-                template_base, src_config,
-                'SourceMods', 'src.share', 'exoplanet_mod.F90'
-            )
+            template_path = _config_exoplanet_template(template_base, src_config)
         else:
             template_path = None
 

@@ -116,5 +116,42 @@ class StockFileInSharedTree(unittest.TestCase):
         self.assertIn('stock file missing', errs[0])
 
 
+class GeneratedTemplate(unittest.TestCase):
+    """ExoCAM 2.0 Phase 2a: a config with user_nl_exo has no exoplanet_mod.F90
+    of its own; casemgr renders on top of what gen_exoplanet_mod.py builds."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.configs = os.path.join(self.tmp, 'cesm1.2.1', 'configs')
+        gen = os.path.join(self.tmp, 'cesm1.2.1', 'exoplanet', 'gen_exoplanet_mod.py')
+        # A stand-in generator: writes the config name, so the test sees which ran.
+        write(gen, "import sys\n"
+                   "a = sys.argv[1:]\n"
+                   "open(a[a.index('--out') + 1], 'w').write('! generated for ' + a[0] + '\\n')\n")
+        write(os.path.join(self.configs, 'cam_aqua_fv', 'user_nl_exo'), '! nothing\n')
+        write(os.path.join(self.configs, 'cam_aqua_se', 'SourceMods', 'src.share',
+                           'exoplanet_mod.F90'), STOCK)
+        build._GENERATED_TEMPLATES.clear()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+        build._GENERATED_TEMPLATES.clear()
+
+    def test_config_with_user_nl_exo_is_generated(self):
+        path = build._config_exoplanet_template(self.configs, 'cam_aqua_fv')
+        with open(path) as f:
+            self.assertEqual(f.read(), '! generated for cam_aqua_fv\n')
+
+    def test_generated_once_per_config(self):
+        a = build._config_exoplanet_template(self.configs, 'cam_aqua_fv')
+        b = build._config_exoplanet_template(self.configs, 'cam_aqua_fv')
+        self.assertEqual(a, b)
+
+    def test_config_without_user_nl_exo_uses_its_own_file(self):
+        self.assertEqual(build._config_exoplanet_template(self.configs, 'cam_aqua_se'),
+                         os.path.join(self.configs, 'cam_aqua_se', 'SourceMods',
+                                      'src.share', 'exoplanet_mod.F90'))
+
+
 if __name__ == '__main__':
     unittest.main()
