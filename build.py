@@ -1798,7 +1798,7 @@ def _overlay_stale_errors(plan, sourcemods_dir):
         return [], False
     errors = []
     for f in plan['files']:
-        path = os.path.join(sourcemods_dir, f['rel'])
+        path = _stock_file_path(sourcemods_dir, f['rel'])
         if f['stock_md5'] is None:
             if os.path.exists(path):
                 errors.append(f"overlay {f['rel']}: {OVERLAY_BASE_FILE} says it is new "
@@ -1809,6 +1809,29 @@ def _overlay_stale_errors(plan, sourcemods_dir):
             errors.append(f"overlay {f['rel']}: stale base — {path} has md5 "
                           f"{_md5_file(path)}, the overlay was cut from {f['stock_md5']}")
     return errors, True
+
+
+def _stock_file_path(sourcemods_dir, rel):
+    """Where a case's stock copy of SourceMods/<rel> comes from.
+
+    ExoCAM 2.0 layout: a config directory holding a COMPONENTS file keeps only
+    its own files under SourceMods/; the rest come from the shared tree
+    <exocam_root>/cesm1.2.1/SourceMods/, for the components COMPONENTS lists
+    (install_sourcemods.sh). Any other directory (a 1.x config, a clone
+    source) is the whole SourceMods, so the plain join is returned."""
+    own = os.path.join(sourcemods_dir, rel)
+    cfgdir = os.path.dirname(os.path.normpath(sourcemods_dir))
+    complist = os.path.join(cfgdir, 'COMPONENTS')
+    if os.path.exists(own) or not os.path.isfile(complist):
+        return own
+    with open(complist) as fh:
+        comps = {w for line in fh if not line.lstrip().startswith('#')
+                 for w in line.split()}
+    comp = rel.split('/', 1)[0]
+    if not comp.startswith('src.') or comp[len('src.'):] not in comps:
+        return own
+    shared = os.path.join(os.path.dirname(os.path.dirname(cfgdir)), 'SourceMods', rel)
+    return shared if os.path.exists(shared) else own
 
 
 def _stock_sourcemods_dir(spec, registry, paths_override):
@@ -2099,7 +2122,13 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# STEP 2: copy ExoCAM SourceMods and namelists",
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
-        "cp -r ${EXOCAM}/cesm1.2.1/configs/${CONFIG_TYPE}/SourceMods .",
+        # ExoCAM 2.0 layout: a config with a COMPONENTS file is assembled from
+        # the shared tree plus its own files; any other config is copied whole.
+        "if [ -f ${EXOCAM}/cesm1.2.1/configs/${CONFIG_TYPE}/COMPONENTS ]; then",
+        "  sh ${EXOCAM}/cesm1.2.1/install_sourcemods.sh ${CONFIG_TYPE} ${CASEROOT}/${CASE}/SourceMods",
+        "else",
+        "  cp -r ${EXOCAM}/cesm1.2.1/configs/${CONFIG_TYPE}/SourceMods .",
+        "fi",
         "cp    ${EXOCAM}/cesm1.2.1/configs/${CONFIG_TYPE}/namelist_files/* .",
         "",
         "# -----------------------------------------------------------",

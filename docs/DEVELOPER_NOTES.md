@@ -516,5 +516,8 @@ Subcommands: `check`, `xml`, `submit`, `continue`, `restart`. (Surgical output p
 
 ExoCAM reference paths:
 - SourceMods: `{exocam_root}/cesm1.2.1/configs/{config_type}/SourceMods/`
+  (ExoCAM 2.0 layout: when `configs/{config_type}/COMPONENTS` exists, the build script runs
+  `{exocam_root}/cesm1.2.1/install_sourcemods.sh`, which adds the shared `cesm1.2.1/SourceMods/`
+  tree; the overlay stale-base check resolves stock files the same way, `_stock_file_path`)
 - Namelists: `{exocam_root}/cesm1.2.1/configs/{config_type}/namelist_files/`
 - ExoRT package: `{exort_root}/3dmodels/src.cam.{exort_pkg}/` (`*` suffix stripped before path construction)
