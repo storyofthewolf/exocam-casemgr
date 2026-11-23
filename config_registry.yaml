@@ -33,7 +33,7 @@ paths:
   # builds its sbx_ cases in <sandbox>/<record>/{cases,rundir,archive}, one tree
   # per dev record (the hub's dev/<id>), with build_scripts/ beside them. Older
   # sbx_ cases stay in the production directories; every verb finds both.
-  sandbox:      /gpfsm/dnb33/etwolf/cesm_scratch/sandbox
+  sandbox:      /discover/nobackup/etwolf/sandbox
   # Generated inputs (build.py prep): products of Chain A (star -> solar file ->
   # cice albedos) and Chain B (ic_template -> ncdata) live here, never inside
   # the ExoCAM/ExoRT checkouts. Subdirs solar/, albedo/, ic/<config_type>/.
