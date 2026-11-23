@@ -18,6 +18,13 @@ config_registry: /path/to/ExoCAM/tools/case_mgmt/config_registry.yaml
 #   caseroot: /my/scratch/cases
 #   cesm_scripts: /my/cesm/scripts
 
+# Optional: build every case in a sandbox tree, one per dev record:
+# <paths.sandbox>/<record>/{cases,rundir,archive}, scripts in
+# <record>/build_scripts/. Every case must be named sbx_<record>_<tag>, and
+# paths.caseroot/rundir/archive may not also be set. See CLAUDE.md
+# "Sandbox trees".
+# sandbox: my-dev-record
+
 base:
 
   # -----------------------------------------------------------------------

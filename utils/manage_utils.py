@@ -43,18 +43,69 @@ PRIMARY_HIST_STREAM = {
 # that was just submitted); without it `submit` could sbatch such a case twice.
 ACTIVE_STATUSES = ('RUNNING', 'RESUBMITTED', 'QUEUED')
 
-# Sandbox trial cases (debug, feature, sweep) are marked by name, not by
-# directory: they live in the production caseroot/rundir/archive. The marker
+# Sandbox trial cases (debug, feature, sweep) are marked by name: the marker
 # comes FIRST so no production --prefix can ever match a trial (a suffix such
 # as <parent>__dbg01 would match --prefix <parent>). Consumers: build.py
 # (source overlays and non-production model roots require it), scan.py (never
 # registers one), datamgr.py (never moves one to long-term storage).
+#
+# Where they live: a matrix naming `sandbox: <record>` builds its cases in
+# <paths.sandbox>/<record>/{cases,rundir,archive} (the sandbox tree, one per
+# dev record). Older sbx_ cases stay in the production directories. Every
+# verb finds a case by name in either place (case_paths).
 SANDBOX_PREFIX = 'sbx_'
+
+#: The sandbox tree mirrors the three production roots, one directory each.
+SANDBOX_LAYOUT = (('caseroot', 'cases'), ('rundir', 'rundir'), ('archive', 'archive'))
+
+#: A sandbox record name: one path component, no dots at the start.
+_RECORD_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 
 
 def is_sandbox_case(name):
     """True if a case name (or a path ending in one) marks a sandbox trial."""
     return os.path.basename(str(name).rstrip('/')).startswith(SANDBOX_PREFIX)
+
+
+def valid_record(record):
+    return isinstance(record, str) and bool(_RECORD_RE.match(record))
+
+
+def record_paths(paths, record):
+    """`paths` with caseroot/rundir/archive moved into the sandbox tree of
+    `record` (<paths.sandbox>/<record>/...). Everything else is unchanged."""
+    base = os.path.join(paths.get('sandbox', ''), record)
+    out = dict(paths)
+    for key, sub in SANDBOX_LAYOUT:
+        out[key] = os.path.join(base, sub)
+    out['sandbox_record'] = record
+    return out
+
+
+def sandbox_record_of(paths, case):
+    """The record whose sandbox tree holds `case`, or None. Only sbx_ names
+    are looked for, so a production case never costs a directory scan."""
+    root = (paths or {}).get('sandbox', '')
+    if not root or not is_sandbox_case(case) or not os.path.isdir(root):
+        return None
+    for record in sorted(os.listdir(root)):
+        for _, sub in SANDBOX_LAYOUT:
+            if os.path.isdir(os.path.join(root, record, sub, case)):
+                return record
+    return None
+
+
+def case_paths(paths, case):
+    """The paths a verb uses for `case`: its sandbox record's tree when the
+    case lives in one, otherwise `paths` unchanged."""
+    record = sandbox_record_of(paths, case)
+    return record_paths(paths, record) if record else paths
+
+
+def case_root(paths, key, case):
+    """`case_paths(paths, case)[key]`, or '' when not configured."""
+    return case_paths(paths, case).get(key, '') or ''
+
 
 # ---------------------------------------------------------------------------
 # Exit codes — one convention for every verb in build.py / runmgr.py / datamgr.py
@@ -225,6 +276,15 @@ def discover_cases(paths):
             for name in os.listdir(d):
                 if os.path.isdir(os.path.join(d, name)):
                     names.add(name)
+    # Sandbox trees: <paths.sandbox>/<record>/{cases,rundir,archive}/<case>.
+    root = paths.get('sandbox', '')
+    if root and os.path.isdir(root):
+        for record in os.listdir(root):
+            for _, sub in SANDBOX_LAYOUT:
+                d = os.path.join(root, record, sub)
+                if os.path.isdir(d):
+                    names.update(n for n in os.listdir(d)
+                                 if is_sandbox_case(n) and os.path.isdir(os.path.join(d, n)))
     return sorted(names)
 
 
@@ -350,7 +410,7 @@ def restart_sets(case, paths):
     Return sorted list of (date_str, path) for restart sets in
     archive/<case>/rest/, oldest first.
     """
-    archive = paths.get('archive', '')
+    archive = case_root(paths, 'archive', case)
     rest_dir = os.path.join(archive, case, 'rest')
     if not os.path.isdir(rest_dir):
         return []

@@ -70,6 +70,7 @@ from utils.manage_utils import (
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, _hist_keep_years_filter, hist_info_line, restart_sets,
     preview_hint, announce_batch, _require_cases,
+    case_root,
     Outcome, EXIT_OK,
 )
 
@@ -110,10 +111,10 @@ def case_sizes(case, paths):
     rundir   = paths.get('rundir', '')
     archive  = paths.get('archive', '')
 
-    casedir_path = os.path.join(caseroot, case) if caseroot else ''
-    bld_path     = os.path.join(rundir, case, 'bld') if rundir else ''
-    run_path     = os.path.join(rundir, case, 'run') if rundir else ''
-    archive_path = os.path.join(archive, case) if archive else ''
+    casedir_path = os.path.join(case_root(paths, 'caseroot', case), case) if caseroot else ''
+    bld_path     = os.path.join(case_root(paths, 'rundir', case), case, 'bld') if rundir else ''
+    run_path     = os.path.join(case_root(paths, 'rundir', case), case, 'run') if rundir else ''
+    archive_path = os.path.join(case_root(paths, 'archive', case), case) if archive else ''
 
     hist_bytes = 0
     logs_bytes = 0
@@ -204,7 +205,7 @@ def _probe_case_status(case, paths):
     if not caseroot:
         return None
     from runmgr import _probe_status
-    return _probe_status(os.path.join(caseroot, case), case)
+    return _probe_status(os.path.join(case_root(paths, 'caseroot', case), case), case)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +235,7 @@ def cmd_purge_bld(args, paths):
     outcome = Outcome()
     actions = []
     for case in cases:
-        bld = os.path.join(rundir, case, 'bld')
+        bld = os.path.join(case_root(paths, 'rundir', case), case, 'bld')
         if not os.path.exists(bld):
             print(f"  {case}: bld/ not found, skipping")
             outcome.skip()
@@ -375,7 +376,7 @@ def cmd_purge_hist(args, paths):
     outcome = Outcome()
     actions = []
     for case in cases:
-        archive_path = os.path.join(archive, case)
+        archive_path = os.path.join(case_root(paths, 'archive', case), case)
 
         if args.keep_years is not None:
             keep_years, per_model = _hist_keep_years_filter(
@@ -471,7 +472,7 @@ def cmd_purge_logs(args, paths):
 
         if not args.no_archive_logs and archive:
             for model in models:
-                logs_dir = os.path.join(archive, case, model, 'logs')
+                logs_dir = os.path.join(case_root(paths, 'archive', case), case, model, 'logs')
                 files, size = list_files_with_size(logs_dir)
                 if not files:
                     continue
@@ -479,7 +480,7 @@ def cmd_purge_logs(args, paths):
                 case_total += size
 
         if not args.no_case_logs and caseroot:
-            case_logs = os.path.join(caseroot, case, 'logs')
+            case_logs = os.path.join(case_root(paths, 'caseroot', case), case, 'logs')
             if os.path.isdir(case_logs):
                 all_files = []
                 for dirpath, _, filenames in os.walk(case_logs):
@@ -558,7 +559,7 @@ def cmd_move_hist(args, paths):
 
         case_moves = []  # (src, dst, files)
         for model in models:
-            src = os.path.join(archive, case, model, 'hist')
+            src = os.path.join(case_root(paths, 'archive', case), case, model, 'hist')
             files, total = list_files_with_size(src)
             if not files:
                 continue
@@ -703,7 +704,7 @@ def cmd_report(args, paths):
     # Named-case or --prefix filtered invocation: diagnostic print only, no yaml write.
     if not requested and not prefix_filter:
         caseroot = paths.get('caseroot', '')
-        no_caseroot = sum(1 for c in cases if not os.path.isdir(os.path.join(caseroot, c)))
+        no_caseroot = sum(1 for c in cases if not os.path.isdir(os.path.join(case_root(paths, 'caseroot', c), c)))
         if no_caseroot:
             print(f"Note: {no_caseroot} of {len(cases)} cases have no caseroot directory (archive/rundir only).")
         save_usage_yaml(usage_path, cases_data, now_ts)
@@ -1028,9 +1029,9 @@ def cmd_retire_case(args, paths):
             outcome.skip()
             continue
 
-        casedir_path = os.path.join(caseroot, case) if caseroot else ''
-        rundir_path  = os.path.join(rundir,   case) if rundir   else ''
-        archive_path = os.path.join(archive,  case) if archive  else ''
+        casedir_path = os.path.join(case_root(paths, 'caseroot', case), case) if caseroot else ''
+        rundir_path  = os.path.join(case_root(paths, 'rundir', case), case) if rundir   else ''
+        archive_path = os.path.join(case_root(paths, 'archive', case), case) if archive  else ''
         lt_case_dir  = os.path.join(long_term, case)
 
         # Duplicate guard: long_term/<case> already exists — a prior
@@ -1109,7 +1110,7 @@ def cmd_retire_case(args, paths):
                 preserve_restart.append(
                     (rest_path, os.path.join(lt_case_dir, 'rest', date_str)))
             else:
-                rest_dir = os.path.join(paths.get('archive', ''), case, 'rest')
+                rest_dir = os.path.join(case_root(paths, 'archive', case), case, 'rest')
                 print(f"  WARNING: --keep-restarts specified but no restart sets found in {rest_dir}")
 
         # avg file preservation (skipped under --purge; otherwise unconditional)
@@ -1347,7 +1348,7 @@ def cmd_avg_hist(args, paths):
         for case in cases:
             print(f"\n{case}")
             for model in models:
-                hist_dir = os.path.join(archive, case, model, 'hist')
+                hist_dir = os.path.join(case_root(paths, 'archive', case), case, model, 'hist')
                 files, total = list_files_with_size(hist_dir)
                 print(hist_info_line(model, hist_dir, files, total))
             sets = restart_sets(case, paths)
@@ -1364,7 +1365,7 @@ def cmd_avg_hist(args, paths):
     outcome = Outcome()
     actions = []
     for case in cases:
-        archive_path = os.path.join(archive, case)
+        archive_path = os.path.join(case_root(paths, 'archive', case), case)
         print(f"\n{case}")
 
         case_cmds = []  # (model, cmd, outpath, n_inputs)

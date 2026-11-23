@@ -57,7 +57,8 @@ import utils.inputs_utils as inputs_utils
 from utils.manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, announce_batch, preview_hint,
                           ACTIVE_STATUSES, DEFAULT_CONFIG, SANDBOX_PREFIX,
-                          is_sandbox_case,
+                          is_sandbox_case, valid_record, record_paths,
+                          case_root,
                           Outcome, EXIT_OK, EXIT_FAILED)
 
 # Parameters that map directly to exoplanet_mod.F90 Fortran parameter names
@@ -1025,6 +1026,10 @@ def _unmatched_exo_params(template_path, spec):
 
 EXO_MOD_RELPATH = os.path.join('SourceMods', 'src.share', 'exoplanet_mod.F90')
 
+#: --scripts-dir when not given. A sandbox matrix (generate) moves the
+#: default into its record's tree; an explicit value wins.
+DEFAULT_SCRIPTS_DIR = 'build_scripts'
+
 
 def patch_exoplanet_mod(exo_path, updates):
     """Rewrite `parameter ::` lines in an existing exoplanet_mod.F90 in place.
@@ -1161,6 +1166,37 @@ def rebuild_case(case_dir, case_name):
 # ---------------------------------------------------------------------------
 # Generated inputs (build.py prep) -- see inputs_utils.py
 # ---------------------------------------------------------------------------
+
+def _clone_source_root(spec, registry, paths_override):
+    """The caseroot that holds the clone source. A sandbox matrix builds its
+    own cases in its record's tree, but clones from wherever the source
+    lives: production, or another record's tree for a sandbox source
+    (manage_utils.case_root). A plain matrix's caseroot override still
+    applies, as before."""
+    base = dict(registry.get('paths', {}) or {})
+    override = paths_override or {}
+    if override.get('caseroot') and not spec.get('_sandbox_record'):
+        base['caseroot'] = override['caseroot']
+    return case_root(base, 'caseroot', spec.get('clone', ''))
+
+
+def _sandbox_dirs_block(spec):
+    """For a case built in a sandbox tree: put its run, build and archive
+    directories there too. CESM's machine defaults would otherwise place them
+    under the production scratch root (RUNDIR/EXEROOT) and archive
+    (DOUT_S_ROOT), so moving the case directory alone isolates nothing. Set
+    right after the case directory exists, before cesm_setup."""
+    if not spec.get('_sandbox_record'):
+        return []
+    return [
+        "",
+        f"# Sandbox case (record {spec['_sandbox_record']}): run, build and archive",
+        "# stay inside the sandbox tree, beside the case directory.",
+        "./xmlchange RUNDIR=${RUNDIR}/${CASE}/run",
+        "./xmlchange EXEROOT=${RUNDIR}/${CASE}/bld",
+        "./xmlchange DOUT_S_ROOT=${ARCHIVE}/${CASE}",
+    ]
+
 
 def _effective_paths(registry, paths_override):
     """registry.paths with every matrix-level override applied."""
@@ -1895,7 +1931,7 @@ def _stock_sourcemods_dir(spec, registry, paths_override):
     source's for a clone, the ExoCAM config's for a newcase."""
     paths = _effective_paths(registry, paths_override)
     if spec.get('clone'):
-        caseroot = paths.get('caseroot', '')
+        caseroot = _clone_source_root(spec, registry, paths_override)
         return os.path.join(caseroot, spec['clone'], 'SourceMods') if caseroot else None
     exocam_root = paths.get('exocam_root', '')
     config = str(spec.get('config_type', '')).replace('_ne5', '').replace('_ne16', '')
@@ -2005,6 +2041,8 @@ def _branch_var_block(spec):
     emit the wrong root. The two roots are tried in order, active first, since
     a case that lives in both is mid-retirement and the active copy is current.
     """
+    if spec.get('_sandbox_record'):
+        return _sandbox_branch_var_block(spec)
     return [
         f"RUN_REFCASE={spec['run_refcase']}",
         f"RUN_REFDATE={spec['run_refdate']}",
@@ -2020,6 +2058,33 @@ def _branch_var_block(spec):
         'RUN_REFDATE=${RUN_REFDATE}"',
         '  echo "  looked in: ${ARCHIVE}/${REST_SUBDIR}"',
         '  echo "             ${LONG_TERM}/${REST_SUBDIR}"',
+        "  exit 1",
+        "fi",
+    ]
+
+
+def _sandbox_branch_var_block(spec):
+    """RUN_REFDIR for a case in a sandbox tree. Its own ARCHIVE is the
+    record's, so the reference is looked for there (a reference in the same
+    record), then in the production archive, then in any sandbox record,
+    then in long-term storage -- resolved at build time, like the plain
+    block, because generate may run where none of these is mounted."""
+    return [
+        f"RUN_REFCASE={spec['run_refcase']}",
+        f"RUN_REFDATE={spec['run_refdate']}",
+        "REST_SUBDIR=${RUN_REFCASE}/rest/${RUN_REFDATE}-00000",
+        f"PROD_ARCHIVE={spec.get('_prod_archive') or 'EDIT_ME'}",
+        f"SANDBOX={spec.get('_sandbox_root') or 'EDIT_ME'}",
+        "# Locate the reference restart set: this record's archive, production,",
+        "# any sandbox record, else long-term storage.",
+        "RUN_REFDIR=",
+        'for d in "${ARCHIVE}" "${PROD_ARCHIVE}" ${SANDBOX}/*/archive "${LONG_TERM}"; do',
+        '  if [ -d "${d}/${REST_SUBDIR}" ]; then RUN_REFDIR=${d}/${REST_SUBDIR}; break; fi',
+        "done",
+        'if [ -z "${RUN_REFDIR}" ]; then',
+        '  echo "ERROR: no restart set for RUN_REFCASE=${RUN_REFCASE} '
+        'RUN_REFDATE=${RUN_REFDATE}"',
+        '  echo "  looked in: ${ARCHIVE}, ${PROD_ARCHIVE}, ${SANDBOX}/*/archive, ${LONG_TERM}"',
         "  exit 1",
         "fi",
     ]
@@ -2088,7 +2153,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     """Write <outdir>/<case_name>_build.sh. Return the script path."""
     paths = dict(registry.get('paths', {}))
     # per-matrix path overrides (passed in via spec)
-    for k in ['cesm_scripts', 'caseroot', 'exocam_root', 'exort_root']:
+    for k in ['cesm_scripts', 'caseroot', 'rundir', 'archive', 'exocam_root', 'exort_root']:
         if k in spec.get('_paths_override', {}):
             paths[k] = spec['_paths_override'][k]
 
@@ -2178,6 +2243,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# STEP 2: copy ExoCAM SourceMods and namelists",
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
+        *_sandbox_dirs_block(spec),
         # ExoCAM 2.0 layout: a config with a COMPONENTS file is assembled from
         # the shared tree plus its own files; any other config is copied whole.
         "if [ -f ${EXOCAM}/cesm1.2.1/configs/${CONFIG_TYPE}/COMPONENTS ]; then",
@@ -2256,11 +2322,15 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     create_clone + cd into the new case (SourceMods and namelists are inherited).
     """
     paths = dict(registry.get('paths', {}))
-    for k in ['cesm_scripts', 'caseroot', 'exocam_root', 'exort_root']:
+    for k in ['cesm_scripts', 'caseroot', 'rundir', 'archive', 'exocam_root', 'exort_root']:
         if k in spec.get('_paths_override', {}):
             paths[k] = spec['_paths_override'][k]
 
     clone_of    = spec['clone']
+    clone_root  = _clone_source_root(spec, registry, spec.get('_paths_override'))
+    # Only a clone whose source lives elsewhere (a sandbox case cloned from
+    # production) names a second root; every other script is unchanged.
+    split_root  = bool(clone_root) and clone_root != paths.get('caseroot', '')
     config_type = spec.get('config_type', '')
     exort_pkg   = spec.get('exort_pkg', '')
     nlev        = spec.get('nlev', '?')
@@ -2298,6 +2368,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"RUNDIR={paths.get('rundir', 'EDIT_ME')}",
         f"ARCHIVE={paths.get('archive', 'EDIT_ME')}",
         f"LONG_TERM={paths.get('long_term', 'EDIT_ME')}",
+        *([f"CLONE_ROOT={clone_root}"] if split_root else []),
         *(_branch_var_block(spec) if spec.get('run_type') in ('branch', 'hybrid') else []),
         "",
         *_build_required_inputs_block(spec, case_name),
@@ -2305,12 +2376,15 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# STEP 1: create clone",
         "# -----------------------------------------------------------",
         "cd ${CESM_SCRIPTS}",
-        "./create_clone -clone ${CASEROOT}/${CLONE_OF} -case ${CASEROOT}/${CASE}",
+        ("./create_clone -clone ${CLONE_ROOT}/${CLONE_OF} -case ${CASEROOT}/${CASE}"
+         if split_root else
+         "./create_clone -clone ${CASEROOT}/${CLONE_OF} -case ${CASEROOT}/${CASE}"),
         "",
         "# -----------------------------------------------------------",
         "# STEP 2: install modified exoplanet_mod.F90 and update paths",
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
+        *_sandbox_dirs_block(spec),
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
         *_heredoc_overlay(spec.get('_overlay')),
         *_provenance_block(case_name, spec, spec.get('_overlay'), spec.get('_matrix_file')),
@@ -2464,6 +2538,27 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
     # matrix-level path overrides
     paths_override = matrix.get('paths', {}) or {}
 
+    # A sandbox matrix (`sandbox: <record>`, owner decision 2026-11-22) builds
+    # every case in <paths.sandbox>/<record>/{cases,rundir,archive}, one tree
+    # per dev record (manage_utils.record_paths). Its cases still clone from
+    # wherever their source lives (_clone_source_root).
+    record = matrix.get('sandbox')
+    sandbox_root = (registry.get('paths', {}) or {}).get('sandbox')
+    if record is not None:
+        if not valid_record(record):
+            sys.exit(f"sandbox: {record!r} is not a record name "
+                     "(letters, digits, '.', '_' or '-'; no leading dot)")
+        if not sandbox_root:
+            sys.exit("the matrix names `sandbox:` but config_registry.yaml "
+                     "has no paths.sandbox")
+        clash = [k for k in ('caseroot', 'rundir', 'archive') if paths_override.get(k)]
+        if clash:
+            sys.exit("a sandbox matrix places its own cases; drop "
+                     + ", ".join(f"paths.{k}" for k in clash))
+        rp = record_paths(registry['paths'], record)
+        paths_override = dict(paths_override,
+                              **{k: rp[k] for k in ('caseroot', 'rundir', 'archive')})
+
     # Apply registry defaults for run fields not set in the matrix base.
     reg_defaults = registry.get('defaults', {}) or {}
     base = matrix.get('base', {})
@@ -2474,7 +2569,11 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
     cases = matrix.get('cases', [])
 
     scripts_dir = args.scripts_dir
-    os.makedirs(scripts_dir, exist_ok=True)
+    if record is not None and scripts_dir == DEFAULT_SCRIPTS_DIR:
+        # Its scripts and build logs live in the sandbox tree too.
+        scripts_dir = os.path.join(sandbox_root, record, 'build_scripts')
+    if record is None or not verify_only:
+        os.makedirs(scripts_dir, exist_ok=True)
 
     # find exoplanet_mod.F90 template from registry exocam_root
     exocam_root = paths_override.get('exocam_root') or registry.get('paths', {}).get('exocam_root', '')
@@ -2496,6 +2595,23 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
         spec['_paths_override'] = paths_override
         spec['_matrix_file'] = matrix_file
         spec['_matrix_dir'] = os.path.dirname(os.path.abspath(matrix_file))
+        spec['_sandbox_record'] = record
+        spec['_sandbox_root'] = sandbox_root
+        spec['_prod_archive'] = (registry.get('paths', {}) or {}).get('archive')
+
+        # Each side keeps its own: a sandbox tree holds only sbx_ cases.
+        if record is not None and not is_sandbox_case(case_name):
+            print(f"\nERROR: {case_name}\n  - a sandbox matrix (sandbox: {record}) "
+                  f"builds only {SANDBOX_PREFIX}<record>_<tag> cases")
+            if verify_only:
+                verify_failed += 1
+            else:
+                errors_total += 1
+            continue
+        if record is None and sandbox_root and is_sandbox_case(case_name):
+            print(f"  WARNING: {case_name}: a {SANDBOX_PREFIX} case in a matrix with no "
+                  f"`sandbox:` record builds in the production directories; name the "
+                  f"record (sandbox: <id>) to build it in {sandbox_root}/<id>/")
 
         # Source overlay (sandbox trials): read, render overlay_set, and check
         # the stock base wherever the starting SourceMods are readable.
@@ -2522,7 +2638,7 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
 
         if verify_only:
             paths = dict(registry.get('paths', {}))
-            for k in ['cesm_scripts', 'caseroot', 'exocam_root', 'exort_root']:
+            for k in ['cesm_scripts', 'caseroot', 'rundir', 'archive', 'exocam_root', 'exort_root']:
                 if k in paths_override:
                     paths[k] = paths_override[k]
             # Type + nc-file checks run first: they degrade gracefully on bad
@@ -2596,7 +2712,7 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
         if is_clone:
             # use the source case's exoplanet_mod.F90 as the template so any
             # custom parameter baselines in the clone source are preserved
-            caseroot  = paths_override.get('caseroot') or registry.get('paths', {}).get('caseroot', '')
+            caseroot  = _clone_source_root(spec, registry, paths_override)
             clone_of  = spec.get('clone', '')
             template_path = os.path.join(
                 caseroot, clone_of, 'SourceMods', 'src.share', 'exoplanet_mod.F90'
@@ -3014,7 +3130,7 @@ def cmd_patch(args):
     outcome = Outcome()
     actions, flagged = [], []
     for case in cases:
-        case_dir = os.path.join(caseroot, case)
+        case_dir = os.path.join(case_root(paths, 'caseroot', case), case)
         exo_path = os.path.join(case_dir, EXO_MOD_RELPATH)
         if not os.path.exists(exo_path):
             print(f"  {case}: ERROR: not found: {EXO_MOD_RELPATH}")
@@ -3159,7 +3275,7 @@ def cmd_rebuild(args):
     actionable = []  # (case, case_dir)
     flagged = []
     for case in cases:
-        case_dir = os.path.join(caseroot, case)
+        case_dir = os.path.join(case_root(paths, 'caseroot', case), case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             outcome.fail()
@@ -3220,7 +3336,7 @@ def cmd_rebuild(args):
 
 def main():
     parser = argparse.ArgumentParser(allow_abbrev=False, description='ExoCAM build script generator and runner')
-    parser.add_argument('--scripts-dir', default='build_scripts',
+    parser.add_argument('--scripts-dir', default=DEFAULT_SCRIPTS_DIR,
                         metavar='DIR',
                         help='Directory for generated scripts and logs (default: build_scripts/)')
     # Path overrides live on the top-level parser with an explicit default, the

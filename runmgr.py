@@ -63,6 +63,7 @@ from utils.manage_utils import (
     dir_size_bytes, fmt_size, list_files_with_size, discover_cases,
     _hist_year, hist_info_line, restart_sets, submit_case,
     _require_cases, announce_batch, preview_hint,
+    case_paths, case_root,
     EXIT_FAILED, EXIT_USAGE, EXIT_PARTIAL,
 )
 from utils import fields_check
@@ -171,7 +172,9 @@ def _find_refdir(run_refcase, run_refdate, paths):
     """
     refdate_dir = f'{run_refdate}-00000'
     for base_key in ('archive', 'long_term'):
-        base = paths.get(base_key, '')
+        # The reference case may itself live in a sandbox tree.
+        base = (case_root(paths, 'archive', run_refcase) if base_key == 'archive'
+                else paths.get(base_key, ''))
         if not base:
             continue
         candidate = os.path.join(base, run_refcase, 'rest', refdate_dir)
@@ -242,7 +245,7 @@ def _run_dir(case, paths):
     <caseroot>/<case>/run does not exist. Every rundir consumer here goes
     through this, matching _rundir_info and the --dir 'run' resolver.
     """
-    return os.path.join(paths.get('rundir', ''), case, 'run')
+    return os.path.join(case_root(paths, 'rundir', case), case, 'run')
 
 
 def _reset_rpointers(case, paths, rptr_files):
@@ -464,7 +467,7 @@ def cmd_xml(args, paths):
     outcome = Outcome()
     actionable = []  # case_dirs that have a real dir and pending changes
     for case in cases:
-        case_dir = os.path.join(caseroot, case)
+        case_dir = os.path.join(case_root(paths, 'caseroot', case), case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             outcome.fail()
@@ -556,7 +559,7 @@ def cmd_continue(args, paths):
     outcome = Outcome()
     actionable = []  # (case, case_dir)
     for case in cases:
-        case_dir = os.path.join(caseroot, case)
+        case_dir = os.path.join(case_root(paths, 'caseroot', case), case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             outcome.fail()
@@ -682,7 +685,7 @@ def cmd_restart(args, paths):
     outcome = Outcome()
     actionable = []  # (case, case_dir, rptr_files)
     for case in cases:
-        case_dir = os.path.join(caseroot, case)
+        case_dir = os.path.join(case_root(paths, 'caseroot', case), case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             outcome.fail()
@@ -806,7 +809,7 @@ def cmd_submit(args, paths):
     outcome = Outcome()
     actionable = []  # (case, case_dir)
     for case in cases:
-        case_dir = os.path.join(caseroot, case)
+        case_dir = os.path.join(case_root(paths, 'caseroot', case), case)
         if not os.path.isdir(case_dir):
             print(f"  {case}: ERROR: caseroot directory not found: {case_dir}")
             outcome.fail()
@@ -1421,6 +1424,10 @@ def cmd_check(args, paths):
     # Each entry: (case, status_label, status_ts, info_lines, energy_line)
     results = []
     for case in cases:
+        # A sandbox case lives in its record's tree (manage_utils.case_paths).
+        cpaths = case_paths(paths, case)
+        caseroot = cpaths.get('caseroot', '')
+        archive = cpaths.get('archive', '')
         casestatus_path = os.path.join(caseroot, case, 'CaseStatus') if caseroot else ''
         cs = _parse_casestatus(casestatus_path) if casestatus_path else None
 
@@ -1444,7 +1451,7 @@ def cmd_check(args, paths):
             rest_total = sum(dir_size_bytes(s[1]) for s in sets) if sets else 0
             grand_total += rest_total
             info_lines.append(f"  rest:      {len(sets):>4} folder(s)  ({fmt_size(rest_total)})")
-            rundir = paths.get('rundir', '')
+            rundir = cpaths.get('rundir', '')
             if rundir:
                 run_lines, run_total = _rundir_info(case, rundir)
                 info_lines.extend(run_lines)
