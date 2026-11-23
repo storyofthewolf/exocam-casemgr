@@ -770,6 +770,14 @@ def validate_case(spec, registry):
             "'ncdata:' key, which is resolved against the IC table and written "
             "with a verified upsert."
         )
+    if (spec.get('run_type') == 'hybrid' and spec.get('finidat')
+            and spec.get('config_type') in ('cam_land_fv', 'cam_mixed_fv')):
+        errors.append(
+            "finidat cannot be set for a hybrid run: CLM starts from "
+            f"{spec.get('run_refcase', 'RUN_REFCASE')}'s own clm2.r restart "
+            "(CESM passes it as -clm_startfile, and CLM refuses both). Drop the "
+            "finidat key."
+        )
     for k in ('finidat', 'fsurdat'):
         if k not in nl_cam:
             continue
@@ -1442,6 +1450,24 @@ def _build_clm_update_block(spec, paths, label=None):
     if spec.get('config_type') not in ('cam_land_fv', 'cam_mixed_fv'):
         return []
     lines = []
+    if spec.get('run_type') == 'hybrid':
+        # A hybrid starts CLM from RUN_REFCASE's own restart: CESM passes it as
+        # -clm_startfile, which CLM build-namelist turns into finidat, and it
+        # dies if user_nl_clm sets finidat too ("Can NOT set both
+        # -clm_startfile option AND finidat"). The shipped land/mixed
+        # user_nl_clm carries a finidat line, so drop it (the exovolc_* hybrids
+        # have none). A branch is different: the restart goes to nrevsn and a
+        # finidat line is harmless, so it is left alone.
+        lines += [
+            "",
+            "# Hybrid: CLM starts from RUN_REFCASE's restart (-clm_startfile), so",
+            "# user_nl_clm must not set finidat",
+            'if [ -f user_nl_clm ]; then sed -i -E "/^[[:space:]]*finidat[[:space:]]*=/d" user_nl_clm; fi',
+            "if grep -qE '^[[:space:]]*finidat[[:space:]]*=' user_nl_clm 2>/dev/null; then",
+            f'  echo "ERROR: {label or "case"}: finidat still set in user_nl_clm (hybrid)"',
+            "  exit 1",
+            "fi",
+        ]
     exocam = paths.get('exocam_root', '$EXOCAM')
     land_ic_base = f"{exocam}/cesm1.2.1/initial_files/cam_land_fv"
     for key in ('finidat', 'fsurdat'):
