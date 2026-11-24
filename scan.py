@@ -36,6 +36,7 @@ SOLAR_STEM_MAP = {
     'n84equiv':   'n84',
     'n28archean': 'n28',
     'n42h2o':     'n42',
+    'exort':      'n84',     # ExoRT 2.0 (src.cam.exort)
 }
 
 # Solar filename stem -> inferred exort_pkg (used when exort_pkg absent from env_build.xml,
@@ -54,6 +55,7 @@ SOLAR_NW_MAP = {
     'n84equiv':   84,
     'n28archean': 28,
     'n42h2o':     42,
+    'exort':      84,
 }
 
 _REGISTRY_GROUPS = [
@@ -249,6 +251,10 @@ def inspect_case(casedir):
         stem = os.path.splitext(os.path.basename(solar))[0]  # e.g. 'bt-settl_2600_..._n68'
         for s, pkg in _SOLAR_STEM_TO_PKG.items():
             if stem.endswith(f'_{s}') or f'_{s}.' in solar:
+                # ExoRT 2.0 shares the n84 grid with n84equiv; only it keeps
+                # its spectra in data/stellar/.
+                if s == 'n84' and '/data/stellar/' in solar:
+                    pkg = 'exort'
                 row['exort_pkg'] = pkg + '*'
                 break
         if not row['exort_pkg']:

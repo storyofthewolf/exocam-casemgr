@@ -80,7 +80,17 @@ EXORT_RES = {
     'n84equiv':   'n84',
     'n28archean': 'n28',
     'n42h2o':     'n42',
+    'exort':      'n84',
 }
+
+# Where each package's shipped stellar spectra live under exort_root: ExoRT
+# 2.0 (`exort`) moved them to data/stellar/; the 1.x packages keep data/solar/.
+EXORT_SOLAR_DIR = {'exort': 'stellar'}
+
+
+def solar_dir(exort_pkg):
+    """data/<this>/ under exort_root holds the package's shipped spectra."""
+    return EXORT_SOLAR_DIR.get(str(exort_pkg or '').rstrip('*'), 'solar')
 
 
 class InputSpecError(ValueError):
@@ -184,7 +194,8 @@ def sun_solar_file(exort_pkg, paths):
     """The shipped solar spectrum for this RT package -- the same default
     generate_shell_script has always applied."""
     res = exort_res(exort_pkg)
-    return f"{paths.get('exort_root', '$EXORT')}/data/solar/G2V_SUN_{res}.nc"
+    return (f"{paths.get('exort_root', '$EXORT')}/data/{solar_dir(exort_pkg)}"
+            f"/G2V_SUN_{res}.nc")
 
 
 def inputs_root(paths):

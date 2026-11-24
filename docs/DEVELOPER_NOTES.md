@@ -335,7 +335,7 @@ RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `ex
 **Two layers.** `plan_inputs(spec, registry, paths, pstd_bar, pressure_str)` is pure: it parses `star` (`parse_star` → `'sun'` | `{teff, feh, logg, method}`), decides which products the case needs, names them, and returns `(items, effective, warnings)` — `effective` holds the `exo_solar_file`/`ncdata`/`albedo_product` generate should use where the matrix is silent. It raises `InputSpecError` for an impossible request (unknown `ic_template` tag, bad `ice_surface`, unknown `exort_pkg`, no `paths.generated_inputs`). `make_product(item, paths)` dispatches to the engines (`make_solar_file`, `make_albedos`, `make_ic_file`) — run by `prep --execute` only.
 
 **Naming** (`fmt_num` trims floats: `3400.0→3400`, `4.5→4.5`, `0.0→0.0`):
-- solar: `btsettl_T<teff>_g<logg>_m<feh>_<res>.nc` under `solar/`; the raw SED `btsettl_T…_m….txt` under `solar/sed/`; `<res>` from `EXORT_RES[exort_pkg]` (mirrors `build.SOLAR_FILE_STEMS`). `star: sun` → `{exort_root}/data/solar/G2V_SUN_<res>.nc`, no product.
+- solar: `btsettl_T<teff>_g<logg>_m<feh>_<res>.nc` under `solar/`; the raw SED `btsettl_T…_m….txt` under `solar/sed/`; `<res>` from `EXORT_RES[exort_pkg]` (mirrors `build.SOLAR_FILE_STEMS`). `star: sun` → `{exort_root}/data/<solar_dir>/G2V_SUN_<res>.nc` (`stellar` for `exort`, else `solar`), no product.
 - albedo: `<solar-stem>__<ice_surface>.albedos.sh` under `albedo/` — a shell fragment defining `ALBICEV/ALBICEI/ALBSNOWV/ALBSNOWI` (`ALBEDO_KEYS`/`ALBEDO_SHELL_VARS`); `read_albedo_product` parses it back.
 - ic: `ic_<tag>_<P>bar_L<nlev>[_dry]_ic.nc` under `ic/<config_type>/`; template from `ic_templates[tag]` via `ic_template_path`.
 
@@ -348,10 +348,12 @@ RT tuning (`Tmax`, `swFluxLimit`, `lwFluxLimit`, `exo_albdif`, `exo_albdir`, `ex
 ## scan.py — key constants
 
 **`SOLAR_NW_MAP`** — expected `nw` dimension per `exort_pkg`:
-`{n68equiv: 68, n84equiv: 84, n28archean: 28, n42h2o: 42}`
+`{n68equiv: 68, n84equiv: 84, n28archean: 28, n42h2o: 42, exort: 84}`
 
 **`SOLAR_STEM_MAP`** — expected solar filename stem per `exort_pkg`:
-`{n68equiv: 'n68', n84equiv: 'n84', n28archean: 'n28', n42h2o: 'n42'}`
+`{n68equiv: 'n68', n84equiv: 'n84', n28archean: 'n28', n42h2o: 'n42', exort: 'n84'}`
+
+An `exort` (ExoRT 2.0) case shares the n84 grid with `n84equiv`; `scan.py` infers `exort*` rather than `n84equiv*` for an RT-in-SourceMods case whose solar file is under `data/stellar/`.
 
 **`check_consistency` warnings generated for:**
 1. Pressure mismatch >5% between computed pstd and ncdata pressure string

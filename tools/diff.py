@@ -53,7 +53,19 @@ def load_paths(config_registry):
         sys.exit(f"ERROR: config_registry not found: {config_registry}")
     with open(config_registry) as f:
         data = yaml.safe_load(f) or {}
-    return data.get('paths', {})
+    paths = dict(data.get('paths', {}) or {})
+    paths['_package_roots'] = data.get('package_roots') or {}
+    return paths
+
+
+def roots_for_package(paths, exort_pkg):
+    """paths with exocam_root / exort_root replaced by the registry's
+    package_roots entry for this RT package, if it has one (the same rule as
+    build.package_roots: an `exort` case lives on the refactor checkouts)."""
+    entry = (paths.get('_package_roots') or {}).get(str(exort_pkg or '').rstrip('*')) or {}
+    out = dict(paths)
+    out.update({k: entry[k] for k in ('exocam_root', 'exort_root') if entry.get(k)})
+    return out
 
 
 def load_case_meta(case, cases_yaml_path):
@@ -116,8 +128,14 @@ def walk_sourcemods(sourcemods_root):
 
 
 def find_exocam_counterpart(filename, component, exocam_sm_root):
+    """The config's own file, else (ExoCAM 2.0 layout) the shared tree's:
+    <exocam_root>/cesm1.2.1/SourceMods, two levels above configs/<cfg>/."""
     candidate = os.path.join(exocam_sm_root, component, filename)
-    return candidate if os.path.isfile(candidate) else None
+    if os.path.isfile(candidate):
+        return candidate
+    shared = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.normpath(exocam_sm_root)))), 'SourceMods', component, filename)
+    return shared if os.path.isfile(shared) else None
 
 def normalize_lines(text):
     """Strip trailing whitespace from each line. Used to ignore cosmetic whitespace-only diffs."""
@@ -243,10 +261,11 @@ def cmd_summary(args, paths):
         cases_yaml = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
         print(f"\n(registry: {cases_yaml})")
     else:
-        exocam_root = paths.get('exocam_root', '') or sys.exit(
-            "ERROR: paths.exocam_root not set in config_registry.yaml")
         cases_yaml  = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
         meta        = load_case_meta(args.case, cases_yaml)
+        paths       = roots_for_package(paths, meta['exort_pkg'])
+        exocam_root = paths.get('exocam_root', '') or sys.exit(
+            "ERROR: paths.exocam_root not set in config_registry.yaml")
         config_type = meta['config_type']
         exort_files = _load_exort_fileset(paths, meta['exort_pkg'])
         exocam_sm   = os.path.join(exocam_root, 'cesm1.2.1', 'configs',
@@ -356,10 +375,11 @@ def cmd_full(args, paths):
         cases_yaml = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
         print(f"\n(registry: {cases_yaml})")
     else:
-        exocam_root = paths.get('exocam_root', '') or sys.exit(
-            "ERROR: paths.exocam_root not set in config_registry.yaml")
         cases_yaml  = getattr(args, 'registry', None) or paths.get('cases_yaml') or DEFAULT_CASES_YAML
         meta        = load_case_meta(args.case, cases_yaml)
+        paths       = roots_for_package(paths, meta['exort_pkg'])
+        exocam_root = paths.get('exocam_root', '') or sys.exit(
+            "ERROR: paths.exocam_root not set in config_registry.yaml")
         config_type = meta['config_type']
         exort_files = _load_exort_fileset(paths, meta['exort_pkg'])
         exocam_sm   = os.path.join(exocam_root, 'cesm1.2.1', 'configs',

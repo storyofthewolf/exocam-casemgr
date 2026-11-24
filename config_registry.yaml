@@ -58,6 +58,19 @@ solar_file_stems:
   n84equiv:   n84
   n28archean: n28
   n42h2o:     n42
+  exort:      n84
+
+# Per-RT-package checkouts (owner decision 2026-11-23). An entry replaces
+# paths.exocam_root / exort_root for every case on that exort_pkg, and counts
+# as production (no sbx_ prefix needed). Until ExoCAM 2.0 and ExoRT 2.0 are
+# released, `exort` builds from the refactor branches of both repos while the
+# 1.x packages stay on main's checkouts. Delete the entry at the release, when
+# main becomes 2.0. ExoRT-refactor's src.cam.exort/sys_rootdir.F90 must name
+# that checkout (build scripts and generate refuse it otherwise).
+package_roots:
+  exort:
+    exocam_root: /gpfsm/dnb33/etwolf/models/ExoCAM-refactor
+    exort_root:  /gpfsm/dnb33/etwolf/models/ExoRT-refactor
 
 # CESM create_newcase parameters per config type
 cesm_config:

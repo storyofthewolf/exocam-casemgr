@@ -74,6 +74,7 @@ EXO_PARAMS = {
     'do_exo_rt_clearsky', 'do_exo_rt_spectral', 'do_exo_rt_carma',
     'do_exo_gw', 'do_exo_simplevolc', 'do_carma_exort',
     'do_am_fixes', 'do_am_fix_lbl',
+    'do_exo_clouds', 'do_exo_haze',
     'Tmax', 'swFluxLimit', 'lwFluxLimit',
 }
 
@@ -87,7 +88,19 @@ SOLAR_FILE_STEMS = {
     'n84equiv':   'n84',
     'n28archean': 'n28',
     'n42h2o':     'n42',
+    'exort':      'n84',     # ExoRT 2.0 (src.cam.exort): the n84 grid
 }
+
+# The ExoRT 2.0 package. It keeps its stellar files in data/stellar/ (the 1.x
+# packages: data/solar/), needs an ExoCAM 2.0 exoplanet_mod.F90 (do_exo_clouds,
+# do_exo_haze), reads its data from the root compiled into its sys_rootdir.F90,
+# and runs one thread per ATM task until ExoRT's OpenMP check is done.
+EXORT_V2_PKG = 'exort'
+
+# The two checkout roots a registry `package_roots.<exort_pkg>` entry may
+# override (ExoCAM 2.0 pre-release: an `exort` case builds from the refactor
+# checkouts of both repos, every other package from main's).
+PACKAGE_ROOT_KEYS = ('exocam_root', 'exort_root')
 
 # --- Type verification (build.py generate --verify) -------------------------
 # Authoritative type tags for matrix values, checked by --verify. Keys not
@@ -116,6 +129,7 @@ PARAM_TYPES = {
     'do_exo_rt_carma': 'bool', 'do_exo_gw': 'bool', 'do_exo_simplevolc': 'bool',
     'do_carma_exort': 'bool',
     'do_am_fixes': 'bool', 'do_am_fix_lbl': 'bool',
+    'do_exo_clouds': 'bool', 'do_exo_haze': 'bool',
     # matrix run/control fields
     'nlev': 'int', 'stop_n': 'int', 'rest_n': 'int', 'resubmit': 'int',
     'ntasks': 'int',
@@ -849,15 +863,65 @@ def _sandbox_errors(spec, registry):
         if spec.get(key) is not None:
             reasons.append(f"'{key}' is set")
     override = spec.get('_paths_override') or {}
-    prod = registry.get('paths', {}) or {}
-    for key in ('exocam_root', 'exort_root'):
+    # Production means the registry's checkout for this case's RT package.
+    prod = package_roots(registry, spec.get('exort_pkg'))
+    for key in PACKAGE_ROOT_KEYS:
         val = override.get(key)
-        if val and os.path.normpath(str(val)) != os.path.normpath(str(prod.get(key, ''))):
+        if val and os.path.normpath(str(val)) != os.path.normpath(str(prod.get(key) or '')):
             reasons.append(f"paths.{key} is {val}, not the registry's {prod.get(key)}")
     if not reasons:
         return []
     return [f"case '{name}' builds non-production code ({'; '.join(reasons)}) "
             f"— name it {SANDBOX_PREFIX}<record>_<tag> so it stays a sandbox trial"]
+
+
+def package_roots(registry, exort_pkg):
+    """The production exocam_root / exort_root for a case on `exort_pkg`.
+
+    A registry `package_roots.<pkg>` entry overrides paths.exocam_root /
+    exort_root for that RT package; any other package gets paths' own. Before
+    ExoCAM 2.0 is released this is how an `exort` case reaches the refactor
+    checkouts while every n68equiv case stays on main's (owner decision
+    2026-11-23). Delete the entry at the release, when main becomes 2.0.
+    """
+    paths = registry.get('paths', {}) or {}
+    roots = {k: paths.get(k) for k in PACKAGE_ROOT_KEYS}
+    pkg = str(exort_pkg or '').rstrip('*')
+    entry = (registry.get('package_roots') or {}).get(pkg) or {}
+    roots.update({k: entry[k] for k in PACKAGE_ROOT_KEYS if entry.get(k)})
+    return roots
+
+
+def case_paths_override(registry, spec, matrix_override):
+    """The paths override one case builds with: its RT package's roots (only
+    when the registry has a `package_roots` entry for it), then the matrix's
+    `paths:` block on top. A case with no entry gets the matrix block as is,
+    so 1.x cases resolve exactly as they always have."""
+    pkg = str(spec.get('exort_pkg') or '').rstrip('*')
+    entry = (registry.get('package_roots') or {}).get(pkg) or {}
+    merged = {k: entry[k] for k in PACKAGE_ROOT_KEYS if entry.get(k)}
+    merged.update(matrix_override or {})
+    return merged
+
+
+def _exort_v2_errors(spec, template_path):
+    """An `exort` (ExoRT 2.0) newcase needs an ExoCAM 2.0 exoplanet_mod.F90:
+    ExoRT 2.0 reads do_exo_clouds / do_exo_haze from it, and a 1.x file has
+    neither, so the build would fail on the missing names after an hour in the
+    queue. Checked wherever the template is readable."""
+    if str(spec.get('exort_pkg') or '') != EXORT_V2_PKG or spec.get('clone'):
+        return []
+    if not template_path or not os.path.isfile(template_path):
+        return []
+    with open(template_path) as f:
+        text = f.read()
+    missing = [p for p in ('do_exo_clouds', 'do_exo_haze')
+               if not re.search(rf'^\s*logical\b.*::\s*{p}\b', text, re.M | re.I)]
+    if not missing:
+        return []
+    return [f"exort_pkg='{EXORT_V2_PKG}' needs an ExoCAM 2.0 config, but {template_path} "
+            f"declares no {', '.join(missing)}: point exocam_root at the refactor "
+            f"checkout (registry package_roots.{EXORT_V2_PKG})"]
 
 
 def _fortran_value(name, value):
@@ -1209,6 +1273,54 @@ def apply_inputs(spec, registry, paths):
     spec['_albedo_product'] = effective.get('albedo_product')
     spec['_inputs'] = items
     return warnings, []
+
+
+def _exort_rootdir_guard(spec):
+    """Shell lines that refuse an `exort` (ExoRT 2.0) newcase whose ExoRT
+    checkout compiles in a data root other than itself. ExoRT owns the root,
+    in src.cam.exort/sys_rootdir.F90 (ExoCAM 2.0 plan, Phase 3, 2026-11-23);
+    a case reading another checkout's data/ would run silently on the wrong
+    k-coefficients. Emitted before create_newcase so it fails fast."""
+    if str(spec.get('exort_pkg') or '') != EXORT_V2_PKG:
+        return []
+    return [
+        "# Guard: ExoRT 2.0 reads its data from the root compiled into",
+        "# sys_rootdir.F90, which must name this checkout. ExoRT owns that line:",
+        "# fix it in the checkout, never in the case.",
+        "SYS_ROOTDIR=${EXORT}/3dmodels/src.cam.exort/sys_rootdir.F90",
+        "EXORT_DATA_ROOT=$(sed -n -E \"s/^[[:space:]]*character[^!]*exort_rootdir[[:space:]]*=[[:space:]]*'([^']*)'.*/\\1/p\" \"${SYS_ROOTDIR}\")",
+        'if [ -z "${EXORT_DATA_ROOT}" ] || '
+        '[ "$(cd "${EXORT_DATA_ROOT}" 2>/dev/null && pwd -P)" != "$(cd "${EXORT}" && pwd -P)" ]; then',
+        '  echo "ERROR: ${SYS_ROOTDIR} compiles in exort_rootdir=\'${EXORT_DATA_ROOT}\', not this checkout (${EXORT})."',
+        "  exit 1",
+        "fi",
+        "",
+    ]
+
+
+def _exort_threads_lines(spec):
+    """ExoRT 2.0 runs one OpenMP thread per ATM task until its OpenMP check
+    (ExoRT REFACTOR_PLAN §1.1) is done; set it rather than inherit the
+    machine default."""
+    if str(spec.get('exort_pkg') or '') != EXORT_V2_PKG:
+        return []
+    return ["./xmlchange -file env_mach_pes.xml -id NTHRDS_ATM -val 1"]
+
+
+def _exort_rootdir_errors(spec, exort_root):
+    """generate-time twin of _exort_rootdir_guard, where the checkout is
+    readable (on Discover). Returns error strings."""
+    if str(spec.get('exort_pkg') or '') != EXORT_V2_PKG or spec.get('clone') or not exort_root:
+        return []
+    path = os.path.join(exort_root, '3dmodels', 'src.cam.exort', 'sys_rootdir.F90')
+    if not os.path.isfile(path):
+        return []
+    with open(path) as f:
+        roots = re.findall(r"^\s*character[^!\n]*exort_rootdir\s*=\s*'([^']*)'", f.read(), re.M)
+    if len(roots) == 1 and os.path.realpath(roots[0]) == os.path.realpath(exort_root):
+        return []
+    return [f"{path} compiles in exort_rootdir={roots or 'nothing'}, not this "
+            f"checkout ({exort_root}): an exort case would read another checkout's data"]
 
 
 def _build_required_inputs_block(spec, case_name):
@@ -2160,7 +2272,8 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
     solar_file = spec.get('exo_solar_file', '')
     if not solar_file:
         stem = SOLAR_FILE_STEMS.get(exort_pkg, exort_pkg)
-        solar_file = f"{paths.get('exort_root','$EXORT')}/data/solar/G2V_SUN_{stem}.nc"
+        solar_file = (f"{paths.get('exort_root','$EXORT')}"
+                      f"/data/{inputs_utils.solar_dir(exort_pkg)}/G2V_SUN_{stem}.nc")
 
     ic_path = resolve_ic_path(ic_file, config_type, paths)
 
@@ -2200,6 +2313,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "fi",
         "",
         *_build_required_inputs_block(spec, case_name),
+        *_exort_rootdir_guard(spec),
         "# -----------------------------------------------------------",
         "# STEP 1: create case",
         "# -----------------------------------------------------------",
@@ -2251,6 +2365,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         f"./xmlchange -file env_mach_pes.xml -id NTASKS_GLC -val {spec['ntasks']}",
         f"./xmlchange -file env_mach_pes.xml -id NTASKS_ROF -val {spec['ntasks']}",
         f"./xmlchange -file env_mach_pes.xml -id NTASKS_WAV -val {spec['ntasks']}",
+        *_exort_threads_lines(spec),
         "",
         "# -----------------------------------------------------------",
         "# STEP 5: run length and CAM configuration",
@@ -2545,11 +2660,6 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
     if record is None or not verify_only:
         os.makedirs(scripts_dir, exist_ok=True)
 
-    # find exoplanet_mod.F90 template from registry exocam_root
-    exocam_root = paths_override.get('exocam_root') or registry.get('paths', {}).get('exocam_root', '')
-    template_base = (f"{exocam_root}/cesm1.2.1/configs"
-                     if exocam_root else None)
-
     generated = []
     errors_total = 0
     verify_failed = 0
@@ -2562,7 +2672,10 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
             continue
 
         spec = resolve_case(base, case_def)
-        spec['_paths_override'] = paths_override
+        # This case's roots: its RT package's checkouts (registry
+        # package_roots), then the matrix's paths: block on top.
+        case_override = case_paths_override(registry, spec, paths_override)
+        spec['_paths_override'] = case_override
         spec['_matrix_file'] = matrix_file
         spec['_matrix_dir'] = os.path.dirname(os.path.abspath(matrix_file))
         spec['_sandbox_record'] = record
@@ -2587,7 +2700,7 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
         # the stock base wherever the starting SourceMods are readable.
         overlay, o_errors = plan_overlay(spec)
         o_stale, o_checked = _overlay_stale_errors(
-            overlay, _stock_sourcemods_dir(spec, registry, paths_override))
+            overlay, _stock_sourcemods_dir(spec, registry, case_override))
         o_errors += o_stale
         spec['_overlay'] = overlay
         o_notes = []
@@ -2604,13 +2717,26 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
         d_warnings, d_errors = [], []
         if not _type_errors(spec):
             d_warnings, d_errors = apply_inputs(
-                spec, registry, _effective_paths(registry, paths_override))
+                spec, registry, _effective_paths(registry, case_override))
+
+        # The config's exoplanet_mod.F90 a newcase starts from, in this case's
+        # ExoCAM checkout (an `exort` case: the 2.0 one, via package_roots).
+        exocam_root = (case_override.get('exocam_root')
+                       or (registry.get('paths', {}) or {}).get('exocam_root', ''))
+        template_base = f"{exocam_root}/cesm1.2.1/configs" if exocam_root else None
+        src_config = str(spec.get('config_type', '')).replace('_ne5', '').replace('_ne16', '')
+        newcase_template = (os.path.join(template_base, src_config, 'SourceMods',
+                                         'src.share', 'exoplanet_mod.F90')
+                            if template_base and src_config else None)
+        o_errors += _exort_v2_errors(spec, newcase_template)
+        o_errors += _exort_rootdir_errors(
+            spec, _effective_paths(registry, case_override).get('exort_root'))
 
         if verify_only:
             paths = dict(registry.get('paths', {}))
             for k in ['cesm_scripts', 'caseroot', 'rundir', 'archive', 'exocam_root', 'exort_root']:
-                if k in paths_override:
-                    paths[k] = paths_override[k]
+                if k in case_override:
+                    paths[k] = case_override[k]
             # Type + nc-file checks run first: they degrade gracefully on bad
             # input, whereas validate_case coerces values to float and would
             # raise on a mistyped numeric. Only run validate_case if types pass.
@@ -2677,23 +2803,16 @@ def _generate_one_matrix(matrix_file, args, exp_matrices_dir, verify_only):
                   f"user_nl_cam. Set ncdata explicitly if that is not intended.")
 
         # find and render exoplanet_mod.F90 template into memory
-        config_type = spec.get('config_type', '')
-        src_config = config_type.replace('_ne5', '').replace('_ne16', '')
         if is_clone:
             # use the source case's exoplanet_mod.F90 as the template so any
             # custom parameter baselines in the clone source are preserved
-            caseroot  = _clone_source_root(spec, registry, paths_override)
+            caseroot  = _clone_source_root(spec, registry, case_override)
             clone_of  = spec.get('clone', '')
             template_path = os.path.join(
                 caseroot, clone_of, 'SourceMods', 'src.share', 'exoplanet_mod.F90'
             ) if caseroot and clone_of else None
-        elif template_base and src_config:
-            template_path = os.path.join(
-                template_base, src_config,
-                'SourceMods', 'src.share', 'exoplanet_mod.F90'
-            )
         else:
-            template_path = None
+            template_path = newcase_template
 
         if template_path and os.path.exists(template_path):
             unmatched = _unmatched_exo_params(template_path, spec)
@@ -2794,7 +2913,6 @@ def cmd_prep(args):
     paths_for = {}     # path -> paths dict to build it with
     for matrix_path in matrix_paths:
         registry, base, cases, paths_override = _matrix_context(matrix_path)
-        paths = _effective_paths(registry, paths_override)
         print(f"=== {matrix_path}")
         for case_def in cases:
             case_name = case_def.get('name')
@@ -2805,7 +2923,8 @@ def cmd_prep(args):
             if prefix and not case_name.lower().startswith(prefix):
                 continue
             spec = resolve_case(base, case_def)
-            spec['_paths_override'] = paths_override
+            spec['_paths_override'] = case_paths_override(registry, spec, paths_override)
+            paths = _effective_paths(registry, spec['_paths_override'])
             terrs = _type_errors(spec)
             if terrs:
                 print(f"ERROR: {case_name}")
