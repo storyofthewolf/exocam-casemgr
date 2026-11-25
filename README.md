@@ -291,7 +291,7 @@ cases:
     exo_co2bar: 0.0016
 ```
 
-The generated script uses `create_clone`, inheriting SourceMods, namelists, and all CESM configuration from the source case. The `exoplanet_mod.F90` template is taken from the clone source's SourceMods rather than the repo default, so any custom parameter baselines are preserved. Only the parameters explicitly listed in the matrix are patched. `config_type`, `exort_pkg`, and `nlev` are optional — supply them to enable IC file lookup and `CAM_CONFIG_OPTS` update; omit them to inherit everything from the source.
+The generated script uses `create_clone`, inheriting SourceMods, namelists, and all CESM configuration from the source case. The `exoplanet_mod.F90` template is taken from the clone source's SourceMods rather than the repo default, so any custom parameter baselines are preserved. Only the parameters explicitly listed in the matrix are patched. `config_type`, `exort_pkg`, and `nlev` are optional — supply them to enable IC file lookup and `CAM_CONFIG_OPTS` update; omit them to inherit everything from the source. A clone's `nlev` rewrites `-nlev` in `CAM_CONFIG_OPTS` (verified in the build script), and `--verify` fails a case whose `ncdata` has a different level count.
 
 #### Generating a clone matrix with query.py
 

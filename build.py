@@ -52,7 +52,7 @@ except ImportError:
     sys.exit("pyyaml is required: pip install pyyaml")
 
 sys.path.insert(0, os.path.dirname(__file__))
-from utils.parse_utils import compute_pstd_bar
+from utils.parse_utils import compute_pstd_bar, read_ncdata_nlev
 import utils.inputs_utils as inputs_utils
 from utils.manage_utils import (submit_case, load_paths, discover_cases,
                           _require_cases, announce_batch, preview_hint,
@@ -498,6 +498,7 @@ def verify_case(spec, registry, paths):
     # 2. NetCDF file existence
     config_type = spec.get('config_type', '')
     product_paths = {it.path for it in (spec.get('_inputs') or [])}
+    found = {}   # field -> local path of a file confirmed present
     for field, resolver, restrict in NCFILE_FIELDS:
         if field not in spec or not spec[field]:
             continue
@@ -517,7 +518,9 @@ def verify_case(spec, registry, paths):
         # needs fixing — a hard failure, whether the parent dir is missing or the
         # file alone is. (A missing parent dir is the more common symptom of a
         # mistyped/transposed path.)
-        if not os.path.isfile(local):
+        if os.path.isfile(local):
+            found[field] = local
+        else:
             if raw in product_paths:
                 # A planned input product that prep has not made yet is an
                 # un-prepped state, not a matrix error: the name is right,
@@ -530,6 +533,18 @@ def verify_case(spec, registry, paths):
                 errors.append(f"nc: {field}: directory not found: {local}")
             else:
                 errors.append(f"nc: {field}: file not found: {local}")
+
+    # 2a. ncdata level count vs nlev. A mismatch compiles fine and dies at
+    # startup; for a clone it was invisible before clone -nlev support
+    # (2026-11-25), since create_clone kept the source's -nlev regardless.
+    if 'ncdata' in found and spec.get('nlev') is not None:
+        ic_lev = read_ncdata_nlev(found['ncdata'])
+        if ic_lev is None:
+            notes.append("nlev: ncdata level count not checked "
+                         "(netCDF4 unavailable or no 'lev' dimension)")
+        elif ic_lev != int(spec['nlev']):
+            errors.append(f"nlev: matrix nlev={spec['nlev']} but ncdata has "
+                          f"{ic_lev} levels: {found['ncdata']}")
 
     # 2b. Newcase inputs the matrix does not name: the IC from the ic_files
     # table, and a config's domain file (cesm_config.<type>.xmlchange). The
@@ -1622,6 +1637,41 @@ def _build_usr_src_fix_block():
     ]
 
 
+def _build_clone_nlev_block(nlev, label):
+    """
+    Return shell lines that set -nlev in a clone's CAM_CONFIG_OPTS, then
+    verify it took.
+
+    create_clone copies CAM_CONFIG_OPTS verbatim, so before 2026-11-25 a clone
+    matrix's `nlev` was silently ignored: every case built at the clone
+    source's level count. Cloning an L51 eruption template for a parent on 53+
+    levels would compile L51 and die at startup reading the L5x ncdata. An
+    existing `-nlev N` is rewritten; a missing one is appended. The verify step
+    follows the namelist-write invariant: a write that is supposed to happen
+    must not be able to no-op silently.
+    """
+    n = int(nlev)
+    pat = r'-nlev[[:space:]]+[0-9]+'
+    return [
+        "",
+        "# -----------------------------------------------------------",
+        f"# Set -nlev {n} in CAM_CONFIG_OPTS (create_clone copied the source's)",
+        "# -----------------------------------------------------------",
+        "CAM_OPTS=$(./xmlquery CAM_CONFIG_OPTS | sed 's/^[^=]*= //')",
+        f"if echo \"${{CAM_OPTS}}\" | grep -qE -- '{pat}'; then",
+        f"  CAM_OPTS=$(echo \"${{CAM_OPTS}}\" | sed -E 's/{pat}/-nlev {n}/g')",
+        "else",
+        f"  CAM_OPTS=\"${{CAM_OPTS}} -nlev {n}\"",
+        "fi",
+        "./xmlchange CAM_CONFIG_OPTS=\"${CAM_OPTS}\"",
+        f"if ! ./xmlquery CAM_CONFIG_OPTS | grep -qE -- '-nlev[[:space:]]+{n}([[:space:]]|\"|$)'; then",
+        f"  echo \"ERROR: {label}: CAM_CONFIG_OPTS does not carry -nlev {n} after xmlchange.\"",
+        "  ./xmlquery CAM_CONFIG_OPTS || true",
+        "  exit 1",
+        "fi",
+    ]
+
+
 def _build_docn_update_block(spec):
     """
     For aqua/mixed configs, return a sed line to update the pop_frc* filename
@@ -2389,6 +2439,8 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         *_heredoc_overlay(spec.get('_overlay')),
         *_provenance_block(case_name, spec, spec.get('_overlay'), spec.get('_matrix_file')),
         *(_build_usr_src_fix_block() if exort_pkg.endswith('*') else []),
+        *(_build_clone_nlev_block(spec['nlev'], case_name)
+          if spec.get('nlev') is not None else []),
     ]
 
     if ic_file:

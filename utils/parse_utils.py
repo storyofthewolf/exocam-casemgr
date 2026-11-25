@@ -436,6 +436,23 @@ def pressure_str_to_bar(s):
         return None
 
 
+def read_ncdata_nlev(path):
+    """
+    Return the 'lev' dimension size of a CAM initial-condition file, or None
+    if the file doesn't exist, isn't readable, or has no 'lev' dimension.
+    Requires netCDF4; returns None gracefully if the library is absent.
+    """
+    if not _HAVE_NC4 or not os.path.exists(path):
+        return None
+    try:
+        with _nc4.Dataset(path, 'r') as ds:
+            if 'lev' in ds.dimensions:
+                return len(ds.dimensions['lev'])
+    except Exception:
+        pass
+    return None
+
+
 def read_solar_nw(path):
     """
     Return the 'nw' dimension size from a NetCDF solar file, or None if
