@@ -1195,18 +1195,29 @@ def _clone_source_root(spec, registry, paths_override):
     return case_root(base, 'caseroot', spec.get('clone', ''))
 
 
-def _sandbox_dirs_block(spec):
-    """For a case built in a sandbox tree: put its run, build and archive
-    directories there too. CESM's machine defaults would otherwise place them
-    under the production scratch root (RUNDIR/EXEROOT) and archive
-    (DOUT_S_ROOT), so moving the case directory alone isolates nothing. Set
-    right after the case directory exists, before cesm_setup."""
-    if not spec.get('_sandbox_record'):
+def _case_dirs_block(spec):
+    """Point CESM's run, build and archive directories at the script's RUNDIR
+    and ARCHIVE when those are not the machine defaults: a case built in a
+    sandbox tree, or a matrix whose `paths:` block overrides rundir or archive
+    (e.g. building in another user's scratch). CESM's machine defaults
+    (/discover/nobackup/$CCSMUSER/cesm_scratch/...) would otherwise place them
+    under the builder's production scratch while the script stages the
+    branch/hybrid restarts into the overridden rundir, and the run would start
+    without them. Set right after the case directory exists, before
+    cesm_setup."""
+    record = spec.get('_sandbox_record')
+    override = spec.get('_paths_override') or {}
+    if record:
+        head = [f"# Sandbox case (record {record}): run, build and archive",
+                "# stay inside the sandbox tree, beside the case directory."]
+    elif override.get('rundir') or override.get('archive'):
+        head = ["# Matrix `paths:` overrides rundir/archive: run, build and archive",
+                "# go there, not to CESM's machine defaults."]
+    else:
         return []
     return [
         "",
-        f"# Sandbox case (record {spec['_sandbox_record']}): run, build and archive",
-        "# stay inside the sandbox tree, beside the case directory.",
+        *head,
         "./xmlchange RUNDIR=${RUNDIR}/${CASE}/run",
         "./xmlchange EXEROOT=${RUNDIR}/${CASE}/bld",
         "./xmlchange DOUT_S_ROOT=${ARCHIVE}/${CASE}",
@@ -2293,7 +2304,7 @@ def generate_shell_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# STEP 2: copy ExoCAM SourceMods and namelists",
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
-        *_sandbox_dirs_block(spec),
+        *_case_dirs_block(spec),
         # ExoCAM 2.0 layout: a config with a COMPONENTS file is assembled from
         # the shared tree plus its own files; any other config is copied whole.
         "if [ -f ${EXOCAM}/cesm1.2.1/configs/${CONFIG_TYPE}/COMPONENTS ]; then",
@@ -2434,7 +2445,7 @@ def generate_clone_script(case_name, spec, registry, ic_file, outdir, exoplanet_
         "# STEP 2: install modified exoplanet_mod.F90 and update paths",
         "# -----------------------------------------------------------",
         "cd ${CASEROOT}/${CASE}",
-        *_sandbox_dirs_block(spec),
+        *_case_dirs_block(spec),
         *_heredoc_exoplanet_mod(exoplanet_mod_content),
         *_heredoc_overlay(spec.get('_overlay')),
         *_provenance_block(case_name, spec, spec.get('_overlay'), spec.get('_matrix_file')),

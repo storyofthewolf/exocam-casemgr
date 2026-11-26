@@ -159,6 +159,39 @@ class GenerateSandbox(unittest.TestCase):
         self.assertNotIn('DOUT_S_ROOT', text)
         self.assertIn('./create_clone -clone ${CASEROOT}/${CLONE_OF}', text)
 
+    def test_paths_override_moves_run_and_archive(self):
+        # A plain matrix whose `paths:` points rundir/archive elsewhere (e.g.
+        # another user's scratch) must move CESM's RUNDIR/EXEROOT/DOUT_S_ROOT
+        # there too, or the restarts are staged where the run never looks.
+        t = self.tmp
+        extra = ("  run_type: hybrid\n  run_refcase: base_p05\n"
+                 "  run_refdate: 0002-01-01\n  brnch_retain_casename: 'false'\n")
+        path = self.matrix(['exocam_plain'], record=None, extra=extra)
+        with open(path) as f:
+            text = f.read()
+        write(path, text.replace(
+            "base:\n",
+            f"paths:\n  caseroot: {t}/other/cases\n  rundir: {t}/other/rundir\n"
+            f"  archive: {t}/other/archive\nbase:\n", 1))
+        args = argparse.Namespace(scripts_dir=f'{t}/plain')
+        cwd = os.getcwd()
+        os.chdir(t)
+        try:
+            generated, errors, *_ = build._generate_one_matrix(path, args, self.suite, False)
+        finally:
+            os.chdir(cwd)
+        self.assertEqual((generated, errors), (1, 0))
+        with open(f'{t}/plain/exocam_plain_build.sh') as f:
+            text = f.read()
+        self.assertIn(f'CASEROOT={t}/other/cases\n', text)
+        self.assertIn(f'RUNDIR={t}/other/rundir\n', text)
+        self.assertIn(f'ARCHIVE={t}/other/archive\n', text)
+        for line in ('./xmlchange RUNDIR=${RUNDIR}/${CASE}/run',
+                     './xmlchange EXEROOT=${RUNDIR}/${CASE}/bld',
+                     './xmlchange DOUT_S_ROOT=${ARCHIVE}/${CASE}'):
+            self.assertIn(line, text)
+        self.assertIn(f'{t}/other/rundir/${{CASE}}/run', text)   # restarts staged there
+
     def test_branch_reference_searched_everywhere(self):
         extra = ("  run_type: branch\n  run_refcase: base_p05\n"
                  "  run_refdate: 0002-01-01\n  brnch_retain_casename: 'false'\n")

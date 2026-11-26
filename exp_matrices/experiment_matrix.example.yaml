@@ -17,6 +17,11 @@ config_registry: /path/to/ExoCAM/tools/case_mgmt/config_registry.yaml
 # paths:
 #   caseroot: /my/scratch/cases
 #   cesm_scripts: /my/cesm/scripts
+#   rundir:  /other/scratch/rundir    # rundir/archive also move CESM's RUNDIR,
+#   archive: /other/scratch/archive   # EXEROOT and DOUT_S_ROOT there; a hybrid/branch
+#                                     # reference restart is looked up in this archive.
+#                                     # Later runmgr/datamgr calls need the same
+#                                     # --caseroot/--rundir/--archive.
 
 # Optional: build every case in a sandbox tree, one per dev record:
 # <paths.sandbox>/<record>/{cases,rundir,archive}, scripts in
